@@ -1,0 +1,272 @@
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  TouchableOpacity,
+  StyleSheet,
+  FlatList,
+  Platform,
+  Dimensions,
+  ToastAndroid,
+} from "react-native";
+import Modal from "react-native-modal";
+import { AntDesign } from "@expo/vector-icons";
+import Text from "@components/Text";
+import DateTimePickerModal from "react-native-modal-datetime-picker";
+import { COLORS, FONT_FAMILY } from "@constants/theme";
+import { NavigationHeader } from "@components/Header";
+import { showToastMessage } from "@components/Toast";
+import { put } from "@api/services/utils";
+
+const { height } = Dimensions.get("window");
+
+const EmployeeListModal = ({
+  items,
+  isVisible,
+  onClose = () => {},
+  title,
+  boxId,
+}) => {
+  const [optionModalVisible, setOptionModalVisible] = useState(false);
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [fromDate, setFromDate] = useState(new Date());
+  const [toDate, setToDate] = useState(new Date());
+  const [mode, setMode] = useState("date");
+
+  useEffect(() => {
+    if (selectedEmployee) {
+      setOptionModalVisible(true);
+    }
+  }, [selectedEmployee]);
+
+  const handleCustomModal = (selectedCustomData) => {
+    setSelectedEmployee(selectedCustomData);
+  };
+
+  const showMode = (currentMode) => {
+    setDatePickerVisible(true);
+    setMode(currentMode);
+  };
+
+  const handleOptionPress = async (option) => {
+    setSelectedOption(option);
+    if (option === "in_between") {
+      setOptionModalVisible(false);
+      showMode("date");
+    } else {
+      setOptionModalVisible(false);
+      if (selectedEmployee) {
+        const data = {
+          box_id: boxId,
+          temp_assignee: selectedEmployee?.id,
+          type_of_assign: option,
+          from_date: fromDate,
+          to_date: toDate,
+        };
+        console.log("🚀 ~ handleOptionPress ~ data:", data);
+        try {
+          const response = await put("/updateInventoryBox", data);
+          if (response.success === true) {
+            showToastMessage("Temporary assignee updated successfully");
+          }
+          console.log("🚀 ~ handleOptionPress ~ response:", response);
+        } catch (error) {
+          console.log("🚀 ~ handleOptionPress ~ error:", error);
+        }finally{
+          // onClose()
+        }
+      } else if (fromDate && toDate) {
+        showToastMessage("Please select an employee first.");
+      } 
+    }
+  };
+
+  const handleDateConfirm = (date) => {
+    if (mode === "date") {
+      setFromDate(date);
+      showMode("time");
+    } else {
+      setToDate(date);
+      setDatePickerVisible(false);
+      setOptionModalVisible(false);
+      handleOptionPress("in_between");
+    }
+  };
+
+  return (
+    <Modal
+      isVisible={isVisible}
+      animationIn="slideInDown"
+      animationOut="slideOutDown"
+      backdropOpacity={0.7}
+      animationInTiming={400}
+      animationOutTiming={300}
+      backdropTransitionInTiming={400}
+      backdropTransitionOutTiming={300}
+      style={{
+        margin: height < 800 ? 20 : 20,
+        paddingVertical: height < 800 ? 20 : 10,
+      }}
+    >
+      <View style={styles.modalContainer}>
+        <View style={[styles.container]}>
+          <TouchableOpacity onPress={onClose} style={styles.goBackContainer}>
+            <AntDesign name="left" size={20} color={"white"} />
+          </TouchableOpacity>
+          <Text style={[styles.title]}>{title}</Text>
+        </View>
+        <View style={styles.modalContent}>
+          <FlatList
+            data={items}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <View style={styles.modalListContainer}>
+                <TouchableOpacity onPress={() => handleCustomModal(item)}>
+                  <Text
+                    style={{
+                      fontFamily: FONT_FAMILY.urbanistSemiBold,
+                      fontSize: 16,
+                    }}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            showsVerticalScrollIndicator={false}
+          />
+        </View>
+        <Modal
+          isVisible={optionModalVisible}
+          onBackdropPress={() => setOptionModalVisible(false)}
+          animationIn="slideInUp"
+          animationOut="slideOutDown"
+        >
+          <NavigationHeader
+            title={"Options"}
+            onBackPress={() => setOptionModalVisible(false)}
+          />
+          <View style={styles.optionModal}>
+            <TouchableOpacity
+              style={styles.optionButton}
+              onPress={() => handleOptionPress("one_time")}
+            >
+              <Text style={styles.optionText}>Onetime</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.optionButton}
+              onPress={() => handleOptionPress("one_day")}
+            >
+              <Text style={styles.optionText}>Oneday</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.optionButton}
+              onPress={() => handleOptionPress("one_hour")}
+            >
+              <Text style={styles.optionText}>Onehour</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.optionButton}
+              onPress={() => handleOptionPress("in_between")}
+            >
+              <Text style={styles.optionText}>From-To</Text>
+            </TouchableOpacity>
+          </View>
+        </Modal>
+        {datePickerVisible && (
+          <DateTimePickerModal
+            isVisible={datePickerVisible}
+            mode={mode}
+            date={mode === "date" ? fromDate : toDate}
+            onConfirm={handleDateConfirm}
+            onCancel={() => setDatePickerVisible(false)}
+          />
+        )}
+      </View>
+    </Modal>
+  );
+};
+
+export default EmployeeListModal;
+
+export const styles = StyleSheet.create({
+  modalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "white",
+    padding: 20,
+    borderBottomRightRadius: 10,
+    borderBottomLeftRadius: 10,
+    width: "100%",
+  },
+  modalListContainer: {
+    marginHorizontal: 5,
+    marginVertical: 5,
+    backgroundColor: "white",
+    borderRadius: 15,
+    ...Platform.select({
+      android: {
+        elevation: 4,
+      },
+      ios: {
+        shadowColor: "black",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+      },
+    }),
+    padding: 20,
+  },
+  rowContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 20,
+  },
+  container: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 15,
+    paddingHorizontal: 15,
+    backgroundColor: COLORS.primaryThemeColor,
+  },
+  goBackContainer: {
+    marginRight: 15,
+  },
+  title: {
+    fontSize: 18,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    flex: 1,
+    paddingLeft: 10,
+    color: COLORS.white,
+  },
+  optionModal: {
+    backgroundColor: "white",
+    padding: 20,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    marginVertical: 5,
+    backgroundColor: COLORS.primaryThemeColor,
+    borderRadius: 5,
+    width: "100%",
+    alignItems: "center",
+  },
+  optionText: {
+    color: "white",
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 16,
+  },
+  datePicker: {
+    backgroundColor: "white",
+  },
+});

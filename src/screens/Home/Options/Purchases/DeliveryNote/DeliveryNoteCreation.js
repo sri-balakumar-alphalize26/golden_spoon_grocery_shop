@@ -1,0 +1,202 @@
+import React, { useState, useCallback, useMemo } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { FlatList, View, Text, StyleSheet } from 'react-native';
+import NavigationHeader from '@components/Header/NavigationHeader';
+import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
+import { DetailField } from '@components/common/Detail';
+import { formatDate } from '@utils/common/date';
+import { showToastMessage } from '@components/Toast';
+import { fetchPurchaseOrderDetails } from '@api/details/detailApi';
+import { OverlayLoader } from '@components/Loader';
+import { Button } from '@components/common/Button';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { post } from "@api/services/utils";
+import { showToast } from '@utils/common';
+import DeliveryNoteCreationDetailList from './DeliveryNoteCreationDetailList';
+
+const DeliveryNoteCreation = ({ navigation, route }) => {
+  const { id: deliveryNoteId } = route?.params || {};
+  const [details, setDetails] = useState({});
+  console.log("🚀 ~ DeliveryNoteCreation ~ details:", JSON.stringify(details, null, 3));
+  const [isLoading, setIsLoading] = useState(false);
+  const [deliveryNotes, setDeliveryNotes] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const fetchDetails = async () => {
+    setIsLoading(true);
+    try {
+      const updatedDetails = await fetchPurchaseOrderDetails(deliveryNoteId);
+      if (updatedDetails && updatedDetails[0]) {
+        setDetails(updatedDetails[0]);
+        setDeliveryNotes(updatedDetails[0]?.products_lines || []);
+      }
+    } catch (error) {
+      console.error('Error fetching purchase order details:', error);
+      showToastMessage('Failed to fetch purchase order details. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (deliveryNoteId) {
+        fetchDetails();
+      }
+    }, [deliveryNoteId])
+  );
+
+  const { untaxedTotal, taxTotal, grandTotal } = useMemo(() => {
+    let untaxed = 0;
+    let taxes = 0;
+    deliveryNotes.forEach((item) => {
+      untaxed += item.sub_total || 0;
+      taxes += item.tax_value || 0;
+    });
+    return {
+      untaxedTotal: untaxed.toFixed(2),
+      taxTotal: taxes.toFixed(2),
+      grandTotal: (untaxed + taxes).toFixed(2),
+    };
+  }, [deliveryNotes]);
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return; 
+    setIsSubmitting(true);
+      const deliveryNoteData = {
+        supplier: details?.supplier?.supplier_id ?? null,
+        Trn_number: details?.Trn_number ||null,
+        LPO_no: details?.sequence_no || null,
+        currency: details?.currency?.currency_id ?? null,
+        purchase_type: details?.purchase_type || null,
+        country: details?.country?.country_id ?? null,
+        bill_date: details?.bill_date || null,
+        order_date: details?.order_date || null,
+        company: details?.untaxedAmount || null,
+        untaxed_amount: details?.sub_total || null,
+        total_amount: details?.total_amount ?? null,
+        purchase_order_id: details?._id ?? null,
+        products_lines: deliveryNotes.map((line) => ({
+          product: line?.product.product_id,
+          product_name: line?.product.product_name,
+          description: line?.description,
+          quantity: line?.quantity,
+          scheduled_date: line?.scheduled_date,
+          recieved_quantity: line?.recieved_quantity,
+          billed_quantity: line?.billed_quantity,
+          product_unit_of_measure: line?.product_unit_of_measure,
+          unit_price: line?.unit_price,
+          taxes: line?.taxes?.tax_type_id,
+          taxes_name: line?.taxes_name,
+          tax_value: line?.tax_value,
+          sub_total: line?.sub_total
+        }))
+      }
+      console.log("🚀 ~ DeliveryNoteCreation ~ deliveryNoteData:", JSON.stringify(deliveryNoteData, null, 2));
+      try {
+        const response = await post("/createPurchaseOrderDeliveryNote", deliveryNoteData);
+        if (response.success) {
+          showToast({
+            type: "success",
+            title: "Success",
+            message: response.message || "Delivery Note created successfully",
+          });
+          navigation.navigate("DeliveryNoteScreen");
+        } else {
+          showToast({
+            type: "error",
+            title: "ERROR",
+            message: response.message || "Delivery Note Creation failed",
+          });
+        }
+      } catch (error) {
+        console.error("Error Creating Delivery Note:", error);
+        showToast({
+          type: "error",
+          title: "ERROR",
+          message: "An unexpected error occurred. Please try again later.",
+        });
+      } finally {
+        setIsSubmitting(false);
+      }
+  };
+
+  return (
+    <SafeAreaView>
+      <NavigationHeader
+        title="Delivery Note Creation"
+        onBackPress={() => navigation.goBack()}
+        logo={false}
+      />
+      <RoundedScrollContainer>
+        <DetailField label="Supplier Name" value={details?.supplier?.supplier_name || '-'} />
+        <DetailField label="LPO No" value={details?.sequence_no || '-'} />
+        <DetailField label="Ordered Date" value={formatDate(details?.order_date)} />
+        <DetailField label="Bill Date" value={formatDate(details?.bill_date)} />
+        <DetailField label="Purchase Type" value={details?.purchase_type} />
+        <DetailField label="Country" value={details?.country?.country_name} />
+        <DetailField label="Currency" value={details?.currency?.currency_name} />
+        <FlatList
+          data={deliveryNotes}
+          renderItem={({ item }) => <DeliveryNoteCreationDetailList item={item} />}
+          keyExtractor={(item) => item._id}
+        />
+
+        {deliveryNotes.length > 0 && ( <>
+          <View style={styles.totalSectionContainer}>
+            <View style={styles.totalSection}>
+              <Text style={styles.totalLabel}>Untaxed Amount: </Text>
+              <Text style={styles.totalValue}>{untaxedTotal}</Text>
+            </View>
+            <View style={styles.totalSection}>
+              <Text style={styles.totalLabel}>Taxes: </Text>
+              <Text style={styles.totalValue}>{taxTotal}</Text>
+            </View>
+            <View style={styles.totalSection}>
+              <Text style={styles.totalLabel}>Total: </Text>
+              <Text style={styles.totalValue}>{grandTotal}</Text>
+            </View>
+          </View>  
+          </>
+        )}
+
+        <Button
+          title="Submit"
+          width="100%"
+          onPress={handleSubmit}
+          backgroundColor={COLORS.tabIndicator}
+        />
+        <OverlayLoader visible={isLoading} />
+      </RoundedScrollContainer>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  label: {
+    marginVertical: 5,
+    fontSize: 16,
+    color: COLORS.primaryThemeColor,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+  },
+  totalSectionContainer: {
+    marginBottom: 15,
+  },
+  totalSection: {
+    flexDirection: 'row',
+    marginVertical: 5,
+    margin: 10,
+    alignSelf: "center",
+  },
+  totalLabel: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  totalValue: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#666666',
+  },
+});
+
+export default DeliveryNoteCreation;

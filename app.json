@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "icecube",
+    "slug": "vendingmachine",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "splash": {
+        "image": "./assets/splash.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      },
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
+      "icon": "./assets/icon.png",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "package": "com.danat.alphalize",
+      "usesCleartextTraffic": true
+    },
+    "plugins": [
+      "./plugins/android-cleartext-traffic.js"
+    ],
+    "owner": "mightyraju",
+    "extra": {
+      "eas": {
+        "projectId": "672318f3-54a2-429d-bf40-18e9900d1fb0"
+      }
+    }
+  }
+}

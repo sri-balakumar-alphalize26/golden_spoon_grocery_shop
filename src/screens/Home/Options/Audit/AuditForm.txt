@@ -1,0 +1,871 @@
+import { View, StyleSheet, Keyboard, FlatList, TouchableOpacity, Image, ActivityIndicator } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { RoundedScrollContainer, SafeAreaView } from '@components/containers'
+import { NavigationHeader } from '@components/Header'
+import { TextInput as FormInput } from '@components/common/TextInput'
+import { COLORS, FONT_FAMILY } from '@constants/theme'
+import { Button, LoadingButton } from '@components/common/Button'
+import SignaturePad from '@components/SignaturePad'
+import Text from '@components/Text'
+import { fetchBills } from '@api/details/detailApi'
+import { format } from 'date-fns'
+import { useAuthStore } from '@stores/auth';
+import { ActionModal } from '@components/Modal'
+import { formatData } from '@utils/formatters'
+import { AntDesign } from '@expo/vector-icons';
+import { post } from '@api/services/utils'
+import Toast from 'react-native-toast-message'
+import { showToast } from '@utils/common'
+
+const AuditForm = ({ navigation }) => {
+
+  const [scrollEnabled, setScrollEnabled] = useState(true);
+  const [isSubmiting, setIsSubmiting] = useState(false);
+  const [url, setUrl] = useState('')
+  const [imageUrls, setImageUrls] = useState([])
+  const [displayBillDetails, setDisplayBillDetails] = useState({})
+  const [collectionType, setCollectionType] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [ledger, setLedger] = useState({})
+  const [imageLoading, setImageLoading] = useState(true);
+  const [scannedBillDetails, setScannedBillDetails] = useState({});
+  const [remarks, setRemarks] = useState('')
+  const [splittedBillName, setSplittedBillName] = useState('')
+  const loginUser = useAuthStore(state => state.user)
+  const warehouseId = loginUser?.warehouse?.warehouse_id
+  console.log("Logged In Warehouse Id : ", warehouseId)
+
+  useEffect(() => {
+    resetFormState();
+  }, [splittedBillName]);
+
+  // clear all states when scan another data
+  const resetFormState = () => {
+    setImageUrls([]);
+    setDisplayBillDetails({});
+    setScannedBillDetails({});
+    setCollectionType(null);
+    setErrors({});
+    setLedger({});
+    setRemarks('');
+  };
+
+  // Function to handle scanned data
+  const handleScan = async (data) => {     // VB 203
+    const billParts = data.split('-')      // VB-203
+    const billName = billParts[0]
+    console.log("BillName : ", billName)
+    const billSequence = billParts.slice(1).join('-')
+    setSplittedBillName(billName)
+    resetFormState();
+
+    try {
+      let response, billDetails;
+      switch (billName) {
+        case "Invoice":
+          response = await fetchBills.invoiceDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Vendor Bill":
+          response = await fetchBills.vendorDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Sales Return":
+          response = await fetchBills.salesReturnDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Purchase Return":
+          response = await fetchBills.purchaseReturnDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "CAPREC":
+          response = await fetchBills.capitalRecieptsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Cash rec":
+          response = await fetchBills.cashReceiptsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Cash pay":
+          response = await fetchBills.cashPaymentsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Bankpay":
+          response = await fetchBills.expenseDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Bank rec":
+          response = await fetchBills.capitalRecieptsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "SALPAY":
+          response = await fetchBills.salaryPaymentDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "E/PPAY":
+          response = await fetchBills.salaryAdvancePaymentDetails(billSequence);
+          billDetails = response[0];
+          console.log("Bill data", billDetails);
+          break;
+
+        case "CHEQREC":
+          response = await fetchBills.chequeLedgerDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "CUSTREC":
+          response = await fetchBills.customerReceiptsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "CUSTPAY":
+          response = await fetchBills.customerPaymentDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "SUPREC":
+          response = await fetchBills.supplierReceiptsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "SUPPAY":
+          response = await fetchBills.supplierPaymentsDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "CAPPAY":
+          response = await fetchBills.capitalPaymentDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "JobInvoice":
+          response = await fetchBills.jobInvoiceDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "PETTYALLOT":
+          response = await fetchBills.pettyCashAllotmentDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "PETEXP":
+          response = await fetchBills.pettyCashExpenseDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "CASRET": //petty cash return
+          response = await fetchBills.pettyCashReturnDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "PETTYTRANS":
+          response = await fetchBills.pettyCashTransferDetails(billSequence);
+          billDetails = response[0];
+          break;
+
+        case "Spare Issue":
+          response = await fetchBills.sparePartsIssueDetails(billSequence);
+          if (response[0]) {
+            const spareAuditDetail = await fetchBills.sparePartsIssueAuditDetails(response[0]?._id)
+            billDetails = spareAuditDetail[0];
+            console.log("🚀 ~ Scanned Billed Details:", JSON.stringify(billDetails, null, 2));
+          }
+          break;
+
+        case "Stock rec":
+          response = await fetchBills.stockTransferDetails(billSequence);
+          billDetails = response[0];
+          console.log("Bill data Stock Transfer", JSON.stringify(billDetails, null, 2));
+          break;
+
+        case "Fund rec":
+          response = await fetchBills.fundTransferDetails(billSequence);
+          billDetails = response[0];
+          console.log("Bill data fund  Transfer", JSON.stringify(billDetails, null, 2));
+          break;
+
+        default:
+          console.log("Unknown bill type");
+      }
+      if (billDetails) {
+        setScannedBillDetails(billDetails)
+        const transactionDetails = {
+          displayName: billDetails?.customer?.customer_name ||
+            billDetails?.supplier?.supplier_name ||
+            billDetails?.capital_chart_of_account_name ||
+            billDetails?.expense_chart_of_account_name ||
+            billDetails?.chart_of_account_name ||
+            billDetails?.chart_of_accounts_name ||
+            billDetails?.sales_person?.sales_person_name ||
+            billDetails?.created_by?.created_by_name || '',
+          documentNumber: billDetails.sequence_no || '',
+          totalAmount: billDetails.total_amount || billDetails.amount || billDetails?.spare_parts_line?.[0]?.totalCount?.[0]?.total_calculated_amounts || billDetails?.debit ||
+            billDetails?.total_purchase_cost || '',
+          businessType: billDetails.bussiness_type_id || '',
+          paymentMethod: billDetails?.payment_method_id ||
+            billDetails?.register_payments?.[0]?.payment_method_id ||
+            billDetails?.transaction_type_id ||
+            billDetails?.paid_through_chart_of_account_id || '',
+          ledgerId: billDetails?.capital_chart_of_account_id ||
+            billDetails?.expense_chart_of_account_id ||
+            billDetails?.chart_of_account_id ||
+            billDetails?.chart_of_accounts_id ||
+            billDetails?.ledger_id || '',
+          isEstimation: billDetails?.is_estimation
+        };
+        const collectionTypeResponse = await fetchBills.collectionTypeDetails(transactionDetails.businessType, transactionDetails.paymentMethod);
+        const collectionResponseData = collectionTypeResponse[0];
+
+        if (billName === 'JobInvoice') {
+          if (transactionDetails.isEstimation) {
+            setCollectionType(collectionTypeResponse[0]);
+          } else {
+            setCollectionType(collectionTypeResponse[1]);
+          }
+        } else {
+          setCollectionType(collectionResponseData);
+        }
+
+        if (transactionDetails.ledgerId) {
+          const ledgerTypeResponse = await fetchBills.ledgerTypeDetails(transactionDetails.ledgerId);
+          const ledgerTypeResponseData = ledgerTypeResponse[0]?.auditing_ledger;
+          setLedger(ledgerTypeResponseData);
+        }
+        setDisplayBillDetails(transactionDetails);
+
+        // Clear errors for all fields if they are not empty
+        for (const field in transactionDetails) {
+          if (transactionDetails[field]) {
+            updateErrorState(null, field);
+          }
+        }
+        // Clear errors for collection type if it's not empty
+        if (collectionResponseData?.collection_type_name) {
+          updateErrorState(null, 'collectionType');
+        }
+      }
+      // console.log("Customer:", customer);
+    } catch (error) {
+      console.log('Error fetching customer details:', error);
+    }
+  };
+
+  const updateErrorState = (error, input) => {
+    setErrors((prevState) => ({ ...prevState, [input]: error }));
+  };
+
+  // Function to validate form
+  const validate = () => {
+    Keyboard.dismiss();
+    let isValid = true;
+    const errorMessages = {
+      displayName: "Scanned Customer name is required",
+      documentNumber: "Scanned Invoice no is required",
+      totalAmount: "Scanned Total amount is required",
+      // collectionType: "Scanned Collection type is required",
+    };
+    for (const field in errorMessages) {
+      // Skip validation for displayName field if bill name is "Spare Issue"
+      if (field === "displayName" && splittedBillName === "Spare Issue" || field === "displayName" && splittedBillName === 'E/PPAY') {
+        continue;
+      }
+
+      if (!displayBillDetails[field]) {
+        updateErrorState(errorMessages[field], field);
+        isValid = false;
+      }
+
+      if (scannedBillDetails?.job_registrations[0]?.warehouse_id || scannedBillDetails?.warehouse || scannedBillDetails?.from_warehouse_id) {
+        const warehouses_id = scannedBillDetails?.warehouse?.warehouses_id || scannedBillDetails?.to_warehouse_id || scannedBillDetails?.job_registrations[0]?.warehouse_id;
+        console.log("Job Registrations : ", warehouses_id)
+        const from_warehouse_id = scannedBillDetails?.from_warehouse_id || null;
+        const to_warehouse_id = scannedBillDetails?.to_warehouse_id || null;
+        // Debugging logs to inspect the variables before the condition
+        // Enhanced condition to handle potential undefined/null values
+        // console.log("Scanned details : ",scannedBillDetails)
+        // console.log("Warehouses Id :", warehouses_id)
+        // console.log("Warehouse Id :", warehouseId)
+        // console.log("To Warehouse Id :", to_warehouse_id)
+        // console.log("From Warehouse Id :", from_warehouse_id)
+        // if (warehouseId !== warehouses_id && warehouseId !== warehouse_id && warehouseId !== to_warehouse_id && warehouseId !== from_warehouse_id) {
+        if (warehouseId !== warehouses_id && warehouseId !== to_warehouse_id && warehouseId !== from_warehouse_id) {
+          console.log("Condition triggered: Warehouse ID doesn't match either the warehouse or from_warehouse_id.");
+          showToast({
+            type: 'error',
+            title: 'Error',
+            message: "Warehouse doesn't match the logged-in user's warehouse.",
+          });
+          isValid = false;
+        } else {
+          console.log("Condition not triggered: Warehouse ID matches.");
+        }
+      }
+    }
+    if (isValid) {
+      handleSubmitAudit();
+    }
+  };
+
+  const handleSubmitAudit = async () => {
+    try {
+      let auditingData = {
+        date: format(new Date(), 'yyyy-MM-dd'),
+        amount: displayBillDetails?.totalAmount ?? 0,
+        un_taxed_amount: scannedBillDetails?.untaxed_total_amount ?? 0,
+        advance_paid_amount: 0,
+        customer_vendor_signature: url ?? null,
+        attachments: imageUrls ?? null,
+        cashier_signature: "",
+        remarks: remarks || "",
+        warehouse_id: loginUser?.warehouse_id ?? null,
+        warehouse_name: loginUser?.warehouse?.warehouse_name ?? null,
+        scanned_warehouse_id: scannedBillDetails?.job_registrations[0]?.warehouse_id,
+        to_warehouse_id: null,
+        to_warehouse_name: '',
+        sales_person_id: loginUser?.related_profile?._id ?? null,
+        sales_person_name: loginUser?.related_profile?.name ?? null,
+        company_id: loginUser?.company.company_id ?? null,
+        company_name: loginUser?.company?.name ?? null,
+        supplier_id: scannedBillDetails?.supplier?.supplier_id ?? null,
+        supplier_name: scannedBillDetails?.supplier?.supplier_name ?? null,
+        collection_type_id: collectionType?._id ?? null,
+        collection_type_name: collectionType?.collection_type_name ?? null,
+        bussiness_type_id: collectionType?.bussiness_type_id ?? null,
+        customer_id: null,
+        customer_name: '',
+        invoice_id: scannedBillDetails?._id,
+        inv_sequence_no: displayBillDetails?.documentNumber ?? null,
+        register_payment_id: scannedBillDetails?.register_payments?.[0]._id ?? null,
+        register_payment_sequence_no: '',
+        chq_no: scannedBillDetails?.register_payments?.[0]?.chq_no ?? null,
+        chq_date: scannedBillDetails?.register_payments?.[0]?.chq_date ?? null,
+        chq_type: scannedBillDetails?.register_payments?.[0]?.chq_type ?? null,
+        cheque_transaction_type: "",
+        chart_of_accounts_id: loginUser?.company.company_id ?? null,
+        chart_of_accounts_name: "",
+        online_transaction_type: null,
+        online_status: null,
+        ledger_name: null,
+        ledger_type: null,
+        ledger_id: "",
+        ledger_display_name: null,
+        employee_ledger_id: "",
+        employee_ledger_name: null,
+        employee_ledger_display_name: null,
+        service_amount: null,
+        service_product_amount: null,
+        service_product_cost: null,
+        is_estimation: scannedBillDetails?.is_estimation ?? false
+      };
+      console.log('Entering the switch statements')
+      switch (splittedBillName) {
+        case "Invoice":
+          // Handling for Invoice bill
+          auditingData.customer_id = scannedBillDetails?.customer?.customer_id ?? null;
+          auditingData.customer_name = displayBillDetails?.displayName ?? null;
+          auditingData.register_payment_sequence_no = scannedBillDetails?.register_payments[0].sequence_no
+          auditingData.supplier_id = scannedBillDetails?.supplier?.supplier_id ?? null;
+          auditingData.supplier_name = scannedBillDetails?.supplier?.supplier_name ?? null;
+          // latest updates keys
+          auditingData.chart_of_accounts_id = scannedBillDetails?.register_payments[0]?.chart_of_accounts_id ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.register_payments[0]?.chart_of_accounts_name ?? null;
+          auditingData.online_transaction_type = scannedBillDetails?.register_payments[0]?.online_transaction_type ?? null;
+          auditingData.online_status = scannedBillDetails?.register_payments[0]?.online_status ?? null;
+          auditingData.ledger_id = scannedBillDetails?.register_payments[0]?.ledger_id ?? null;
+          auditingData.ledger_type = scannedBillDetails?.register_payments[0]?.ledger_type ?? null;
+          auditingData.ledger_display_name = scannedBillDetails?.register_payments[0]?.ledger_display_name ?? null;
+          break;
+
+        case "Vendor Bill":
+          // Handling for Vendor Bill
+          auditingData.customer_id = null;
+          auditingData.register_payment_sequence_no = scannedBillDetails?.register_payments[0]?.sequence_no ?? null;
+          auditingData.chart_of_accounts_id = scannedBillDetails?.register_payments[0]?.chart_of_accounts_id ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.register_payments[0]?.chart_of_accounts_name ?? null;
+          auditingData.online_transaction_type = scannedBillDetails?.register_payments[0]?.online_transaction_type ?? null;
+          auditingData.online_status = scannedBillDetails?.register_payments[0]?.online_status ?? null;
+          auditingData.ledger_id = scannedBillDetails?.register_payments[0]?.ledger_id ?? null;
+          auditingData.ledger_type = scannedBillDetails?.register_payments[0]?.ledger_type ?? null;
+          auditingData.ledger_display_name = scannedBillDetails?.register_payments[0]?.ledger_display_name ?? null;
+          auditingData.is_estimation = scannedBillDetails?.register_payments[0]?.is_estimation ?? null;
+          break;
+
+        case "Sales Return":
+          // Handling for Sales Return 
+          auditingData.register_payment_id = null;
+          auditingData.chq_type = scannedBillDetails?.chq_type ?? null;
+          auditingData.register_payment_sequence_no = null;
+          auditingData.chq_no = scannedBillDetails.chq_no ?? null;
+          auditingData.chq_date = scannedBillDetails?.chq_date ?? null;
+          auditingData.customer_id = scannedBillDetails?.customer?.customer_id;
+          auditingData.customer_name = displayBillDetails?.displayName;
+          auditingData.un_taxed_amount = scannedBillDetails?.total_untaxed_amount
+          break;
+
+        case "Cash rec":
+          auditingData.customer_id = null;
+          auditingData.chq_no = scannedBillDetails?.chq_type ?? null;
+          auditingData.chq_date = scannedBillDetails?.chq_type ?? null;
+          auditingData.chq_type = scannedBillDetails?.chq_type ?? null;
+          auditingData.register_payment_sequence_no = scannedBillDetails?.register_payments[0]?.sequence_no ?? null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.ledger_name = ledger?.ledger_name
+          break;
+
+        case "Cash pay":
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          break;
+
+        case "Bank rec": //BNKPAY
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.paid_through_chart_of_account_name ?? null;
+          break;
+
+        case "Bankpay": //BNKREC
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.paid_through_chart_of_account_name ?? null;
+          break;
+
+        case "SUPREC":
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? null;
+          auditingData.supplier_name = scannedBillDetails?.chart_of_account_name ?? '';
+          auditingData.supplier_id = scannedBillDetails?.chart_of_account_id ?? null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          break;
+
+        case "SUPPAY":
+          auditingData.supplier_id = scannedBillDetails?.supplier?.supplier_id ?? null;
+          auditingData.supplier_name = scannedBillDetails?.supplier?.supplier_name ?? null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          break;
+
+        case "CUSTREC":
+          auditingData.customer_id = scannedBillDetails?.customer?.customer_id ?? null;
+          auditingData.customer_name = scannedBillDetails?.customer?.customer_name ?? null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          break;
+
+        case "CUSTPAY":
+          auditingData.customer_id = scannedBillDetails?.chart_of_account_id ?? null;
+          auditingData.customer_name = scannedBillDetails?.chart_of_account_name ?? null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          break;
+
+        case "CAPREC":
+          // Handling for Sales Return 
+          auditingData.customer_id = null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.chart_of_accounts_id = scannedBillDetails?.capital_chart_of_account_id ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.capital_chart_of_account_name ?? null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          break;
+
+        case "CAPPAY":
+          auditingData.chq_no = scannedBillDetails?.chq_no ?? null;
+          auditingData.chq_date = scannedBillDetails?.chq_date ?? null;
+          auditingData.chq_type = scannedBillDetails?.chq_type ?? null;
+          auditingData.chart_of_accounts_id = scannedBillDetails?.capital_chart_of_account_id ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.capital_chart_of_account_name ?? null;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          break;
+
+        case "CASRET": //petty cash return 
+          auditingData.supplier_id = null;
+          auditingData.supplier_name = null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          auditingData.warehouse_id = scannedBillDetails?.warehouse_id ?? null;
+          auditingData.warehouse_name = scannedBillDetails?.warehouse_name ?? '';
+          auditingData.sales_person_id = scannedBillDetails?.sales_person?.sales_person_id;
+          auditingData.sales_person_name = scannedBillDetails?.sales_person?.sales_person_name;
+          break;
+
+        case "SALPAY":
+          auditingData.supplier_id = null;
+          auditingData.supplier_name = null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          auditingData.advance_paid_amount = scannedBillDetails?.advance_paid_amount;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          break;
+
+        case "CHEQREC":
+          let totalamount = scannedBillDetails?.debit + scannedBillDetails?.credit
+          auditingData.supplier_id = null;
+          auditingData.supplier_name = null;
+          auditingData.amount = totalamount ?? 0;
+          auditingData.un_taxed_amount = totalamount ?? 0;
+          auditingData.chart_of_accounts_id = scannedBillDetails?.capital[0].chq_bank_id
+          auditingData.chart_of_accounts_name = scannedBillDetails?.chq_bank_name
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          break;
+
+        case "E/PPAY":
+          auditingData.supplier_id = null;
+          auditingData.supplier_name = null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          auditingData.ledger_id = scannedBillDetails.ledger_id ?? null;
+          auditingData.ledger_type = scannedBillDetails.ledger_type ?? null;
+          auditingData.ledger_name = scannedBillDetails.ledger_name ?? null;
+          auditingData.ledger_display_name = scannedBillDetails.ledger_display_name ?? null;
+          auditingData.warehouse_id = scannedBillDetails?.warehouse_id ?? null;
+          auditingData.warehouse_name = scannedBillDetails?.warehouse_name ?? '';
+          auditingData.sales_person_id = scannedBillDetails?.sales_person?.sales_person_id;
+          auditingData.sales_person_name = scannedBillDetails?.sales_person?.sales_person_name;
+          break;
+
+        case "PETTYALLOT":
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.employee_ledger_id = scannedBillDetails?.employee_ledger ?? null;
+          auditingData.employee_ledger_name = scannedBillDetails?.employee_ledger ?? null;
+          break;
+
+        case "PETEXP":
+          auditingData.supplier_id = null;
+          auditingData.supplier_name = null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.employee_ledger_id = scannedBillDetails?.paid_from_id ?? null;
+          auditingData.employee_ledger_display_name = scannedBillDetails?.paid_from_ledger_display_name ?? '';
+          auditingData.employee_ledger_name = scannedBillDetails?.paid_from_ledger_name ?? '';
+          break;
+
+        case "PETTYTRANS":
+          auditingData.supplier_id = null;
+          auditingData.supplier_name = null;
+          auditingData.un_taxed_amount = displayBillDetails?.totalAmount ?? 0;
+          auditingData.ledger_id = ledger?.ledger_id ?? null;
+          auditingData.ledger_type = ledger?.ledger_type ?? null;
+          auditingData.ledger_name = ledger?.ledger_name ?? null;
+          auditingData.ledger_display_name = ledger?.ledger_display_name ?? null;
+          auditingData.employee_ledger_id = scannedBillDetails?.paid_from_id ?? null;
+          auditingData.employee_ledger_display_name = scannedBillDetails?.paid_from_ledger_display_name ?? '';
+          auditingData.employee_ledger_name = scannedBillDetails?.paid_from_ledger_name ?? '';
+          break;
+
+        case "Purchase Return":
+          auditingData.customer_id = loginUser?.company?.company_id ?? null;
+          auditingData.customer_name = displayBillDetails?.displayName ?? null;
+          auditingData.un_taxed_amount = scannedBillDetails?.total_untaxed_amount ?? 0;
+          auditingData.chq_no = scannedBillDetails?.chq_no ?? null;
+          auditingData.chq_date = scannedBillDetails?.chq_date ?? null;
+          auditingData.chq_type = scannedBillDetails?.chq_type ?? null;
+          auditingData.cheque_transaction_type = scannedBillDetails?.type ?? null;
+          auditingData.chart_of_accounts_id = scannedBillDetails?.capital_chart_of_account_id ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.capital_chart_of_account_name ?? null;
+          auditingData.ledger_name = scannedBillDetails?.ledger_name ?? null;
+          auditingData.ledger_type = scannedBillDetails?.ledger_type ?? null;
+          auditingData.ledger_id = scannedBillDetails?.ledger_id ?? null;
+          auditingData.employee_ledger_id = scannedBillDetails?.employee_ledger ?? null;
+          auditingData.employee_ledger_name = scannedBillDetails?.employee_ledger ?? null;
+          break;
+
+        case "Spare Issue":
+          auditingData.amount = displayBillDetails?.total_purchase_cost ?? 0;
+          auditingData.un_taxed_amount = null;
+          auditingData.service_product_cost = 0;
+          break;
+
+        case "JobInvoice":
+          auditingData.customer_id = loginUser?.company?.company_id ?? null;
+          auditingData.customer_name = displayBillDetails?.displayName ?? null;
+          auditingData.un_taxed_amount = scannedBillDetails?.untaxed_total_amount ?? 0;
+          auditingData.register_payment_id = scannedBillDetails?.register_payments[0]._id ?? null;
+          auditingData.register_payment_sequence_no = scannedBillDetails?.register_payments[0].sequence_no ?? null;
+          auditingData.chq_no = scannedBillDetails?.register_payments[0]?.chq_no ?? null;
+          auditingData.chq_date = scannedBillDetails?.register_payments[0]?.chq_date ?? null;
+          auditingData.chq_type = scannedBillDetails?.register_payments[0]?.chq_type ?? null;
+          auditingData.cheque_transaction_type = scannedBillDetails?.register_payments[0]?.type ?? null;
+          auditingData.service_amount = scannedBillDetails?.total_service_amount;
+          auditingData.service_product_amount = scannedBillDetails?.total_product_amount; // not sure
+          auditingData.service_product_cost = scannedBillDetails?.total_product_cost_amount;
+          // latest updates keys
+          auditingData.chart_of_accounts_id = scannedBillDetails?.register_payments[0]?.chart_of_accounts_id ?? null;
+          auditingData.chart_of_accounts_name = scannedBillDetails?.register_payments[0]?.chart_of_accounts_name ?? null;
+          auditingData.online_transaction_type = scannedBillDetails?.register_payments[0]?.online_transaction_type ?? null;
+          auditingData.online_status = scannedBillDetails?.register_payments[0]?.online_status ?? null;
+          auditingData.ledger_id = scannedBillDetails?.register_payments[0]?.ledger_id ?? null;
+          auditingData.ledger_type = scannedBillDetails?.register_payments[0]?.ledger_type ?? null;
+          auditingData.ledger_display_name = scannedBillDetails?.register_payments[0]?.ledger_display_name ?? null;
+          break;
+
+        case "Stock rec":
+          auditingData.amount = scannedBillDetails?.total_purchase_cost ?? 0;
+          auditingData.un_taxed_amount = scannedBillDetails?.untaxed_total_amount ?? 0;
+          auditingData.to_warehouse_id = scannedBillDetails?.to_warehouse_id ?? null;
+          auditingData.to_warehouse_name = scannedBillDetails?.to_warehouse_name ?? null;
+          auditingData.warehouse_id = scannedBillDetails?.from_warehouse_id ?? null;
+          auditingData.warehouse_name = scannedBillDetails?.from_warehouse_name ?? null;
+          break;
+
+        case "Fund rec":
+          auditingData.amount = scannedBillDetails?.amount ?? 0;
+          auditingData.to_warehouse_id = scannedBillDetails?.to_warehouse_id ?? null;
+          auditingData.to_warehouse_name = scannedBillDetails?.to_warehouse_name ?? null;
+          auditingData.un_taxed_amount = scannedBillDetails?.amount ?? 0;
+          break;
+
+        default:
+          break;
+      }
+      setIsSubmiting(true);
+      console.log("handle Auditing DATA:", JSON.stringify(auditingData, null, 2));
+      // return auditingData;
+      const response = await post('/createAuditing', auditingData);
+      if (response.success === 'true') {
+        Toast.show({
+          type: 'success',
+          text1: 'Success',
+          text2: 'Audit created successfully',
+          position: 'bottom',
+        });
+        navigation.navigate('AuditScreen');
+      } else {
+        console.error('Auditing creation failed:', response.message);
+        Toast.show({
+          type: 'error',
+          text1: 'ERROR',
+          text2: response.message || 'Audit creation failed',
+          position: 'bottom',
+        });
+      }
+    } catch (err) {
+    } finally {
+      setIsSubmiting(false)
+    }
+  }
+  const handleDeleteImage = (index) => {
+    const newImageUrls = [...imageUrls];
+    newImageUrls.splice(index, 1);
+    setImageUrls(newImageUrls);
+  };
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setImageLoading(false);
+    }, 1000);
+
+    return () => clearTimeout(timeout);
+  }, []);
+
+  const ListAction = ({ image, onPress, index }) => {
+    return (
+      <View style={styles.listContainer} onPress={onPress}>
+        {imageLoading && <ActivityIndicator size="small" color={'black'} style={{ position: 'absolute', top: 30 }} />}
+        <Image source={{ uri: image }} style={styles.image}
+          onLoad={() => setImageLoading(true)}
+        />
+        <View style={styles.deleteIconContainer}>
+          <TouchableOpacity onPress={() => handleDeleteImage(index)}>
+            <AntDesign name="delete" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  const renderItem = ({ index, item }) => {
+    if (item.empty) {
+      return <View style={[styles.itemStyle, styles.itemInvisible]} />
+    }
+    return <ListAction image={item} index={index} />;
+  };
+
+  return (
+    <SafeAreaView>
+      <NavigationHeader
+        title="New Transaction Audit"
+        onBackPress={() => navigation.goBack()}
+      />
+      <RoundedScrollContainer scrollEnabled={scrollEnabled}  >
+        <FormInput label={'Date'} editable={false} value={format(new Date(), 'yyyy-MM-dd')} />
+        <FormInput label={'Branch'} editable={false} value={loginUser.company ? loginUser.company?.name : ''} />
+        <FormInput
+          label={'Collection Type'}
+          placeholder={'Collection Type'}
+          editable={false}
+          value={collectionType?.collection_type_name}
+          validate={errors.collectionType}
+        />
+        <View style={styles.dottedQrBorderContainer}>
+          <FormInput
+            label={'Customer'}
+            placeholder={'Customer name'}
+            editable={false}
+            multiline={true}
+            value={displayBillDetails?.displayName?.toUpperCase()?.trim() || ''}
+            validate={errors.displayName}
+          />
+          <FormInput
+            label={'Invoice Number'}
+            placeholder={'Invoice no'}
+            editable={false}
+            value={displayBillDetails?.documentNumber || ''}
+            validate={errors.documentNumber}
+          />
+          <FormInput
+            label={'Total Amount'}
+            editable={false}
+            placeholder={'Total amount'}
+            value={displayBillDetails?.totalAmount?.toString()}
+            validate={errors.totalAmount}
+          />
+          <View style={styles.rowCotainer}>
+            <Text style={styles.qrCodeText}>Update from QR Code </Text>
+            <View style={styles.buttonContainer}>
+              <Button backgroundColor={COLORS.primaryThemeColor} title={'Scan'} onPress={() => navigation.navigate('Scanner', { onScan: handleScan, onClose: true })} />
+            </View>
+          </View>
+        </View>
+        {/* Options Modal Camera or Gallery */}
+        <ActionModal title={'Attach file'} setImageUrl={(url) => setImageUrls(prevUrls => [...prevUrls, url])} />
+        {imageUrls && imageUrls.length > 0 && (
+          <View style={styles.uploadsContainer}>
+            <Text style={styles.label}>Uploads</Text>
+            <FlatList
+              data={formatData(imageUrls, 4)}
+              numColumns={4}
+              keyExtractor={(item, index) => index.toString()}
+              contentContainerStyle={{ padding: 10 }}
+              showsVerticalScrollIndicator={false}
+              renderItem={renderItem}
+            />
+          </View>
+        )}
+        <SignaturePad setScrollEnabled={setScrollEnabled} setUrl={setUrl} title={'Customer/Vendor Signature'} />
+        <FormInput label={'Remarks'} multiline={true} numberOfLines={5} onChangeText={(text) => setRemarks(text)} />
+        <LoadingButton backgroundColor={COLORS.primaryThemeColor} title={'SUBMIT'} onPress={validate} loading={isSubmiting} />
+      </RoundedScrollContainer>
+    </SafeAreaView>
+  )
+}
+
+export default AuditForm
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.white,
+  },
+  dottedQrBorderContainer: {
+    padding: 15,
+    borderWidth: 1.8,
+    borderColor: COLORS.primaryThemeColor,
+    borderRadius: 18,
+    borderStyle: 'dotted',
+    marginVertical: 10
+  },
+  rowCotainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  qrCodeText: {
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    fontSize: 16,
+    color: COLORS.primaryThemeColor,
+    flex: 2,
+  },
+  uploadsContainer: {
+    flex: 1,
+    borderRadius: 6,
+    borderWidth: 0.8,
+    borderColor: '#BBB7B7',
+    backgroundColor: 'white',
+    marginVertical: 5,
+  },
+  listContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: 8,
+  },
+  image: {
+    width: 90,
+    height: 90,
+    borderRadius: 8
+  },
+  label: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: COLORS.black,
+    paddingHorizontal: 10,
+    marginTop: 5
+  },
+  itemInvisible: {
+    backgroundColor: 'transparent',
+  },
+  itemStyle: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: 8,
+  },
+  deleteIconContainer: {
+    position: 'absolute',
+    top: -10,
+    right: -10,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 12,
+    padding: 5,
+  },
+
+});

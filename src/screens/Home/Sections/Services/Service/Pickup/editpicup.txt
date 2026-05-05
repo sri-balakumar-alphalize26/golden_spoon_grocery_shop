@@ -1,0 +1,592 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { Keyboard, View, StyleSheet, Text, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from '@components/containers';
+import { NavigationHeader } from '@components/Header';
+import { LoadingButton } from '@components/common/Button';
+import { showToast } from '@utils/common';
+import { put } from '@api/services/utils';
+import { RoundedScrollContainer } from '@components/containers';
+import { TextInput as FormInput } from '@components/common/TextInput';
+import { DropdownSheet } from '@components/common/BottomSheets';
+import { fetchAssigneeDropdown, fetchCustomerNameDropdown, fetchDeviceDropdown, fetchBrandDropdown, fetchConsumerModelDropdown, fetchWarehouseDropdown, fetchSalesPersonDropdown } from '@api/dropdowns/dropdownApi';
+import { formatDateTime } from '@utils/common/date';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import { ActionModal } from '@components/Modal'
+import { FlatList } from 'react-native-gesture-handler';
+import SignaturePad from '@components/SignaturePad'
+import { validateFields } from '@utils/validation';
+import { formatData } from '@utils/formatters';
+import { CheckBox } from '@components/common/CheckBox';
+import { formatDate } from '@utils/common/date';
+import { AntDesign } from '@expo/vector-icons';
+import { fetchPickupDetails } from '@api/details/detailApi';
+import { useFocusEffect } from '@react-navigation/native';
+import { OverlayLoader } from '@components/Loader';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
+
+const EditPickupDetails = ({ navigation, route }) => {
+  const { pickupId } = route?.params || {};
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [url, setUrl] = useState('')
+  const [imageUrls, setImageUrls] = useState([])
+  const [driverSignatureUrl, setDriverSignatureUrl] = useState('');
+  const [customerSignatureUrl, setCustomerSignatureUrl] = useState('');
+  const [coordinatorSignatureUrl, setCoordinatorSignatureUrl] = useState('');
+  const [selectedType, setSelectedType] = useState(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const [formData, setFormData] = useState({});
+  const [scrollEnabled, setScrollEnabled] = useState(true);
+  const [imageLoading, setImageLoading] = useState(true);
+  const [errors, setErrors] = useState({});
+  const [dropdown, setDropdown] = useState({
+    customerName: [],
+    device: [],
+    brand: [],
+    consumerModel: [],
+    warehouse: [],
+    assignee: [],
+    salesPerson: []
+  });
+
+  const isCoordinatorSignatureActive = driverSignatureUrl && customerSignatureUrl;
+  const fetchDetails = async (pickupId) => {
+    setIsLoading(true);
+    try {
+      const [detail] = await fetchPickupDetails(pickupId);
+      setFormData((prevFormData) => ({
+        ...prevFormData,
+        date: detail?.date || new Date(),
+        customerName: { id: detail?.customer_id || '', label: detail?.customer_name?.trim() || '' },
+        device: { id: detail?.device_id || '', label: detail?.device_name || '' },
+        brand: { id: detail?.brand_id || '', label: detail?.brand_name || ''},
+        consumerModel: { id: detail?.consumer_model_id || '', label: detail?.consumer_model_name || ''},
+        serialNumber: detail?.serial_Number || '',
+        warehouse: { id: detail?.warehouse_id || '', label: detail?.warehouse_name || ''},
+        pickupScheduleTime: detail?.pickup_schedule_time || null,
+        assignee: { id: detail?.assignee_id || '', label: detail?.assignee_name || ''},
+        salesPerson: { id: detail?.sales_person_id || '', label: detail?.sales_person_name || ''},
+        remarks: detail?.remarks || '',
+      }));
+    } catch (error) {
+      console.error('Error fetching pickup details:', error);
+      showToast({ type: 'error', title: 'Error', message: 'Failed to fetch pickup details. Please try again.' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (pickupId) {
+        fetchDetails(pickupId);
+      }
+    }, [pickupId])
+  );
+
+  useEffect(() => {
+    const fetchDropdownData = async () => {
+      try {
+        const customerNameData = await fetchCustomerNameDropdown();
+        setDropdown(prevDropdown => ({
+          ...prevDropdown,
+          customerName: customerNameData.map(data => ({
+            id: data._id,
+            label: data.name,
+          })),
+        }));
+      } catch (error) {
+        console.error('Error fetching customer dropdown data:', error);
+      }
+    };
+
+    fetchDropdownData();
+  }, []);
+
+  useEffect(() => {
+    const fetchDropdownData = async () => {
+      try {
+        const deviceData = await fetchDeviceDropdown();
+        setDropdown(prevDropdown => ({
+          ...prevDropdown,
+          device: deviceData.map(data => ({
+            id: data._id,
+            label: data.model_name,
+          })),
+        }));
+      } catch (error) {
+        console.error('Error fetching device dropdown data:', error);
+      }
+    };
+
+    fetchDropdownData();
+  }, []);
+
+  useEffect(() => {
+    if (formData.device) {
+      const fetchBrandData = async () => {
+        try {
+          const brandData = await fetchBrandDropdown(formData.device.id);
+          setDropdown(prevDropdown => ({
+            ...prevDropdown,
+            brand: brandData.map(data => ({
+              id: data._id,
+              label: data.brand_name,
+            })),
+          }));
+        } catch (error) {
+          console.error('Error fetching brand dropdown data:', error);
+        }
+      };
+      fetchBrandData();
+    }
+  }, [formData.device]);
+
+  useEffect(() => {
+    if (formData.brand && formData.device) {
+      const fetchconsumerModelData = async () => {
+        try {
+          const consumerModelData = await fetchConsumerModelDropdown(formData.device.id, formData.brand.id);
+          setDropdown(prevDropdown => ({
+            ...prevDropdown,
+            consumerModel: consumerModelData.map(data => ({
+              id: data._id,
+              label: data.model_name,
+            })),
+          }));
+        } catch (error) {
+          console.error('Error Consumer Model dropdown data:', error);
+        }
+      };
+      fetchconsumerModelData();
+    }
+  }, [formData.brand, formData.device]);
+
+  useEffect(() => {
+    const fetchDropdownData = async () => {
+      try {
+        const warehouseData = await fetchWarehouseDropdown();
+        setDropdown(prevDropdown => ({
+          ...prevDropdown,
+          warehouse: warehouseData.map(data => ({
+            id: data._id,
+            label: data.warehouse_name,
+          })),
+        }));
+      } catch (error) {
+        console.error('Error warehouse dropdown data:', error);
+      }
+    };
+
+    fetchDropdownData();
+  }, []);
+
+  useEffect(() => {
+    const fetchDropdownData = async () => {
+      try {
+        const AssigneeData = await fetchAssigneeDropdown();
+        setDropdown(prevDropdown => ({
+          ...prevDropdown,
+          assignee: AssigneeData.map(data => ({
+            id: data._id,
+            label: data.name,
+          })),
+        }));
+      } catch (error) {
+        console.error('Error fetching Assignee dropdown data:', error);
+      }
+    };
+
+    fetchDropdownData();
+  }, []);
+
+  useEffect(() => {
+    const fetchDropdownData = async () => {
+      try {
+        const salesPersonData = await fetchSalesPersonDropdown();
+        setDropdown(prevDropdown => ({
+          ...prevDropdown,
+          salesPerson: salesPersonData.map(data => ({
+            id: data._id,
+            label: data.name,
+          })),
+        }));
+      } catch (error) {
+        console.error('Error fetching sales person dropdown data:', error);
+      }
+    };
+
+    fetchDropdownData();
+  }, []);
+
+  const handleFieldChange = (field, value) => {
+    setFormData((prevFormData) => ({ ...prevFormData, [field]: value }));
+    if (errors[field]) {
+      setErrors((prevErrors) => ({ ...prevErrors, [field]: null }));
+    }
+  };
+
+  const toggleBottomSheet = (type) => {
+    setSelectedType(type);
+    setIsVisible(!isVisible);
+  };
+
+  const handleDeleteImage = (index) => {
+    const newImageUrls = [...imageUrls];
+    newImageUrls.splice(index, 1);
+    setImageUrls(newImageUrls);
+  };
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setImageLoading(false);
+    }, 1000);
+
+    return () => clearTimeout(timeout);
+  }, []);
+
+  const validateForm = (fieldsToValidate) => {
+    Keyboard.dismiss();
+    const { isValid, errors } = validateFields(formData, fieldsToValidate);
+    setErrors(errors);
+    return isValid;
+  };
+
+  const renderBottomSheet = () => {
+    let items = [];
+    let fieldName = '';
+
+    switch (selectedType) {
+      case 'Customer Name':
+        items = dropdown.customerName;
+        fieldName = 'customerName';
+        break;
+      case 'Device':
+        items = dropdown.device;
+        fieldName = 'device';
+        break;
+      case 'Brand':
+        items = dropdown.brand;
+        fieldName = 'brand';
+        break;
+      case 'Consumer Model':
+        items = dropdown.consumerModel;
+        fieldName = 'consumerModel';
+        break;
+      case 'Warehouse':
+        items = dropdown.warehouse;
+        fieldName = 'warehouse';
+        break;
+      case 'Assignee':
+        items = dropdown.assignee;
+        fieldName = 'assignee';
+        break;
+      case 'Sales Person':
+        items = dropdown.salesPerson;
+        fieldName = 'salesPerson';
+        break;
+      default:
+        return null;
+    }
+    return (
+      <DropdownSheet
+        isVisible={isVisible}
+        items={items}
+        title={selectedType}
+        onClose={() => setIsVisible(false)}
+        onValueChange={(value) => handleFieldChange(fieldName, value)}
+      />
+    );
+  };
+
+  const handleSubmit = async () => {
+    const fieldsToValidate = ['device', 'brand'];
+    if (validateForm(fieldsToValidate)) {
+      setIsSubmitting(true);
+      const pickupData = {
+        pickupId: id,
+        _id: id,
+        date: formatDate(formData.date, 'yyyy-MM-dd'),
+        device_id: formData?.device?.id ?? null,
+        device_name: formData?.device?.label ?? null,
+        brand_id: formData?.brand?.id ?? null,
+        brand_name: formData?.brand?.label ?? null,
+        consumer_model_id: formData?.consumerModel?.id ?? null,
+        consumer_model_name: formData?.consumerModel?.label ?? null,
+        serial_no: formData?.serialNumber || null,
+        warehouse_id: formData?.warehouse?.id ?? null,
+        warehouse_name: formData?.warehouse?.label ?? null,
+        customer_id: formData?.customerName?.id ?? null,
+        customer_name: formData?.customerName?.label ?? null,
+        is_pickup: false,
+        pickup_schedule_time: formData?.pickupScheduleTime || null,
+        assignee_id: formData?.assignee?.id ?? null,
+        assignee_name: formData?.assignee?.label ?? null,
+        sales_person_id: formData?.salesPerson?.id ?? null,
+        sales_person_name: formData?.salesPerson?.label ?? null,
+        driver_signature: driverSignatureUrl || null,
+        customer_signature: customerSignatureUrl || null,
+        service_coordinator_signature: coordinatorSignatureUrl || null,
+        remarks: formData?.remarks || null,
+        attachment_details: imageUrls.length > 0 ? imageUrls : [],
+        // below 5 values are not in the forminput 
+        // warranty_date: null,
+        // contact_number: null,
+        // customer_email: null,
+        // address: null,
+        // tracking_no: null,
+      };
+
+      try {
+        const response = await put("/updateJobBooking", pickupData);
+        console.log("🚀 ~ EditPickupDetails ~ pickupData:", JSON.stringify(pickupData, null, 2));
+        if (response.success) {
+          showToast({
+            type: "success", title: "Success",
+            message: response.message || "Pickup Updated Successfully",
+          });
+          navigation.goBack();
+        } else {
+          showToast({
+            type: "error", title: "Error",
+            message: response.message || "Pickup Update failed",
+          });
+        }
+      } catch (error) {
+        showToast({
+          type: "error", title: "Error",
+          message: "An unexpected error occurred. Please try again later.",
+        });
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const ListAction = ({ image, onPress, index }) => {
+    return (
+      <View style={styles.listContainer} onPress={onPress}>
+        {imageLoading && <ActivityIndicator size="small" color={'black'} style={{ position: 'absolute', top: 30 }} />}
+        <Image source={{ uri: image }} style={styles.image}
+          onLoad={() => setImageLoading(true)}
+        />
+        <View style={styles.deleteIconContainer}>
+          <TouchableOpacity onPress={() => handleDeleteImage(index)}>
+            <AntDesign name="delete" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  const renderItem = ({ index, item }) => {
+    if (item.empty) {
+      return <View style={[styles.itemStyle, styles.itemInvisible]} />
+    }
+    return <ListAction image={item} index={index} />;
+  };
+
+  return (
+    <SafeAreaView>
+      <NavigationHeader
+        title="Edit Pickup"
+        onBackPress={() => navigation.goBack()} />
+      <RoundedScrollContainer scrollEnabled={scrollEnabled} >
+        <FormInput
+          label="Date"
+          dropIcon="calendar"
+          editable={false}
+          value={formatDate(formData.date)}
+        />
+        <FormInput
+          label={"Customer Name"}
+          placeholder={"Select Customer Name"}
+          dropIcon={"menu-down"}
+          editable={false}
+          validate={errors.customerName}
+          value={formData.customerName?.label}
+          onPress={() => toggleBottomSheet('Customer Name')}
+        />
+        <FormInput
+          label={"Device"}
+          placeholder={"Select Device"}
+          dropIcon={"menu-down"}
+          editable={false}
+          required
+          validate={errors.device}
+          value={formData.device?.label}
+          onPress={() => toggleBottomSheet('Device')}
+        />
+        <FormInput
+          label={"Brand"}
+          placeholder={"Select Brand"}
+          dropIcon={"menu-down"}
+          editable={false}
+          required
+          validate={errors.brand}
+          value={formData.brand?.label}
+          onPress={() => toggleBottomSheet('Brand')}
+        />
+        <FormInput
+          label={"Consumer Model"}
+          placeholder={"Select Consumer Model"}
+          dropIcon={"menu-down"}
+          editable={false}
+          validate={errors.consumerModel}
+          value={formData.consumerModel?.label}
+          onPress={() => toggleBottomSheet('Consumer Model')}
+        />
+        <FormInput
+          label={"Serial Number"}
+          placeholder={"Enter Serial Number"}
+          editable={true}
+          keyboardType="numeric"
+          validate={errors.serialNumber}
+          onChangeText={(value) => handleFieldChange('serialNumber', value)}
+        />
+        <FormInput
+          label={"Warehouse"}
+          placeholder={"Select Warehouse"}
+          dropIcon={"menu-down"}
+          editable={false}
+          validate={errors.warehouse}
+          value={formData.warehouse?.label}
+          onPress={() => toggleBottomSheet('Warehouse')}
+        />
+        <CheckBox
+          label="From Website Pickup"
+          checked={formData.isActive}
+          onPress={() => handleFieldChange('isActive', !formData.isActive)}
+        />
+        <FormInput
+          label={"Pickup Scheduled Time"}
+          placeholder={"Select Pickup Scheduled Time"}
+          dropIcon={"clock-outline"}
+          editable={false}
+          value={formatDateTime(formData.pickupScheduleTime)}
+          onPress={() => setIsDatePickerVisible(true)}
+        />
+        <FormInput
+          label={"Assignee"}
+          placeholder={"Select Assignee"}
+          dropIcon={"menu-down"}
+          editable={false}
+          validate={errors.assignee}
+          value={formData.assignee?.label}
+          onPress={() => toggleBottomSheet('Assignee')}
+        />
+        <FormInput
+          label={"Sales Person"}
+          placeholder={"Select Sales Person"}
+          dropIcon={"menu-down"}
+          editable={false}
+          validate={errors.salesPerson}
+          value={formData.salesPerson?.label}
+          onPress={() => toggleBottomSheet('Sales Person')}
+        />
+        <SignaturePad
+          setScrollEnabled={setScrollEnabled}
+          setUrl={setDriverSignatureUrl}
+          title={'Driver Signature'}
+        />
+        <SignaturePad
+          setScrollEnabled={setScrollEnabled}
+          setUrl={setCustomerSignatureUrl}
+          title={'Customer Signature'}
+        />
+        <SignaturePad
+          setScrollEnabled={setScrollEnabled}
+          setUrl={setCoordinatorSignatureUrl}
+          title={'Co-Ordinator Signature'}
+          disabled={!isCoordinatorSignatureActive}
+          onPress={() => {
+            if (!customerSignatureUrl || !driverSignatureUrl) {
+              showToast({ type: 'error', title: 'Error', message: 'Fill the Customer and Driver signature' });
+            }
+          }}
+        />
+        <FormInput
+          label={"Remarks"}
+          placeholder={"Enter Remarks"}
+          editable={true}
+          multiline={true}
+          numberOfLines={5}
+          onChangeText={(value) => handleFieldChange('remarks', value)}
+        />
+        <ActionModal title={'Attach file'} setImageUrl={(url) => setImageUrls(prevUrls => [...prevUrls, url])} />
+        {imageUrls && imageUrls.length > 0 && (
+          <View style={styles.uploadsContainer}>
+            <Text style={styles.labell}>Uploads</Text>
+            <FlatList
+              data={formatData(imageUrls, 4)}
+              numColumns={4}
+              keyExtractor={(item, index) => index.toString()}
+              contentContainerStyle={{ padding: 10 }}
+              showsVerticalScrollIndicator={false}
+              renderItem={renderItem}
+            />
+          </View>
+        )}
+        {renderBottomSheet()}
+        <LoadingButton title="SAVE" onPress={handleSubmit} marginTop={10} loading={isSubmitting} />
+        <View style={{ marginBottom: 10 }} />
+        <OverlayLoader visible={isLoading} />
+        <DateTimePickerModal
+          isVisible={isDatePickerVisible}
+          mode="datetime"
+          onConfirm={(value) => handleFieldChange('pickupScheduleTime', value)}
+          onCancel={() => setIsDatePickerVisible(false)}
+        />
+      </RoundedScrollContainer>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  uploadsContainer: {
+    flex: 1,
+    borderRadius: 6,
+    borderWidth: 0.8,
+    borderColor: '#BBB7B7',
+    backgroundColor: 'white',
+    marginVertical: 5,
+  },
+  listContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: 8,
+  },
+  image: {
+    width: 90,
+    height: 90,
+    borderRadius: 8
+  },
+  labell: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: COLORS.black,
+    paddingHorizontal: 10,
+    marginTop: 5
+  },
+  itemInvisible: {
+    backgroundColor: 'transparent',
+  },
+  itemStyle: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: 8,
+  },
+  deleteIconContainer: {
+    position: 'absolute',
+    top: -10,
+    right: -10,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 12,
+    padding: 5,
+  },
+});
+
+export default EditPickupDetails;
