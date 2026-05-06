@@ -130,6 +130,7 @@ const MyOrdersScreen = ({ navigation }) => {
         registerId,
         registerName,
         existingOrderId: item.id,
+        existingOrderRef: item.pos_reference || detail.pos_reference || '',
         userName: detail.user?.name || '',
       });
     } catch (e) {

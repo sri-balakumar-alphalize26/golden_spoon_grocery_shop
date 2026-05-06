@@ -39,8 +39,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
-  const [createdOrderId, setCreatedOrderId] = useState(null);
+  const [createdOrderId, setCreatedOrderId] = useState(route?.params?.existingOrderId || null);
   const [submittedFingerprint, setSubmittedFingerprint] = useState(null);
+  const [existingOrderRef, setExistingOrderRef] = useState(route?.params?.existingOrderRef || '');
 
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
@@ -78,6 +79,36 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const total = useMemo(() => items.reduce((s, it) => s + (it.subtotal || (it.unit * it.qty)), 0), [items]);
   const discountApplied = Number(discountAmount) || 0;
   const finalTotal = Math.max(0, total - discountApplied);
+
+  // Seed the initial fingerprint when we arrive from Orders with an existing
+  // draft. This captures the loaded state once, so a no-change Place Order tap
+  // hits the silent reuse branch (Path A) instead of unnecessarily updating.
+  React.useEffect(() => {
+    if (!createdOrderId) return;
+    if (submittedFingerprint !== null) return;
+    if (!Array.isArray(cart) || cart.length === 0) return;
+    const lines = cart.map((item) => ({
+      product_id: item.remoteId || item.id,
+      qty: item.quantity || item.qty || 1,
+      price_unit: item.price_unit || item.price || 0,
+      discount: Number(item.discount_percent || item.discount || 0),
+      price_subtotal: typeof item.price_subtotal !== 'undefined' ? Number(item.price_subtotal) : undefined,
+    }));
+    const partnerId = customer?.id || customer?._id || null;
+    const seed = JSON.stringify({
+      partnerId: partnerId || null,
+      discount: Number(discountApplied) || 0,
+      amount_total: Number(finalTotal) || 0,
+      lines: lines.map((l) => ({
+        product_id: l.product_id,
+        qty: Number(l.qty) || 0,
+        price_unit: Number(l.price_unit) || 0,
+        discount: Number(l.discount) || 0,
+        price_subtotal: typeof l.price_subtotal === 'undefined' ? null : Number(l.price_subtotal),
+      })),
+    });
+    setSubmittedFingerprint(seed);
+  }, [createdOrderId, submittedFingerprint, cart, customer, discountApplied, finalTotal]);
 
   // Persisted discount presets: load local first, fallback to Odoo fetch
   React.useEffect(() => {
@@ -200,15 +231,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
       };
       const fingerprint = JSON.stringify(fingerprintPayload);
 
-      // Path A: same order, same content → no-op API, just navigate.
+      // Path A: same order, same content → no-op API, no toast, just navigate.
+      // Triggered when the user reopens an existing draft from Orders and taps
+      // Place Order without changing anything. The receipt id was already
+      // generated, so we silently move on.
       if (createdOrderId && submittedFingerprint === fingerprint) {
         console.log('[Place Order] Reusing existing order, no API call:', createdOrderId);
-        Toast.show({
-          type: 'info',
-          text1: 'Continuing Order',
-          text2: `Order ID: ${createdOrderId}`,
-          position: 'bottom',
-        });
         navigation.navigate('POSPayment', {
           orderId: createdOrderId,
           sessionId,
@@ -262,7 +290,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
         Toast.show({
           type: 'success',
           text1: 'Order Updated',
-          text2: `Order ID: ${createdOrderId}`,
+          text2: existingOrderRef ? `Ref: ${existingOrderRef}` : `Order ID: ${createdOrderId}`,
           position: 'bottom',
         });
         navigation.navigate('POSPayment', {
