@@ -56,6 +56,14 @@ const SECTIONS = [
     ],
   },
   {
+    title: 'Finance',
+    icon: 'account-balance-wallet',
+    accent: '#DC2626',
+    items: [
+      { id: 'expenses', title: 'Expenses', screen: 'ExpensesScreen', icon: 'receipt-long', bg: '#FEE2E2', accent: '#DC2626' },
+    ],
+  },
+  {
     title: 'Administration',
     icon: 'admin-panel-settings',
     accent: '#9C27B0',

@@ -1,187 +1,224 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Dimensions } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, StyleSheet, ScrollView, Dimensions, Platform } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
-import Icon from 'react-native-vector-icons/MaterialIcons';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { BarChart } from 'react-native-chart-kit';
 import useAuthStore from '@stores/auth/useAuthStore';
-import { formatCurrency as formatCurrencyUtil } from '@utils/currency';
+import { formatCurrency as formatCurrencyUtil, formatNumber } from '@utils/currency';
+import Text from '@components/Text';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
+
+const NAVY = COLORS.primaryThemeColor;
+const ORANGE = '#F47B20';
+const MUTED = '#8896ab';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CHART_WIDTH = SCREEN_WIDTH - 24 - 28; // page padding 12 each side + card padding 14 each side
+
+const STATE_META = {
+  paid: { label: 'Paid', color: '#22C55E', bg: '#DCFCE7', fg: '#166534' },
+  done: { label: 'Posted', color: '#16A34A', bg: '#DCFCE7', fg: '#166534' },
+  invoiced: { label: 'Invoiced', color: '#3B82F6', bg: '#DBEAFE', fg: '#1E40AF' },
+  cancel: { label: 'Cancelled', color: '#EF4444', bg: '#FEE2E2', fg: '#B91C1C' },
+  draft: { label: 'New', color: '#9CA3AF', bg: '#F3F4F6', fg: '#374151' },
+};
+const stateMeta = (s) => STATE_META[s] || STATE_META.draft;
 
 const OrdersAnalysisScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency);
   const { period = 'today', ordersData } = route?.params || {};
 
-  const formatCurrency = (amount) => {
-    return formatCurrencyUtil(amount, currency || { symbol: '$', position: 'before' });
-  };
+  const fmtMoney = (amount) => formatCurrencyUtil(amount, currency || { symbol: '$', position: 'before' });
 
-  const getPeriodLabel = () => {
+  const periodLabel = (() => {
     switch (period) {
       case 'today': return 'Today';
       case 'week': return 'Last 7 Days';
       case 'month': return 'Last 30 Days';
       case 'all': return 'All Time';
+      case 'custom': return 'Custom Range';
       default: return 'Today';
     }
-  };
+  })();
 
-  const getChartData = () => {
-    if (!ordersData || !ordersData.orders || ordersData.orders.length === 0) {
-      return {
-        labels: ['No Data'],
-        datasets: [{ data: [0] }]
-      };
+  const summary = ordersData?.summary || {};
+  const orders = ordersData?.orders || [];
+
+  // Group revenue by date for the bar chart (last 7 buckets).
+  const chartData = useMemo(() => {
+    if (!orders || orders.length === 0) {
+      return { labels: ['—'], datasets: [{ data: [0] }] };
     }
-
-    // Group orders by date
-    const groupedByDate = {};
-    ordersData.orders.forEach(order => {
-      if (order.state === 'cancel') return;
-
-      const date = order.date_order
-        ? new Date(order.date_order).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const buckets = {};
+    orders.forEach((o) => {
+      if (o.state === 'cancel') return;
+      const key = o.date_order
+        ? new Date(o.date_order).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
         : 'Unknown';
-
-      if (!groupedByDate[date]) {
-        groupedByDate[date] = 0;
-      }
-      groupedByDate[date] += order.amount_total || 0;
+      buckets[key] = (buckets[key] || 0) + (Number(o.amount_total) || 0);
     });
-
-    const labels = Object.keys(groupedByDate).slice(-7);
-    const data = labels.map(label => groupedByDate[label]);
-
+    const labels = Object.keys(buckets).slice(-7);
+    const data = labels.map((k) => buckets[k]);
     return {
-      labels: labels.length > 0 ? labels : ['No Data'],
-      datasets: [{ data: data.length > 0 ? data : [0] }]
+      labels: labels.length ? labels : ['—'],
+      datasets: [{ data: data.length ? data : [0] }],
     };
-  };
+  }, [orders]);
 
-  const getStatusColor = (state) => {
-    switch (state) {
-      case 'paid': return '#4caf50';
-      case 'done': return '#8bc34a';
-      case 'invoiced': return '#2196f3';
-      case 'cancel': return '#f44336';
-      default: return '#9e9e9e';
-    }
-  };
-
-  const getStatusLabel = (state) => {
-    switch (state) {
-      case 'paid': return 'Paid';
-      case 'done': return 'Posted';
-      case 'invoiced': return 'Invoiced';
-      case 'cancel': return 'Cancelled';
-      default: return 'New';
-    }
-  };
+  // Status breakdown
+  const statusBreakdown = useMemo(() => {
+    const map = {};
+    orders.forEach((o) => {
+      const s = o.state || 'draft';
+      map[s] = (map[s] || 0) + 1;
+    });
+    return Object.entries(map).map(([state, count]) => ({ state, count }));
+  }, [orders]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView>
       <NavigationHeader title="Orders Analysis" onBackPress={() => navigation.goBack()} />
 
-      <ScrollView style={styles.scrollView}>
-        {/* Period Badge */}
-        <View style={styles.periodBadge}>
-          <Icon name="access-time" size={18} color="#461c8aff" />
-          <Text style={styles.periodText}>{getPeriodLabel()}</Text>
-        </View>
-
-        {/* Summary Cards */}
-        {ordersData && ordersData.summary && (
-          <View style={styles.summaryCards}>
-            <View style={styles.summaryCard}>
-              <Icon name="attach-money" size={32} color="#4caf50" />
-              <Text style={styles.summaryLabel}>Total Sales</Text>
-              <Text style={styles.summaryValue}>{formatCurrency(ordersData.summary.totalSales)}</Text>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ padding: 12, paddingBottom: 30 }}
+      >
+        {/* Hero */}
+        <View style={s.heroCard}>
+          <View style={s.heroTopRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.heroLabel}>TOTAL SALES</Text>
+              <Text style={s.heroAmount}>{fmtMoney(summary.totalSales || 0)}</Text>
+              <Text style={s.heroSub}>{periodLabel}</Text>
             </View>
-            <View style={styles.summaryCard}>
-              <Icon name="receipt" size={32} color="#2196f3" />
-              <Text style={styles.summaryLabel}>Orders</Text>
-              <Text style={styles.summaryValue}>{ordersData.summary.totalOrders}</Text>
-            </View>
-            <View style={styles.summaryCard}>
-              <Icon name="trending-up" size={32} color="#ff9800" />
-              <Text style={styles.summaryLabel}>Average</Text>
-              <Text style={styles.summaryValue}>{formatCurrency(ordersData.summary.averageOrder)}</Text>
+            <View style={s.heroDisk}>
+              <MaterialCommunityIcons name="finance" size={24} color={ORANGE} />
             </View>
           </View>
-        )}
-
-        {/* Bar Chart */}
-        <View style={styles.chartSection}>
-          <Text style={styles.sectionTitle}>Sales by Date</Text>
-          <View style={styles.chartContainer}>
-            <BarChart
-              data={getChartData()}
-              width={SCREEN_WIDTH - 32}
-              height={280}
-              yAxisLabel=""
-              yAxisSuffix=""
-              chartConfig={{
-                backgroundColor: '#ffffff',
-                backgroundGradientFrom: '#ffffff',
-                backgroundGradientTo: '#ffffff',
-                decimalPlaces: 0,
-                color: (opacity = 1) => `rgba(70, 28, 138, ${opacity})`,
-                labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-                style: { borderRadius: 16 },
-                propsForLabels: { fontSize: 11 },
-              }}
-              style={styles.chart}
-              showValuesOnTopOfBars
-              fromZero
-            />
+          <View style={s.heroStatsRow}>
+            <View style={s.heroStat}>
+              <View style={s.heroStatIconWrap}>
+                <MaterialIcons name="receipt-long" size={16} color={NAVY} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.heroStatValue}>{formatNumber(summary.totalOrders || 0)}</Text>
+                <Text style={s.heroStatLabel}>Orders</Text>
+              </View>
+            </View>
+            <View style={s.heroStat}>
+              <View style={s.heroStatIconWrap}>
+                <MaterialIcons name="trending-up" size={16} color={NAVY} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.heroStatValue}>{fmtMoney(summary.averageOrder || 0)}</Text>
+                <Text style={s.heroStatLabel}>Avg Order</Text>
+              </View>
+            </View>
+            <View style={s.heroStat}>
+              <View style={s.heroStatIconWrap}>
+                <MaterialIcons name="account-balance" size={16} color={NAVY} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.heroStatValue}>{fmtMoney(summary.totalTax || 0)}</Text>
+                <Text style={s.heroStatLabel}>Tax</Text>
+              </View>
+            </View>
           </View>
         </View>
 
-        {/* Orders List */}
-        <View style={styles.ordersSection}>
-          <Text style={styles.sectionTitle}>Order Details</Text>
-          {ordersData && ordersData.orders && ordersData.orders.length > 0 ? (
-            ordersData.orders
-              .filter(o => o.state !== 'cancel')
-              .slice(0, 50)
-              .map((order, index) => {
-                const partnerName = Array.isArray(order.partner_id)
-                  ? order.partner_id[1]
-                  : order.partner_id || 'Walk-in Customer';
-
+        {/* Status breakdown */}
+        {statusBreakdown.length > 0 ? (
+          <>
+            <Text style={s.sectionTitle}>STATUS BREAKDOWN</Text>
+            <View style={s.statusCard}>
+              {statusBreakdown.map(({ state, count }, idx) => {
+                const meta = stateMeta(state);
                 return (
-                  <View key={order.id || index} style={styles.orderCard}>
-                    <View style={styles.orderLeft}>
-                      <Text style={styles.orderName}>{order.name || '/'}</Text>
-                      <Text style={styles.orderCustomer}>{partnerName}</Text>
-                      <Text style={styles.orderDate}>
-                        {order.date_order
-                          ? new Date(order.date_order).toLocaleString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })
-                          : 'N/A'
-                        }
-                      </Text>
+                  <View
+                    key={state}
+                    style={[s.statusRow, idx === statusBreakdown.length - 1 && { borderBottomWidth: 0 }]}
+                  >
+                    <View style={[s.statusDot, { backgroundColor: meta.color }]} />
+                    <Text style={s.statusLabel}>{meta.label}</Text>
+                    <View style={[s.statusPill, { backgroundColor: meta.bg }]}>
+                      <Text style={[s.statusPillText, { color: meta.fg }]}>{formatNumber(count)}</Text>
                     </View>
-                    <View style={styles.orderRight}>
-                      <Text style={styles.orderAmount}>
-                        {formatCurrency(order.amount_total || 0)}
-                      </Text>
-                      <View style={[styles.orderStatus, { backgroundColor: getStatusColor(order.state) }]}>
-                        <Text style={styles.orderStatusText}>{getStatusLabel(order.state)}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
+
+        {/* Sales by date — bar chart */}
+        <Text style={s.sectionTitle}>SALES BY DATE</Text>
+        <View style={s.chartCard}>
+          <BarChart
+            data={chartData}
+            width={CHART_WIDTH}
+            height={240}
+            yAxisLabel=""
+            yAxisSuffix=""
+            chartConfig={{
+              backgroundColor: '#ffffff',
+              backgroundGradientFrom: '#ffffff',
+              backgroundGradientTo: '#ffffff',
+              decimalPlaces: 0,
+              color: (opacity = 1) => `rgba(46, 41, 78, ${opacity})`,
+              labelColor: () => '#1a1a2e',
+              barPercentage: 0.6,
+              propsForLabels: { fontSize: 10 },
+            }}
+            style={s.chart}
+            showValuesOnTopOfBars
+            fromZero
+          />
+        </View>
+
+        {/* Orders list */}
+        <Text style={s.sectionTitle}>ORDER DETAILS</Text>
+        <View style={s.ordersCard}>
+          {orders && orders.length > 0 ? (
+            orders
+              .filter((o) => o.state !== 'cancel')
+              .slice(0, 50)
+              .map((order, index, arr) => {
+                const partner = Array.isArray(order.partner_id)
+                  ? order.partner_id[1]
+                  : order.partner_id || 'Walk-in customer';
+                const meta = stateMeta(order.state);
+                const dateText = order.date_order
+                  ? new Date(order.date_order).toLocaleString('en-US', {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                    })
+                  : '—';
+                return (
+                  <View
+                    key={order.id || index}
+                    style={[s.orderRow, index === arr.length - 1 && { borderBottomWidth: 0 }]}
+                  >
+                    <View style={s.orderIconBox}>
+                      <MaterialIcons name="receipt" size={18} color={NAVY} />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={s.orderName} numberOfLines={1}>{order.name || '/'}</Text>
+                      <Text style={s.orderMeta} numberOfLines={1}>{partner}</Text>
+                      <Text style={s.orderDate}>{dateText}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={s.orderAmount}>{fmtMoney(order.amount_total || 0)}</Text>
+                      <View style={[s.orderStatusPill, { backgroundColor: meta.bg }]}>
+                        <Text style={[s.orderStatusText, { color: meta.fg }]}>{meta.label}</Text>
                       </View>
                     </View>
                   </View>
                 );
               })
           ) : (
-            <View style={styles.emptyState}>
-              <Icon name="receipt" size={64} color="#ccc" />
-              <Text style={styles.emptyText}>No orders found</Text>
+            <View style={s.emptyBox}>
+              <MaterialIcons name="receipt" size={36} color="#cbd5e1" />
+              <Text style={s.emptyText}>No orders for this period</Text>
             </View>
           )}
         </View>
@@ -190,142 +227,187 @@ const OrdersAnalysisScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  scrollView: {
-    flex: 1,
-  },
+export default OrdersAnalysisScreen;
 
-  // Period Badge
-  periodBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  periodText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#461c8aff',
-    marginLeft: 8,
-  },
-
-  // Summary Cards
-  summaryCards: {
-    flexDirection: 'row',
-    padding: 16,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  summaryCard: {
-    flex: 1,
-    alignItems: 'center',
-    padding: 16,
-    marginHorizontal: 4,
-    backgroundColor: '#f9f9f9',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  summaryLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 8,
-    fontWeight: '600',
-  },
-  summaryValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111',
-    marginTop: 4,
-  },
-
-  // Chart Section
-  chartSection: {
-    padding: 16,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111',
-    marginBottom: 16,
-  },
-  chartContainer: {
-    alignItems: 'center',
-  },
-  chart: {
-    borderRadius: 16,
-  },
-
-  // Orders List
-  ordersSection: {
-    padding: 16,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  orderCard: {
-    flexDirection: 'row',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  orderLeft: {
-    flex: 1,
-  },
-  orderName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111',
-  },
-  orderCustomer: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 4,
-  },
-  orderDate: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 2,
-  },
-  orderRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-  },
-  orderAmount: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#461c8aff',
-  },
-  orderStatus: {
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    marginTop: 6,
-  },
-  orderStatusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#fff',
-  },
-
-  // Empty State
-  emptyState: {
-    padding: 60,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#999',
-    marginTop: 12,
-  },
+const cardShadow = Platform.select({
+  ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  android: { elevation: 2 },
 });
 
-export default OrdersAnalysisScreen;
+const s = StyleSheet.create({
+  // Hero
+  heroCard: {
+    backgroundColor: NAVY,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    ...cardShadow,
+  },
+  heroTopRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  heroLabel: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.7)',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+  },
+  heroAmount: {
+    fontSize: 30,
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+    marginTop: 4,
+  },
+  heroSub: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.6)',
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 2,
+  },
+  heroDisk: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  heroStatsRow: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  heroStat: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 8,
+    gap: 6,
+  },
+  heroStatIconWrap: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  heroStatValue: { fontSize: 13, color: '#fff', fontFamily: FONT_FAMILY.urbanistBold },
+  heroStatLabel: {
+    fontSize: 10, color: 'rgba(255,255,255,0.6)',
+    fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 1,
+  },
+
+  // Section title
+  sectionTitle: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+    marginLeft: 4,
+    marginBottom: 6,
+  },
+
+  // Status breakdown
+  statusCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    marginBottom: 14,
+    ...cardShadow,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F2F6',
+  },
+  statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
+  statusLabel: {
+    flex: 1,
+    fontSize: 13,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+
+  // Chart
+  chartCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    alignItems: 'center',
+    ...cardShadow,
+  },
+  chart: { borderRadius: 12 },
+
+  // Orders list
+  ordersCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginBottom: 14,
+    ...cardShadow,
+  },
+  orderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F2F6',
+  },
+  orderIconBox: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: '#eef0f5',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  orderName: {
+    fontSize: 14,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  orderMeta: {
+    fontSize: 12,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 2,
+  },
+  orderDate: {
+    fontSize: 11,
+    color: '#9ca3af',
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 1,
+  },
+  orderAmount: {
+    fontSize: 14,
+    color: ORANGE,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  orderStatusPill: {
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  orderStatusText: {
+    fontSize: 10,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+
+  // Empty
+  emptyBox: {
+    paddingVertical: 32,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 13,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 8,
+  },
+});

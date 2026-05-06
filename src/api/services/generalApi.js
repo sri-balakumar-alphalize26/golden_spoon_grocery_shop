@@ -3827,3 +3827,370 @@ export const fetchCompanyCurrency = async () => {
     return { symbol: '$', name: 'USD', position: 'before' }; // Fallback
   }
 };
+
+// ─── hr.expense helpers ─────────────────────────────────────────────────────
+
+// Resolve the logged-in res.users to its hr.employee id. Returns null if the
+// user has no linked employee record (which means hr.expense filing won't
+// work — the caller should surface a helpful toast).
+export const fetchCurrentEmployeeIdOdoo = async (uid) => {
+  if (!uid) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.employee',
+        method: 'search_read',
+        args: [[['user_id', '=', Number(uid)]]],
+        kwargs: { fields: ['id', 'name'], limit: 1 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      console.warn('fetchCurrentEmployeeIdOdoo error:', resp.data.error?.data?.message);
+      return null;
+    }
+    const row = (resp.data.result || [])[0];
+    return row ? { id: row.id, name: row.name } : null;
+  } catch (e) {
+    console.warn('fetchCurrentEmployeeIdOdoo failed:', e?.message);
+    return null;
+  }
+};
+
+// product.product rows that can be picked as an expense category.
+export const fetchExpenseCategoriesOdoo = async () => {
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.product',
+        method: 'search_read',
+        args: [[['can_be_expensed', '=', true]]],
+        kwargs: { fields: ['id', 'name', 'default_code', 'list_price'], order: 'name asc', limit: 200 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) return [];
+    return (resp.data.result || []).map((p) => ({
+      id: p.id,
+      name: p.default_code ? `[${p.default_code}] ${p.name}` : p.name,
+      list_price: Number(p.list_price) || 0,
+    }));
+  } catch (e) {
+    console.warn('fetchExpenseCategoriesOdoo failed:', e?.message);
+    return [];
+  }
+};
+
+// List of hr.expense rows for the current employee. Optional state filter
+// ('draft' | 'reported' | 'approved' | 'done' | 'refused') and a free-text
+// search across the description.
+export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = null, offset = 0, limit = 50 } = {}) => {
+  if (!employeeId) return [];
+  const baseUrl = getOdooUrl();
+  let domain = [['employee_id', '=', Number(employeeId)]];
+  if (searchText && String(searchText).trim()) {
+    const term = String(searchText).trim();
+    domain = domain.concat([['name', 'ilike', term]]);
+  }
+  if (state) domain = domain.concat([['state', '=', state]]);
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.expense',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: [
+            'id', 'name', 'date', 'product_id', 'employee_id',
+            'total_amount', 'payment_mode', 'state', 'description',
+          ],
+          order: 'date desc, id desc',
+          offset, limit,
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      console.warn('fetchExpensesOdoo error:', resp.data.error?.data?.message);
+      return [];
+    }
+    return (resp.data.result || []).map((e) => ({
+      id: e.id,
+      name: e.name || '',
+      date: e.date || null,
+      category: Array.isArray(e.product_id) ? { id: e.product_id[0], name: e.product_id[1] } : null,
+      employee: Array.isArray(e.employee_id) ? { id: e.employee_id[0], name: e.employee_id[1] } : null,
+      total_amount: Number(e.total_amount) || 0,
+      payment_mode: e.payment_mode || 'own_account',
+      state: e.state || 'draft',
+      description: e.description || '',
+    }));
+  } catch (e) {
+    console.warn('fetchExpensesOdoo failed:', e?.message);
+    return [];
+  }
+};
+
+// Returns { to_submit, waiting_approval, waiting_reimbursement } as numeric totals.
+export const fetchExpenseTotalsOdoo = async ({ employeeId } = {}) => {
+  const empty = { to_submit: 0, waiting_approval: 0, waiting_reimbursement: 0 };
+  if (!employeeId) return empty;
+  const baseUrl = getOdooUrl();
+  const sumFor = async (state) => {
+    const domain = [['employee_id', '=', Number(employeeId)], ['state', '=', state]];
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.expense',
+        method: 'search_read',
+        args: [domain],
+        kwargs: { fields: ['total_amount'], limit: 5000 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) return 0;
+    return (resp.data.result || []).reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+  };
+  try {
+    const [draft, reported, approved] = await Promise.all([
+      sumFor('draft'),
+      sumFor('reported'),
+      sumFor('approved'),
+    ]);
+    return {
+      to_submit: draft,
+      waiting_approval: reported,
+      waiting_reimbursement: approved,
+    };
+  } catch (e) {
+    console.warn('fetchExpenseTotalsOdoo failed:', e?.message);
+    return empty;
+  }
+};
+
+// Create an hr.expense row (state stays 'draft' until submitted).
+export const createExpenseOdoo = async ({ name, date, productId, totalAmount, paymentMode, description, employeeId } = {}) => {
+  if (!name || !String(name).trim()) {
+    return { error: { message: 'Description is required' } };
+  }
+  if (!employeeId) return { error: { message: 'No employee linked to your user' } };
+  const baseUrl = getOdooUrl();
+  const vals = {
+    name: String(name).trim(),
+    employee_id: Number(employeeId),
+    payment_mode: paymentMode === 'company_account' ? 'company_account' : 'own_account',
+  };
+  if (date) vals.date = date;
+  if (productId) vals.product_id = Number(productId);
+  if (totalAmount !== undefined && totalAmount !== '' && totalAmount !== null) {
+    vals.total_amount = Number(totalAmount) || 0;
+  }
+  if (description) vals.description = String(description).trim();
+
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'hr.expense', method: 'create', args: [vals], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      return { error: resp.data.error };
+    }
+    return { result: resp.data.result };
+  } catch (e) {
+    console.error('createExpenseOdoo error:', e?.message);
+    return { error: { message: e?.message || 'Create failed' } };
+  }
+};
+
+// Update an existing hr.expense (only valid while state is 'draft').
+export const updateExpenseOdoo = async (expenseId, { name, date, productId, totalAmount, paymentMode, description } = {}) => {
+  if (!expenseId) return { error: { message: 'expenseId is required' } };
+  const baseUrl = getOdooUrl();
+  const vals = {};
+  if (name !== undefined) vals.name = String(name).trim();
+  if (date !== undefined) vals.date = date || false;
+  if (productId !== undefined) vals.product_id = productId || false;
+  if (totalAmount !== undefined && totalAmount !== '' && totalAmount !== null) {
+    vals.total_amount = Number(totalAmount) || 0;
+  }
+  if (paymentMode !== undefined) {
+    vals.payment_mode = paymentMode === 'company_account' ? 'company_account' : 'own_account';
+  }
+  if (description !== undefined) vals.description = description ? String(description).trim() : false;
+
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'hr.expense', method: 'write', args: [[expenseId], vals], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) return { error: resp.data.error };
+    return { result: expenseId };
+  } catch (e) {
+    console.error('updateExpenseOdoo error:', e?.message);
+    return { error: { message: e?.message || 'Update failed' } };
+  }
+};
+
+// Sum hr.expense for the period (shop-wide, NOT scoped by employee). Used by
+// the Sales Report's P&L card to compute Net Profit.
+export const fetchOperatingExpensesOdoo = async ({ startDate = null, endDate = null } = {}) => {
+  const baseUrl = getOdooUrl();
+  let domain = [];
+  if (startDate) domain.push(['date', '>=', String(startDate).slice(0, 10)]);
+  if (endDate) domain.push(['date', '<=', String(endDate).slice(0, 10)]);
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.expense',
+        method: 'search_read',
+        args: [domain],
+        kwargs: { fields: ['total_amount'], limit: 5000 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      console.warn('fetchOperatingExpensesOdoo error:', resp.data.error?.data?.message);
+      return { total: 0 };
+    }
+    const total = (resp.data.result || []).reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+    return { total };
+  } catch (e) {
+    console.warn('fetchOperatingExpensesOdoo failed:', e?.message);
+    return { total: 0 };
+  }
+};
+
+// Compute revenue, COGS, gross profit, gross margin for paid/done/invoiced
+// pos.order rows in the period.
+export const fetchSalesProfitOdoo = async ({ startDate = null, endDate = null } = {}) => {
+  const baseUrl = getOdooUrl();
+  let domain = [['state', 'in', ['paid', 'done', 'invoiced']]];
+  if (startDate) domain.push(['date_order', '>=', startDate]);
+  if (endDate) domain.push(['date_order', '<=', endDate]);
+  try {
+    // 1) orders + their line refs + revenue
+    const ordersResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'search_read',
+        args: [domain],
+        kwargs: { fields: ['id', 'amount_total', 'lines'], limit: 5000 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (ordersResp.data && ordersResp.data.error) {
+      console.warn('fetchSalesProfitOdoo orders error:', ordersResp.data.error?.data?.message);
+      return { revenue: 0, cogs: 0, gross_profit: 0, gross_margin_pct: 0 };
+    }
+    const orders = ordersResp.data.result || [];
+    const revenue = orders.reduce((s, o) => s + (Number(o.amount_total) || 0), 0);
+    const allLineIds = [];
+    orders.forEach((o) => {
+      if (Array.isArray(o.lines)) o.lines.forEach((id) => allLineIds.push(id));
+    });
+    if (allLineIds.length === 0) {
+      return { revenue, cogs: 0, gross_profit: revenue, gross_margin_pct: revenue ? 100 : 0 };
+    }
+
+    // 2) read all lines (qty + product_id)
+    const linesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order.line',
+        method: 'read',
+        args: [allLineIds],
+        kwargs: { fields: ['id', 'product_id', 'qty'] },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (linesResp.data && linesResp.data.error) {
+      console.warn('fetchSalesProfitOdoo lines error:', linesResp.data.error?.data?.message);
+      return { revenue, cogs: 0, gross_profit: revenue, gross_margin_pct: revenue ? 100 : 0 };
+    }
+    const lines = linesResp.data.result || [];
+    const productIds = [...new Set(
+      lines.map((l) => Array.isArray(l.product_id) ? l.product_id[0] : null).filter(Boolean)
+    )];
+
+    // 3) read product cost (standard_price); fall back to list_price if rejected
+    let priceById = {};
+    const callRead = async (fields) => {
+      const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.product',
+          method: 'read',
+          args: [productIds],
+          kwargs: { fields },
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      if (r.data && r.data.error) {
+        const e = new Error('Odoo JSON-RPC error');
+        e.payload = r.data.error;
+        throw e;
+      }
+      return r.data.result || [];
+    };
+    let prodRows = [];
+    try {
+      prodRows = await callRead(['id', 'standard_price']);
+    } catch (err) {
+      console.warn('fetchSalesProfitOdoo standard_price rejected, falling back to list_price:',
+        err?.payload?.data?.message || err?.message);
+      try {
+        prodRows = await callRead(['id', 'list_price']);
+      } catch (err2) {
+        prodRows = [];
+      }
+    }
+    prodRows.forEach((p) => {
+      priceById[p.id] = Number(p.standard_price ?? p.list_price ?? 0);
+    });
+
+    // 4) COGS = sum(line.qty * priceById[line.product_id])
+    let cogs = 0;
+    lines.forEach((l) => {
+      const pid = Array.isArray(l.product_id) ? l.product_id[0] : null;
+      const cost = priceById[pid] || 0;
+      cogs += (Number(l.qty) || 0) * cost;
+    });
+    const gross_profit = revenue - cogs;
+    const gross_margin_pct = revenue > 0 ? (gross_profit / revenue) * 100 : 0;
+    return { revenue, cogs, gross_profit, gross_margin_pct };
+  } catch (e) {
+    console.warn('fetchSalesProfitOdoo failed:', e?.message);
+    return { revenue: 0, cogs: 0, gross_profit: 0, gross_margin_pct: 0 };
+  }
+};
+
+// Submit a draft expense → bundles into an hr.expense.sheet via the standard
+// Odoo action. After this the expense moves to state='reported'.
+export const submitExpenseOdoo = async (expenseId) => {
+  if (!expenseId) return { error: { message: 'expenseId is required' } };
+  const baseUrl = getOdooUrl();
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.expense',
+        method: 'action_submit_expenses',
+        args: [[expenseId]],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) return { error: resp.data.error };
+    return { result: resp.data.result };
+  } catch (e) {
+    console.error('submitExpenseOdoo error:', e?.message);
+    return { error: { message: e?.message || 'Submit failed' } };
+  }
+};

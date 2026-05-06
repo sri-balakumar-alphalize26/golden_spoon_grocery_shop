@@ -66,6 +66,7 @@ import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymen
 import { UsersScreen } from '@screens/Users';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { StockScreen, StockDetailScreen } from '@screens/Stock';
+import { ExpensesScreen, ExpenseFormScreen, ExpenseDetailScreen } from '@screens/Expenses';
 import { SalesReportScreen } from '@screens/SalesReport';
 import OrdersAnalysisScreen from '@screens/OrdersAnalysis/OrdersAnalysisScreen';
 import {
@@ -713,6 +714,22 @@ const StackNavigator = () => {
       <Stack.Screen
         name="StockDetail"
         component={StockDetailScreen}
+        options={{ headerShown: false }}
+      />
+      {/* Expenses */}
+      <Stack.Screen
+        name="ExpensesScreen"
+        component={ExpensesScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ExpenseForm"
+        component={ExpenseFormScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ExpenseDetail"
+        component={ExpenseDetailScreen}
         options={{ headerShown: false }}
       />
       {/* Sales Report */}
