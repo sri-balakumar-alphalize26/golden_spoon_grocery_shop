@@ -1,2 +1,3 @@
 import MyOrdersScreen from "./MyOrdersScreen";
-export {MyOrdersScreen}
+import OrderDetailScreen from "./OrderDetailScreen";
+export { MyOrdersScreen, OrderDetailScreen }

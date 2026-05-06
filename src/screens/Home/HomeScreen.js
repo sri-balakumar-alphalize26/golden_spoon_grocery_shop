@@ -47,6 +47,14 @@ const SECTIONS = [
     ],
   },
   {
+    title: 'Contacts',
+    icon: 'contacts',
+    accent: '#16A34A',
+    items: [
+      { id: 'customers', title: 'Customers', screen: 'CustomerScreen', icon: require('@assets/images/Home/section/customer.png'), bg: '#DCFCE7', accent: '#16A34A' },
+    ],
+  },
+  {
     title: 'Administration',
     icon: 'admin-panel-settings',
     accent: '#9C27B0',

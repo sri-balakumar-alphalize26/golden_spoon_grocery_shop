@@ -704,11 +704,13 @@ const response = await axios.post(
     const partners = response.data.result || [];
 
     // 🔙 Shape result for your CustomerScreen
+    const baseUrl = getOdooUrl();
     return partners.map((p) => ({
       id: p.id,
       name: p.name || "",
       email: p.email || "",
       phone: p.phone || "",
+      image_url: `${baseUrl}/web/image?model=res.partner&id=${p.id}&field=image_128`,
       address: [
         p.street,
         p.street2,
@@ -1023,10 +1025,24 @@ export const fetchVehicles = async ({ offset, limit, searchText }) => {
 
 // Fetch full customer/partner details (address fields) by id from Odoo
 export const fetchCustomerDetailsOdoo = async (partnerId) => {
-  try {
-    if (!partnerId) return null;
+  if (!partnerId) return null;
+  const baseUrl = getOdooUrl();
+
+  // Try the rich field set first; if Odoo rejects any field name, fall back to a
+  // minimal safe set so the screen always renders something.
+  const richFields = [
+    'id', 'name', 'email', 'phone',
+    'is_company', 'company_name',
+    'street', 'street2', 'city', 'zip',
+    'state_id', 'country_id',
+    'vat', 'website', 'function',
+    'category_id',
+  ];
+  const safeFields = ['id', 'name', 'street', 'street2', 'city', 'zip', 'country_id'];
+
+  const callRead = async (fields) => {
     const response = await axios.post(
-      `${getOdooUrl()}/web/dataset/call_kw`,
+      `${baseUrl}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
         method: 'call',
@@ -1034,36 +1050,193 @@ export const fetchCustomerDetailsOdoo = async (partnerId) => {
           model: 'res.partner',
           method: 'search_read',
           args: [[['id', '=', partnerId]]],
-          kwargs: {
-            fields: ['id', 'name', 'street', 'street2', 'city', 'zip', 'country_id'],
-            limit: 1,
-          },
+          kwargs: { fields, limit: 1 },
         },
       },
       { headers: { 'Content-Type': 'application/json' } }
     );
-
-    if (response.data.error) {
-      console.log('Odoo JSON-RPC error (customer details):', response.data.error);
-      throw new Error('Odoo JSON-RPC error');
+    if (response.data && response.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = response.data.error;
+      throw e;
     }
-
     const results = response.data.result || [];
-    const p = results[0];
-    if (!p) return null;
+    return results[0] || null;
+  };
 
-    const address = [p.street, p.street2, p.city, p.zip, p.country_id && Array.isArray(p.country_id) ? p.country_id[1] : '']
-      .filter(Boolean)
-      .join(', ');
+  let p = null;
+  try {
+    p = await callRead(richFields);
+  } catch (err) {
+    console.warn('fetchCustomerDetailsOdoo rich fetch failed, falling back:', err?.payload || err?.message);
+    try {
+      p = await callRead(safeFields);
+    } catch (err2) {
+      console.error('fetchCustomerDetailsOdoo safe fetch also failed:', err2?.payload || err2?.message);
+      throw err2;
+    }
+  }
+  if (!p) return null;
 
-    return {
-      id: p.id,
-      name: p.name || '',
-      address: address || null,
+  // Fetch tag (category) labels via name_get if we received only ids.
+  let categories = [];
+  if (Array.isArray(p.category_id) && p.category_id.length > 0) {
+    try {
+      const tagResp = await axios.post(
+        `${baseUrl}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'res.partner.category',
+            method: 'name_get',
+            args: [p.category_id],
+            kwargs: {},
+          },
+        },
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      if (tagResp.data && !tagResp.data.error && Array.isArray(tagResp.data.result)) {
+        categories = tagResp.data.result.map(([id, name]) => ({ id, name }));
+      }
+    } catch (e) {
+      // ignore — tags are optional
+    }
+  }
+
+  const m2oName = (v) => (Array.isArray(v) && v.length > 1 ? v[1] : '');
+
+  const address = [
+    p.street, p.street2, p.city, p.zip, m2oName(p.country_id),
+  ].filter(Boolean).join(', ');
+
+  return {
+    id: p.id,
+    name: p.name || '',
+    email: p.email || '',
+    phone: p.phone || '',
+    image_url: `${baseUrl}/web/image?model=res.partner&id=${p.id}&field=image_128`,
+    is_company: !!p.is_company,
+    company_name: p.company_name || '',
+    street: p.street || '',
+    street2: p.street2 || '',
+    city: p.city || '',
+    zip: p.zip || '',
+    state_id: Array.isArray(p.state_id) ? { id: p.state_id[0], name: p.state_id[1] } : null,
+    country_id: Array.isArray(p.country_id) ? { id: p.country_id[0], name: p.country_id[1] } : null,
+    vat: p.vat || '',
+    website: p.website || '',
+    function: p.function || '',
+    categories,
+    address: address || null,
+  };
+};
+
+// Create a new res.partner. Same fallback strategy as updatePartnerOdoo —
+// if Odoo rejects a field name, retries with the safe core set.
+export const createPartnerOdoo = async (values) => {
+  const baseUrl = getOdooUrl();
+
+  const callCreate = async (vals) => {
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'create',
+          args: [vals],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+    if (response.data && response.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = response.data.error;
+      throw e;
+    }
+    return response.data.result;
+  };
+
+  try {
+    const result = await callCreate(values);
+    return { result };
+  } catch (err) {
+    console.warn('createPartnerOdoo full create failed, retrying with safe fields:', err?.payload || err?.message);
+    const safe = {
+      name: values.name,
+      email: values.email,
+      phone: values.phone,
+      street: values.street,
+      street2: values.street2,
+      city: values.city,
+      zip: values.zip,
     };
-  } catch (error) {
-    console.error('fetchCustomerDetailsOdoo error:', error);
-    throw error;
+    Object.keys(safe).forEach((k) => safe[k] === undefined && delete safe[k]);
+    try {
+      const result = await callCreate(safe);
+      return { result, partial: true };
+    } catch (err2) {
+      console.error('createPartnerOdoo safe create also failed:', err2?.payload || err2?.message);
+      return { error: err2?.payload || { message: err2?.message || 'Save failed' } };
+    }
+  }
+};
+
+// Write back to res.partner. Tries the full payload first; if Odoo rejects an
+// unknown field, retries with only the safe core set so the user still gets
+// most of their edits saved.
+export const updatePartnerOdoo = async (partnerId, values) => {
+  if (!partnerId) return { error: { message: 'partnerId is required' } };
+  const baseUrl = getOdooUrl();
+
+  const callWrite = async (vals) => {
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.partner',
+          method: 'write',
+          args: [[partnerId], vals],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+    if (response.data && response.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = response.data.error;
+      throw e;
+    }
+    return response.data.result;
+  };
+
+  try {
+    const result = await callWrite(values);
+    return { result };
+  } catch (err) {
+    console.warn('updatePartnerOdoo full write failed, retrying with safe fields:', err?.payload || err?.message);
+    const safe = {
+      name: values.name,
+      email: values.email,
+      phone: values.phone,
+      street: values.street,
+      street2: values.street2,
+      city: values.city,
+      zip: values.zip,
+    };
+    Object.keys(safe).forEach((k) => safe[k] === undefined && delete safe[k]);
+    try {
+      const result = await callWrite(safe);
+      return { result, partial: true };
+    } catch (err2) {
+      console.error('updatePartnerOdoo safe write also failed:', err2?.payload || err2?.message);
+      return { error: err2?.payload || { message: err2?.message || 'Save failed' } };
+    }
   }
 };
 
@@ -2529,7 +2702,12 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' 
         method: 'search_read',
         args: [domain],
         kwargs: {
-          fields: ['id', 'name', 'partner_id', 'user_id', 'date_order', 'amount_total', 'state'],
+          fields: [
+            'id', 'name', 'pos_reference',
+            'partner_id', 'user_id', 'date_order',
+            'amount_total', 'amount_paid', 'state',
+            'session_id', 'config_id',
+          ],
           offset,
           limit,
           order: 'date_order desc',
@@ -2550,6 +2728,91 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' 
     console.error('fetchOrdersOdoo error:', error);
     throw error;
   }
+};
+
+// Fetch a single pos.order with its lines (and image_url for each product) so
+// we can show a full receipt detail view, or reload a draft order back into
+// the cart for editing.
+export const fetchPosOrderDetailOdoo = async (orderId) => {
+  if (!orderId) return null;
+  const baseUrl = getOdooUrl();
+
+  const orderResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+    jsonrpc: '2.0',
+    method: 'call',
+    params: {
+      model: 'pos.order',
+      method: 'search_read',
+      args: [[['id', '=', orderId]]],
+      kwargs: {
+        fields: [
+          'id', 'name', 'pos_reference',
+          'partner_id', 'user_id', 'date_order',
+          'amount_total', 'amount_tax', 'amount_paid', 'amount_return',
+          'state', 'session_id', 'config_id', 'lines',
+        ],
+        limit: 1,
+      },
+    },
+  }, { headers: { 'Content-Type': 'application/json' } });
+
+  if (orderResp.data && orderResp.data.error) {
+    console.error('[FETCH POS ORDER DETAIL] error:', orderResp.data.error);
+    return { error: orderResp.data.error };
+  }
+  const order = (orderResp.data.result || [])[0];
+  if (!order) return null;
+
+  let lines = [];
+  if (Array.isArray(order.lines) && order.lines.length > 0) {
+    const linesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order.line',
+        method: 'read',
+        args: [order.lines],
+        kwargs: {
+          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name'],
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    if (!(linesResp.data && linesResp.data.error)) {
+      lines = (linesResp.data.result || []).map((l) => {
+        const pid = Array.isArray(l.product_id) ? l.product_id[0] : null;
+        const pname = Array.isArray(l.product_id) ? l.product_id[1] : (l.name || 'Product');
+        return {
+          id: l.id,
+          product_id: pid,
+          name: pname,
+          qty: Number(l.qty) || 0,
+          price_unit: Number(l.price_unit) || 0,
+          discount: Number(l.discount) || 0,
+          price_subtotal: Number(l.price_subtotal) || 0,
+          price_subtotal_incl: Number(l.price_subtotal_incl) || 0,
+          image_url: pid ? `${baseUrl}/web/image?model=product.product&id=${pid}&field=image_128` : null,
+        };
+      });
+    }
+  }
+
+  return {
+    id: order.id,
+    name: order.name || '',
+    pos_reference: order.pos_reference || '',
+    partner: Array.isArray(order.partner_id) ? { id: order.partner_id[0], name: order.partner_id[1] } : null,
+    user: Array.isArray(order.user_id) ? { id: order.user_id[0], name: order.user_id[1] } : null,
+    session: Array.isArray(order.session_id) ? { id: order.session_id[0], name: order.session_id[1] } : null,
+    config: Array.isArray(order.config_id) ? { id: order.config_id[0], name: order.config_id[1] } : null,
+    date_order: order.date_order || null,
+    amount_total: Number(order.amount_total) || 0,
+    amount_tax: Number(order.amount_tax) || 0,
+    amount_paid: Number(order.amount_paid) || 0,
+    amount_return: Number(order.amount_return) || 0,
+    state: order.state || 'draft',
+    lines,
+  };
 };
 
 // Fetch sales report data from Odoo

@@ -14,29 +14,50 @@ const SplashScreen = () => {
     const setCurrency = useCurrencyStore((state) => state.setCurrency);
 
     useEffect(() => {
-        const appName = Constants.expoConfig.name;
-        const config = getConfig(appName);
-        setCurrency(config.packageName);
+        let cancelled = false;
 
-        const checkUserData = async () => {
-            const storedUserData = await AsyncStorage.getItem('userData');
-            if (storedUserData) {
-                const userData = JSON.parse(storedUserData);
-                setLoggedInUser(userData);
-                navigation.reset({
-                    index: 0,
-                    routes: [{ name: 'AppNavigator' }],
-                });
-            } else {
-                navigation.reset({
-                    index: 0,
-                    routes: [{ name: 'LoginScreenOdoo' }],
-                });
+        const boot = async () => {
+            // Currency init is best-effort; never block the navigation on it.
+            try {
+                const appName = Constants?.expoConfig?.name || '';
+                const config = getConfig(appName);
+                setCurrency(config.packageName);
+            } catch (e) {
+                console.warn('[SPLASH] currency init failed:', e);
+            }
+
+            let userData = null;
+            try {
+                const storedUserData = await AsyncStorage.getItem('userData');
+                if (cancelled) return;
+                if (storedUserData) {
+                    try { userData = JSON.parse(storedUserData); } catch (_) { userData = null; }
+                }
+            } catch (e) {
+                console.warn('[SPLASH] AsyncStorage read failed:', e);
+            }
+
+            if (cancelled) return;
+
+            try {
+                if (userData) {
+                    // Fire-and-forget; do not await — login() runs a network call
+                    // that must not block navigation.
+                    try { setLoggedInUser(userData); } catch (_) {}
+                    navigation.reset({ index: 0, routes: [{ name: 'AppNavigator' }] });
+                } else {
+                    navigation.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] });
+                }
+            } catch (err) {
+                console.error('[SPLASH] navigation reset failed, retrying to login:', err);
+                try {
+                    navigation.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] });
+                } catch (_) {}
             }
         };
 
-        const timeout = setTimeout(checkUserData, 300);
-        return () => clearTimeout(timeout);
+        boot();
+        return () => { cancelled = true; };
     }, []);
 
     return (

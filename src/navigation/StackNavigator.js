@@ -26,7 +26,7 @@ import CreateInvoice from '@screens/Home/Sections/Customer/CreateInvoice';
 import CreateInvoicePreview from '@screens/Home/Sections/Customer/CreateInvoicePreview';
 import { InventoryDetails, InventoryForm, InventoryScreen } from "@screens/Home/Options/Inventory";
 import { ProductDetail } from "@components/common/Detail";
-import { CustomerDetails, CustomerScreen } from "@screens/Home/Sections/Customer";
+import { CustomerDetails, CustomerScreen, CustomerInfo } from "@screens/Home/Sections/Customer";
 import { MarketStudyScreen } from "@screens/Home/Options/MarketStudy";
 import { EditVisitPlan, VisitPlanForm, VisitsPlanScreen, VisitPlanDetails } from "@screens/Home/Options/VisitsPlan";
 import { EditVisit, VisitDetails, VisitScreen } from "@screens/Home/Options/Visits"; //customer visit
@@ -63,7 +63,7 @@ import { SupplierPaymentCreation, SupplierPaymentScreen } from "@screens/Home/Op
 const POSReceiptScreen = CreateInvoicePreview;
 import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymentGateway';
 import { UsersScreen } from '@screens/Users';
-import { MyOrdersScreen } from '@screens/MyOrders';
+import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { SalesReportScreen } from '@screens/SalesReport';
 import OrdersAnalysisScreen from '@screens/OrdersAnalysis/OrdersAnalysisScreen';
 import {
@@ -286,6 +286,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="CustomerDetails"
         component={CustomerDetails}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="CustomerInfo"
+        component={CustomerInfo}
         options={{ headerShown: false }}
       />
       <Stack.Screen
@@ -685,6 +690,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="MyOrdersScreen"
         component={MyOrdersScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="OrderDetail"
+        component={OrderDetailScreen}
         options={{ headerShown: false }}
       />
       {/* Sales Report */}

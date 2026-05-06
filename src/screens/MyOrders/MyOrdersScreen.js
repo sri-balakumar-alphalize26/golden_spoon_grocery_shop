@@ -1,7 +1,7 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
 import { NavigationHeader } from '@components/Header';
-import { fetchOrdersOdoo } from '@api/services/generalApi';
+import { fetchOrdersOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { OverlayLoader } from '@components/Loader';
@@ -11,11 +11,15 @@ import useDataFetching from '@hooks/useDataFetching';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import useAuthStore from '@stores/auth/useAuthStore';
+import { useProductStore } from '@stores/product';
 import { formatCurrency } from '@utils/currency';
+import Toast from 'react-native-toast-message';
 
 const MyOrdersScreen = ({ navigation }) => {
   const currency = useAuthStore((state) => state.currency);
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchOrdersOdoo);
+  const { addProduct, clearProducts } = useProductStore();
+  const [tapBusy, setTapBusy] = useState(false);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text }),
@@ -87,12 +91,65 @@ const MyOrdersScreen = ({ navigation }) => {
     });
   };
 
+  // Tap handler — paid/done/invoiced orders open OrderDetail (receipt view).
+  // Draft orders reload their lines back into the cart and jump into the
+  // register/cart screen so the user can resume editing.
+  const handleOrderTap = useCallback(async (item) => {
+    if (tapBusy) return;
+    setTapBusy(true);
+    try {
+      if (item.state !== 'draft') {
+        navigation.navigate('OrderDetail', { orderId: item.id });
+        return;
+      }
+      // Draft → reload into cart
+      const detail = await fetchPosOrderDetailOdoo(item.id);
+      if (!detail || detail.error) {
+        Toast.show({ type: 'error', text1: 'Failed to load order', position: 'bottom' });
+        return;
+      }
+      clearProducts();
+      (detail.lines || []).forEach((l) => {
+        addProduct({
+          id: l.product_id,
+          remoteId: l.product_id,
+          name: l.name,
+          price: l.price_unit,
+          price_unit: l.price_unit,
+          quantity: l.qty,
+          qty: l.qty,
+          image_url: l.image_url || null,
+          discount_percent: l.discount,
+        });
+      });
+      const sessionId = Array.isArray(item.session_id) ? item.session_id[0] : null;
+      const registerId = Array.isArray(item.config_id) ? item.config_id[0] : null;
+      const registerName = Array.isArray(item.config_id) ? item.config_id[1] : '';
+      navigation.navigate('TakeoutDelivery', {
+        sessionId,
+        registerId,
+        registerName,
+        existingOrderId: item.id,
+        userName: detail.user?.name || '',
+      });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Could not open order', text2: e?.message || '', position: 'bottom' });
+    } finally {
+      setTapBusy(false);
+    }
+  }, [tapBusy, navigation, addProduct, clearProducts]);
+
   const renderOrderItem = useCallback(({ item }) => {
-    const partnerName = Array.isArray(item.partner_id) ? item.partner_id[1] : item.partner_id || 'N/A';
-    const userName = Array.isArray(item.user_id) ? item.user_id[1] : item.user_id || 'N/A';
+    const partnerName = Array.isArray(item.partner_id) ? item.partner_id[1] : item.partner_id || '—';
+    const userName = Array.isArray(item.user_id) ? item.user_id[1] : item.user_id || '—';
+    const receiptNo = item.pos_reference || '';
 
     return (
-      <TouchableOpacity style={styles.orderCard}>
+      <TouchableOpacity
+        style={styles.orderCard}
+        activeOpacity={0.85}
+        onPress={() => handleOrderTap(item)}
+      >
         <View style={styles.orderHeader}>
           <View style={styles.orderIconContainer}>
             <Icon name="receipt" size={24} color="#461c8aff" />
@@ -113,6 +170,12 @@ const MyOrdersScreen = ({ navigation }) => {
             <Icon name="person" size={16} color="#666" />
             <Text style={styles.detailText}>{partnerName}</Text>
           </View>
+          {receiptNo ? (
+            <View style={styles.receiptChip}>
+              <Icon name="confirmation-number" size={14} color="#461c8aff" />
+              <Text style={styles.receiptChipText}>Receipt {receiptNo}</Text>
+            </View>
+          ) : null}
           <View style={styles.detailRow}>
             <Icon name="person-outline" size={16} color="#666" />
             <Text style={styles.detailText}>Salesperson: {userName}</Text>
@@ -124,7 +187,7 @@ const MyOrdersScreen = ({ navigation }) => {
         </View>
       </TouchableOpacity>
     );
-  }, []);
+  }, [currency, handleOrderTap]);
 
   const keyExtractor = useCallback((item, index) => `order-${item.id || index}`, []);
 
@@ -175,7 +238,7 @@ const MyOrdersScreen = ({ navigation }) => {
         {renderOrders()}
       </RoundedContainer>
 
-      <OverlayLoader visible={loading} />
+      <OverlayLoader visible={loading || tapBusy} />
     </SafeAreaView>
   );
 };
@@ -245,6 +308,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#666',
     flex: 1,
+  },
+  receiptChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3EEFB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  receiptChipText: {
+    fontSize: 12,
+    color: '#461c8aff',
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });
 

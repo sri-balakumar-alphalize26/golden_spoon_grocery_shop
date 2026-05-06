@@ -93,6 +93,7 @@ const fetchPaymentMethodId = async (journalId) => {
 const POSPayment = ({ navigation, route }) => {
   const [invoiceChecked, setInvoiceChecked] = useState(false);
   const [amountModalVisible, setAmountModalVisible] = useState(false);
+  const [customerModalVisible, setCustomerModalVisible] = useState(false);
   const {
     products = [],
     customer: initialCustomer,
@@ -460,6 +461,10 @@ const POSPayment = ({ navigation, route }) => {
       setAmountModalVisible(true);
       return;
     }
+    if (!customer) {
+      setCustomerModalVisible(true);
+      return;
+    }
     handlePay();
   };
 
@@ -606,25 +611,55 @@ const POSPayment = ({ navigation, route }) => {
             </View>
           ) : null}
 
-          {/* Options strip: Customer only */}
-          <View style={styles.optionsCard}>
-            <TouchableOpacity
-              onPress={openCustomerSelector}
-              style={[styles.optionRow, customer ? styles.optionRowActive : null]}
-              activeOpacity={0.85}
+          {/* Customer option — colored highlight matching the cart-screen chip */}
+          <TouchableOpacity
+            onPress={openCustomerSelector}
+            activeOpacity={0.85}
+            style={[
+              styles.customerOptionCard,
+              customer ? styles.customerOptionCardActive : styles.customerOptionCardEmpty,
+            ]}
+          >
+            <View
+              style={[
+                styles.customerOptionIcon,
+                { backgroundColor: customer ? '#dcfce7' : '#FFEDD5' },
+              ]}
             >
-              <View style={[styles.optionIcon, customer && { backgroundColor: '#dcfce7' }]}>
-                <MaterialIcons name="person" size={18} color={customer ? '#15803d' : NAVY} />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.optionLabel}>Customer</Text>
-                <Text style={styles.optionValue} numberOfLines={1}>
-                  {customer?.name || 'No customer selected'}
-                </Text>
-              </View>
-              <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
-            </TouchableOpacity>
-          </View>
+              <MaterialIcons
+                name={customer ? 'person-pin' : 'person-add-alt-1'}
+                size={20}
+                color={customer ? '#166534' : '#9A3412'}
+              />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text
+                style={[
+                  styles.customerOptionLabel,
+                  { color: customer ? '#166534' : '#9A3412' },
+                ]}
+              >
+                CUSTOMER
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.customerOptionValue,
+                  { color: customer ? '#166534' : '#9A3412' },
+                ]}
+              >
+                {customer?.name || 'No customer selected'}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.customerOptionAction,
+                { backgroundColor: customer ? '#22c55e' : '#F47B20' },
+              ]}
+            >
+              <MaterialIcons name={customer ? 'edit' : 'add'} size={16} color="#fff" />
+            </View>
+          </TouchableOpacity>
         </ScrollView>
 
         {/* Validate footer — solid orange, always tappable; popup if cash short */}
@@ -671,6 +706,48 @@ const POSPayment = ({ navigation, route }) => {
             >
               <Text style={styles.alertOkText}>OK</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Customer Required popup — shown when validate is tapped with no customer selected */}
+      <Modal
+        visible={customerModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setCustomerModalVisible(false)}
+      >
+        <View style={styles.alertBg}>
+          <View style={styles.alertCard}>
+            <View style={styles.alertIconDisk}>
+              <MaterialIcons name="person-outline" size={28} color={ORANGE} />
+            </View>
+            <Text style={styles.alertTitle}>Customer Required</Text>
+            <Text style={styles.alertText}>
+              No customer is selected for this order. Enter a customer or skip to continue.
+            </Text>
+            <View style={styles.customerActionsRow}>
+              <TouchableOpacity
+                style={styles.customerEnterBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setCustomerModalVisible(false);
+                  openCustomerSelector();
+                }}
+              >
+                <Text style={styles.customerEnterText}>Enter Customer</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.customerSkipBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setCustomerModalVisible(false);
+                  handlePay();
+                }}
+              >
+                <Text style={styles.customerSkipText}>Skip & Validate</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -870,6 +947,56 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold, marginTop: 1,
   },
   optionDivider: { height: 1, backgroundColor: '#f1f2f6' },
+
+  // Customer option card — colored highlight, matches the cart-screen chip styling
+  customerOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 12,
+    marginTop: 8,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1.5,
+  },
+  customerOptionCardEmpty: {
+    backgroundColor: '#FFEDD5',
+    borderColor: '#F47B20',
+    ...Platform.select({
+      ios: { shadowColor: '#F47B20', shadowOpacity: 0.22, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+      android: { elevation: 3 },
+    }),
+  },
+  customerOptionCardActive: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#22c55e',
+    ...Platform.select({
+      ios: { shadowColor: '#22c55e', shadowOpacity: 0.22, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+      android: { elevation: 3 },
+    }),
+  },
+  customerOptionIcon: {
+    width: 38, height: 38, borderRadius: 19,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  customerOptionLabel: {
+    fontSize: 10,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  customerOptionValue: {
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
+  customerOptionAction: {
+    width: 30, height: 30, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 8,
+  },
   toggleTrack: {
     width: 36, height: 20, borderRadius: 10,
     backgroundColor: '#e5e7eb', justifyContent: 'center', paddingHorizontal: 2,
@@ -948,6 +1075,36 @@ const styles = StyleSheet.create({
     }),
   },
   alertOkText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.4 },
+  customerActionsRow: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  customerEnterBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  customerEnterText: {
+    color: NAVY, fontWeight: '800', fontSize: 13, letterSpacing: 0.3,
+  },
+  customerSkipBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    backgroundColor: ORANGE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...ctaShadow(ORANGE),
+  },
+  customerSkipText: {
+    color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.4,
+  },
   validateText: {
     color: '#fff', fontSize: 14,
     fontFamily: FONT_FAMILY.urbanistBold,

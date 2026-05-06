@@ -4,7 +4,7 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
 import { COLORS } from '@constants/theme';
-import { createPosOrderOdoo, fetchDiscountsOdoo } from '@api/services/generalApi';
+import { createPosOrderOdoo, fetchDiscountsOdoo, updatePosOrderOdoo } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '@components/containers';
@@ -39,6 +39,8 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
+  const [createdOrderId, setCreatedOrderId] = useState(null);
+  const [submittedFingerprint, setSubmittedFingerprint] = useState(null);
 
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
@@ -181,13 +183,107 @@ const TakeoutDelivery = ({ navigation, route }) => {
       const posConfigId = route?.params?.registerId;
       const partnerId = customer?.id || customer?._id || null;
 
+      // Fingerprint of what we're about to submit. If we already created an order
+      // and the fingerprint matches, skip the API call and just navigate. Prevents
+      // duplicate pos.order rows when the user goes back and taps Place Order again.
+      const fingerprintPayload = {
+        partnerId: partnerId || null,
+        discount: Number(discountApplied) || 0,
+        amount_total: Number(finalTotal) || 0,
+        lines: lines.map(l => ({
+          product_id: l.product_id,
+          qty: Number(l.qty) || 0,
+          price_unit: Number(l.price_unit) || 0,
+          discount: Number(l.discount) || 0,
+          price_subtotal: typeof l.price_subtotal === 'undefined' ? null : Number(l.price_subtotal),
+        })),
+      };
+      const fingerprint = JSON.stringify(fingerprintPayload);
+
+      // Path A: same order, same content → no-op API, just navigate.
+      if (createdOrderId && submittedFingerprint === fingerprint) {
+        console.log('[Place Order] Reusing existing order, no API call:', createdOrderId);
+        Toast.show({
+          type: 'info',
+          text1: 'Continuing Order',
+          text2: `Order ID: ${createdOrderId}`,
+          position: 'bottom',
+        });
+        navigation.navigate('POSPayment', {
+          orderId: createdOrderId,
+          sessionId,
+          registerId: posConfigId,
+          totalAmount: finalTotal,
+          products: cart,
+          discountAmount: discountApplied,
+          customer,
+        });
+        return;
+      }
+
+      // Path B: order already exists but content changed → write new lines/totals
+      // onto the existing pos.order instead of creating a duplicate.
+      if (createdOrderId) {
+        const lineCommands = [[5, 0, 0]].concat(
+          lines.map(l => {
+            const price_unit = l.price_unit || 0;
+            const qty = l.qty || 1;
+            const subtotal = (typeof l.price_subtotal !== 'undefined' && l.price_subtotal !== null)
+              ? Number(l.price_subtotal)
+              : (price_unit * qty);
+            return [0, 0, {
+              product_id: l.product_id,
+              qty,
+              price_unit,
+              name: l.name || '',
+              discount: Number(l.discount) || 0,
+              price_subtotal: subtotal,
+              price_subtotal_incl: subtotal,
+            }];
+          })
+        );
+
+        console.log('[Place Order] Updating existing order:', createdOrderId);
+        const updResp = await updatePosOrderOdoo(createdOrderId, {
+          partner_id: partnerId || false,
+          amount_total: Number(finalTotal) || 0,
+          lines: lineCommands,
+        });
+        if (updResp && updResp.error) {
+          Toast.show({
+            type: 'error',
+            text1: 'Order Update Failed',
+            text2: updResp.error.message || 'Could not update existing order',
+            position: 'bottom',
+          });
+          return;
+        }
+        setSubmittedFingerprint(fingerprint);
+        Toast.show({
+          type: 'success',
+          text1: 'Order Updated',
+          text2: `Order ID: ${createdOrderId}`,
+          position: 'bottom',
+        });
+        navigation.navigate('POSPayment', {
+          orderId: createdOrderId,
+          sessionId,
+          registerId: posConfigId,
+          totalAmount: finalTotal,
+          products: cart,
+          discountAmount: discountApplied,
+          customer,
+        });
+        return;
+      }
+
       console.log('[Place Order] Creating order with:', { lines, sessionId, posConfigId, partnerId });
 
       // Don't pass preset_id - let Odoo use default or omit if optional
-      const resp = await createPosOrderOdoo({ 
-        partnerId, 
-        lines, 
-        sessionId, 
+      const resp = await createPosOrderOdoo({
+        partnerId,
+        lines,
+        sessionId,
         posConfigId,
         discount: discountApplied,
         amount_total: finalTotal
@@ -196,11 +292,11 @@ const TakeoutDelivery = ({ navigation, route }) => {
       console.log('[Place Order] Response:', resp);
 
       if (resp && resp.error) {
-        Toast.show({ 
-          type: 'error', 
-          text1: 'Order Error', 
-          text2: resp.error.message || JSON.stringify(resp.error) || 'Failed to create order', 
-          position: 'bottom' 
+        Toast.show({
+          type: 'error',
+          text1: 'Order Error',
+          text2: resp.error.message || JSON.stringify(resp.error) || 'Failed to create order',
+          position: 'bottom'
         });
         return;
       }
@@ -211,11 +307,14 @@ const TakeoutDelivery = ({ navigation, route }) => {
         return;
       }
 
-      Toast.show({ 
-        type: 'success', 
-        text1: 'Order Created', 
-        text2: `Order ID: ${orderId}`, 
-        position: 'bottom' 
+      setCreatedOrderId(orderId);
+      setSubmittedFingerprint(fingerprint);
+
+      Toast.show({
+        type: 'success',
+        text1: 'Order Created',
+        text2: `Order ID: ${orderId}`,
+        position: 'bottom'
       });
 
       // Navigate to payment or clear cart
@@ -452,23 +551,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
                 {noteText ? noteText : 'Note'}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={openCustomerSelector} style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: customer ? '#dcfce7' : '#f3f4f6',
-              paddingVertical: 8,
-              paddingHorizontal: 12,
-              borderRadius: 999,
-              marginRight: 8,
-              marginBottom: 8,
-              borderWidth: customer ? 1 : 0,
-              borderColor: '#22c55e',
-            }}>
-              <MaterialIcons name="person-pin" size={14} color={customer ? '#166534' : '#374151'} style={{ marginRight: 4 }} />
-              <Text style={{ fontWeight: '800', color: customer ? '#166534' : '#374151', fontSize: 12 }}>
-                {customer ? customer.name : 'Customer'}
-              </Text>
-            </TouchableOpacity>
             {selectedLine ? (
               <TouchableOpacity onPress={() => setLineDiscountModalVisible(true)} style={{
                 flexDirection: 'row',
@@ -486,6 +568,65 @@ const TakeoutDelivery = ({ navigation, route }) => {
                 <Text style={{ fontWeight: '800', color: '#92400e', fontSize: 12 }}>Discount</Text>
               </TouchableOpacity>
             ) : null}
+            {/* Customer chip — pushed to the far right, colored to stand out, pencil affordance for edit */}
+            <TouchableOpacity
+              onPress={openCustomerSelector}
+              activeOpacity={0.85}
+              style={{
+                marginLeft: 'auto',
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: customer ? '#dcfce7' : '#FFEDD5',
+                paddingVertical: 8,
+                paddingHorizontal: 12,
+                borderRadius: 999,
+                marginBottom: 8,
+                borderWidth: 1.5,
+                borderColor: customer ? '#22c55e' : '#F47B20',
+                shadowColor: customer ? '#22c55e' : '#F47B20',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.18,
+                shadowRadius: 4,
+                elevation: 2,
+                maxWidth: '60%',
+              }}
+            >
+              <MaterialIcons
+                name={customer ? 'person-pin' : 'person-add-alt-1'}
+                size={15}
+                color={customer ? '#166534' : '#9A3412'}
+                style={{ marginRight: 5 }}
+              />
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontWeight: '800',
+                  color: customer ? '#166534' : '#9A3412',
+                  fontSize: 12,
+                  letterSpacing: 0.2,
+                  maxWidth: 130,
+                }}
+              >
+                {customer ? customer.name : 'Customer'}
+              </Text>
+              <View
+                style={{
+                  marginLeft: 6,
+                  width: 20,
+                  height: 20,
+                  borderRadius: 10,
+                  backgroundColor: customer ? '#22c55e' : '#F47B20',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <MaterialIcons
+                  name={customer ? 'edit' : 'add'}
+                  size={13}
+                  color="#fff"
+                />
+              </View>
+            </TouchableOpacity>
           </View>
 
           {/* Add Products primary CTA (full width) */}

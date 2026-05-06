@@ -1,11 +1,13 @@
-import React, { useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, StatusBar, BackHandler } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, StatusBar, BackHandler, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { WebView } from 'react-native-webview';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
+import Toast from 'react-native-toast-message';
 
 const NAVY = '#2E294E';
 const ORANGE = '#F47B20';
@@ -20,6 +22,12 @@ const displayNum = (n) => {
 const CreateInvoicePreview = ({ navigation, route }) => {
   const params = route?.params || {};
   const { clearProducts } = useProductStore();
+
+  // Action states for the receipt-action buttons
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
 
   // Done = wipe the in-memory cart and reset navigation to the Home tab.
   // Used both by the explicit "Done" button and the back-arrow in the hero.
@@ -79,14 +87,54 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const dateStr = new Date().toLocaleDateString('en-GB');
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-  const onPrintShare = async () => {
+  // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
+  const handlePrintPreview = () => {
+    try {
+      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
+      setPreviewHtml(html);
+      setPreviewVisible(true);
+    } catch (err) {
+      console.error('[Receipt] preview error', err);
+      Toast.show({ type: 'error', text1: 'Preview failed', text2: err?.message || 'Unable to render preview', position: 'bottom' });
+    }
+  };
+
+  // 2. Download PDF — render to file, then open the system share sheet so the
+  // user can save it (Drive/Files/etc.) or send it elsewhere.
+  const handleDownloadPdf = async () => {
+    setDownloading(true);
     try {
       const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
-      await Sharing.shareAsync(uri);
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
+      }
+      Toast.show({ type: 'success', text1: 'PDF ready', text2: 'Use the share sheet to save the file', position: 'bottom' });
     } catch (err) {
-      console.error('Print/share error', err);
+      console.error('[Receipt] download error', err);
+      Toast.show({ type: 'error', text1: 'Download failed', text2: err?.message || 'Unable to generate PDF', position: 'bottom' });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  // 3. Print Receipt — open the OS print dialog so the user can pick any
+  // already-paired printer (AirPrint on iOS, Android print services).
+  const handlePrintReceipt = async () => {
+    setPrinting(true);
+    try {
+      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
+      await Print.printAsync({ html });
+    } catch (err) {
+      // User cancellation throws — only toast for genuine errors
+      if (err?.message && !/cancel/i.test(err.message)) {
+        console.error('[Receipt] print error', err);
+        Toast.show({ type: 'error', text1: 'Print failed', text2: err?.message, position: 'bottom' });
+      }
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -278,29 +326,88 @@ const CreateInvoicePreview = ({ navigation, route }) => {
           </View>
         </ScrollView>
 
-        {/* Sticky bottom action — Done + Print row */}
+        {/* Sticky bottom action — 3 small action chips + full-width Done CTA */}
         <View style={s.footer}>
-          <View style={s.footerRow}>
+          <View style={s.actionRow}>
             <TouchableOpacity
-              onPress={onDone}
+              onPress={handlePrintPreview}
               activeOpacity={0.85}
-              style={s.doneBtn}
+              style={[s.actionChip, s.previewChip]}
             >
-              <MaterialIcons name="check" size={18} color={NAVY} />
-              <Text style={s.doneText}>Done</Text>
+              <View style={s.actionIconDisk}>
+                <MaterialIcons name="preview" size={20} color="#1E88E5" />
+              </View>
+              <Text style={s.actionChipText}>Preview</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={onPrintShare} activeOpacity={0.85} style={s.printBtn}>
-              <View style={s.printIconDisk}>
-                <MaterialCommunityIcons name="printer" size={18} color={ORANGE} />
+
+            <TouchableOpacity
+              onPress={handleDownloadPdf}
+              disabled={downloading}
+              activeOpacity={0.85}
+              style={[s.actionChip, s.downloadChip, downloading && { opacity: 0.6 }]}
+            >
+              <View style={s.actionIconDisk}>
+                {downloading ? (
+                  <ActivityIndicator color="#E85D04" size="small" />
+                ) : (
+                  <MaterialIcons name="file-download" size={20} color="#E85D04" />
+                )}
               </View>
-              <View style={{ marginLeft: 10 }}>
-                <Text style={s.printText}>Print Invoice</Text>
-                <Text style={s.printSub}>Save · Share PDF</Text>
+              <Text style={s.actionChipText}>Download</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handlePrintReceipt}
+              disabled={printing}
+              activeOpacity={0.85}
+              style={[s.actionChip, s.printChip, printing && { opacity: 0.6 }]}
+            >
+              <View style={s.actionIconDisk}>
+                {printing ? (
+                  <ActivityIndicator color="#7B2D8E" size="small" />
+                ) : (
+                  <MaterialCommunityIcons name="printer" size={20} color="#7B2D8E" />
+                )}
               </View>
+              <Text style={s.actionChipText}>Print</Text>
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            onPress={onDone}
+            activeOpacity={0.85}
+            style={s.doneBtn}
+          >
+            <MaterialIcons name="check-circle" size={20} color="#fff" />
+            <Text style={s.doneText}>Done</Text>
+          </TouchableOpacity>
         </View>
       </View>
+
+      {/* Print Preview Modal — shows the receipt HTML in a WebView */}
+      <Modal
+        visible={previewVisible}
+        animationType="slide"
+        onRequestClose={() => setPreviewVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['top']}>
+          <View style={s.previewHeader}>
+            <Text style={s.previewTitle}>Print Preview</Text>
+            <TouchableOpacity
+              onPress={() => setPreviewVisible(false)}
+              style={s.previewClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <MaterialIcons name="close" size={22} color="#1a1a2e" />
+            </TouchableOpacity>
+          </View>
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: previewHtml }}
+            style={{ flex: 1, backgroundColor: '#fff' }}
+          />
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -664,39 +771,89 @@ const s = StyleSheet.create({
   thankYouText: { color: NAVY, fontSize: 14, fontWeight: '800', marginTop: 6 },
   thankYouSub: { color: '#8896ab', fontSize: 12, fontWeight: '600', marginTop: 2 },
 
-  // Footer CTA
+  // Footer — 3 soft action chips on top + full-width Done CTA
   footer: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
-    paddingHorizontal: 12, paddingTop: 10, paddingBottom: 12,
+    paddingHorizontal: 14, paddingTop: 14, paddingBottom: 14,
     backgroundColor: '#fff',
-    borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    borderTopLeftRadius: 22, borderTopRightRadius: 22,
     ...Platform.select({
-      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: -4 } },
-      android: { elevation: 12 },
+      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.10, shadowRadius: 18, shadowOffset: { width: 0, height: -6 } },
+      android: { elevation: 14 },
     }),
   },
-  footerRow: { flexDirection: 'row', gap: 10 },
-  doneBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 14, borderRadius: 12,
-    backgroundColor: '#fff',
-    borderWidth: 1.5, borderColor: NAVY,
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
   },
-  doneText: { color: NAVY, fontSize: 14, fontWeight: '800', marginLeft: 6, letterSpacing: 0.3 },
-  printBtn: {
-    flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: ORANGE,
-    borderRadius: 12,
-    paddingVertical: 12, paddingHorizontal: 14,
-    ...ctaShadow(ORANGE),
+  actionChip: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    borderRadius: 14,
+    borderWidth: 1.2,
   },
-  printIconDisk: {
-    width: 34, height: 34, borderRadius: 11,
+  previewChip: {
+    backgroundColor: '#e7f1fd',
+    borderColor: '#1E88E5',
+  },
+  downloadChip: {
+    backgroundColor: '#fdecdc',
+    borderColor: '#E85D04',
+  },
+  printChip: {
+    backgroundColor: '#f3e7f5',
+    borderColor: '#7B2D8E',
+  },
+  actionIconDisk: {
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: '#fff',
     alignItems: 'center', justifyContent: 'center',
+    marginBottom: 6,
   },
-  printText: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 0.3 },
-  printSub: { color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: '600', marginTop: 1 },
+  actionChipText: {
+    color: '#1a1a2e',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.25,
+  },
+  doneBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 16,
+    backgroundColor: ORANGE,
+    gap: 8,
+    ...Platform.select({
+      ios: { shadowColor: ORANGE, shadowOpacity: 0.32, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
+      android: { elevation: 8 },
+    }),
+  },
+  doneText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+    marginLeft: 4,
+    letterSpacing: 0.4,
+  },
+
+  // Preview modal header
+  previewHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#eef0f5',
+  },
+  previewTitle: { fontSize: 16, fontWeight: '800', color: '#1a1a2e' },
+  previewClose: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center', justifyContent: 'center',
+  },
 });
 
 export default CreateInvoicePreview;
