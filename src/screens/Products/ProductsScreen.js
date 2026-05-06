@@ -1,9 +1,13 @@
-import React, { useEffect, useCallback, useRef, useMemo } from 'react';
-import { View } from 'react-native';
+import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
+import { View, ScrollView, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import Text from '@components/Text';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
-// ⬇️ CHANGE: use Odoo version instead of old backend
-import { fetchProductsOdoo } from '@api/services/generalApi';
+import {
+  fetchProductsOdoo,
+  fetchPosCategoriesOdoo,
+  fetchPosCategoryCountsOdoo,
+} from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -15,6 +19,42 @@ import useDataFetching from '@hooks/useDataFetching';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Toast from 'react-native-toast-message';
 import { useProductStore } from '@stores/product';
+import { FABButton } from '@components/common/Button';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
+
+const NAVY = COLORS.primaryThemeColor;
+
+// Odoo's standard 12-slot kanban colour palette (web/static/src/scss/variables.scss).
+// Index 0 means "no colour set" — render the chip with the default navy/grey style.
+const ODOO_COLORS = [
+  null,       // 0 — no colour
+  '#F06050',  // 1 red
+  '#F4A460',  // 2 orange
+  '#F7CD1F',  // 3 yellow
+  '#6CC1ED',  // 4 light blue
+  '#814968',  // 5 dark purple
+  '#EB7E7F',  // 6 salmon
+  '#2C8397',  // 7 teal
+  '#475577',  // 8 dark blue
+  '#D6145F',  // 9 fuchsia
+  '#30C381',  // 10 green
+  '#9365B8',  // 11 purple
+];
+const colorFor = (idx) => {
+  const i = Number(idx) || 0;
+  return ODOO_COLORS[i] || null;
+};
+
+// Pick a readable foreground colour for any given background.
+const readableFg = (hex) => {
+  if (!hex) return NAVY;
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 160 ? '#1a1a2e' : '#fff';
+};
 
 const ProductsScreen = ({ navigation, route }) => {
   const categoryId = route?.params?.categoryId || '';
@@ -28,31 +68,36 @@ const ProductsScreen = ({ navigation, route }) => {
   // ⬇️ CHANGE: hook now uses fetchProductsOdoo
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsOdoo);
 
+  const [posCategories, setPosCategories] = useState([]);
+  const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
+  const [selectedPosCategory, setSelectedPosCategory] = useState(null);
+
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, categoryId }),
+    (text) => fetchData({ searchText: text, categoryId, posCategoryId: selectedPosCategory }),
     500
   );
 
-  // Use ref to track if initial data has been loaded to avoid unnecessary refetches
-  const hasLoadedRef = useRef(false);
-  const lastParamsRef = useRef({ searchText: '', categoryId: '' });
   const hasAttemptedFetchRef = useRef(false);
 
-  // Fetch data only when screen is focused or search/category changes
+  // Always refetch products + counts on focus so any edit/create made on
+  // another screen shows up immediately when the user lands back here.
   useFocusEffect(
     useCallback(() => {
-      const paramsChanged =
-        lastParamsRef.current.searchText !== searchText ||
-        lastParamsRef.current.categoryId !== categoryId;
-
-      // Only fetch if params changed or first load
-      if (!hasLoadedRef.current || paramsChanged) {
-        hasAttemptedFetchRef.current = true;
-        fetchData({ searchText, categoryId });
-        hasLoadedRef.current = true;
-        lastParamsRef.current = { searchText, categoryId };
-      }
-    }, [categoryId, searchText])
+      hasAttemptedFetchRef.current = true;
+      fetchData({ searchText, categoryId, posCategoryId: selectedPosCategory });
+      // Re-pull categories + counts so freshly-created products bump their chip count.
+      (async () => {
+        try {
+          const cats = await fetchPosCategoriesOdoo();
+          const ids = (cats || []).map((c) => c.id).filter(Boolean);
+          const counts = await fetchPosCategoryCountsOdoo(ids);
+          setPosCategories(cats || []);
+          setCategoryCounts(counts || { all: 0 });
+        } catch (e) {
+          // best-effort; chip bar simply shows "All (0)" if it fails
+        }
+      })();
+    }, [categoryId, searchText, selectedPosCategory])
   );
 
   // If opened from POS, ensure cart owner is the POS guest so quick-add works
@@ -63,8 +108,8 @@ const ProductsScreen = ({ navigation, route }) => {
   }, [route?.params?.fromPOS, fromCustomerDetails]);
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText, categoryId });
-  }, [searchText, categoryId, fetchMoreData]);
+    fetchMoreData({ searchText, categoryId, posCategoryId: selectedPosCategory });
+  }, [searchText, categoryId, selectedPosCategory, fetchMoreData]);
 
   // Memoize the renderItem function to prevent unnecessary re-renders
   const renderItem = useCallback(({ item }) => {
@@ -144,6 +189,34 @@ const ProductsScreen = ({ navigation, route }) => {
     return null;
   };
 
+  const renderCategoryBar = () => {
+    if (!posCategories || posCategories.length === 0) return null;
+    return (
+      <View style={chipStyles.bar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={chipStyles.scroll}
+        >
+          <Chip
+            label={`All (${categoryCounts.all ?? 0})`}
+            active={!selectedPosCategory}
+            onPress={() => setSelectedPosCategory(null)}
+          />
+          {posCategories.map((c) => (
+            <Chip
+              key={c.id}
+              label={`${c.name} (${categoryCounts[c.id] ?? 0})`}
+              active={selectedPosCategory === c.id}
+              tint={colorFor(c.color)}
+              onPress={() => setSelectedPosCategory(c.id)}
+            />
+          ))}
+        </ScrollView>
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView>
       <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
@@ -152,12 +225,83 @@ const ProductsScreen = ({ navigation, route }) => {
         onChangeText={handleSearchTextChange}
         value={searchText}
       />
+      {renderCategoryBar()}
       <RoundedContainer>
         {renderProducts()}
+        {!route?.params?.fromPOS && !fromCustomerDetails ? (
+          <FABButton onPress={() => navigation.navigate('ProductCreationForm')} />
+        ) : null}
       </RoundedContainer>
       <OverlayLoader visible={loading} />
     </SafeAreaView>
   );
 };
+
+const Chip = ({ label, active, tint, onPress }) => {
+  // When the POS category has a colour set in Odoo, paint the chip with it.
+  // Active state thickens the border (in dark navy) so the user sees the
+  // selection regardless of the underlying tint.
+  const tinted = !!tint;
+  const bg = tinted ? tint : (active ? NAVY : '#F3F4F6');
+  const border = tinted ? (active ? '#1a1a2e' : tint) : NAVY;
+  const fg = tinted ? readableFg(tint) : (active ? '#fff' : NAVY);
+  const borderWidth = tinted && active ? 2.5 : 1.5;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[
+        chipStyles.chip,
+        { backgroundColor: bg, borderColor: border, borderWidth },
+        active && !tinted && chipStyles.chipActive,
+      ]}
+    >
+      <Text style={[chipStyles.chipText, { color: fg }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+};
+
+const chipStyles = StyleSheet.create({
+  bar: {
+    height: 48,
+    paddingVertical: 8,
+    backgroundColor: '#fff',
+  },
+  scroll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipActive: {
+    backgroundColor: NAVY,
+    borderColor: NAVY,
+    ...Platform.select({
+      ios: { shadowColor: NAVY, shadowOpacity: 0.18, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+    }),
+  },
+  chipText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  chipTextActive: {
+    color: '#fff',
+  },
+});
 
 export default ProductsScreen;

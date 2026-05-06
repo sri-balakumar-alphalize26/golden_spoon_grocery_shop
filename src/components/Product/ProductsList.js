@@ -5,12 +5,14 @@ import { FONT_FAMILY, COLORS } from '@constants/theme';
 
 const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
     const url = typeof item?.image_url === 'string' ? item.image_url : '';
-    const hasRealImage = url.startsWith('data:image') || url.startsWith('http') || url.startsWith('/');
+    // Only accept absolute URLs — relative paths (e.g. "/web/image?…") can't be
+    // loaded by RN's Image component and just trigger a failed roundtrip.
+    const hasRealImage = url.startsWith('data:image') || url.startsWith('http');
     const [imageFailed, setImageFailed] = useState(!hasRealImage);
 
     useEffect(() => {
         setImageFailed(!hasRealImage);
-    }, [url]);
+    }, [url, hasRealImage]);
 
     const productName = item?.product_name?.trim() || item?.name?.trim() || '';
     const priceValue = Number(item?.price ?? item?.list_price ?? item?.lst_price ?? 0);

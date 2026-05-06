@@ -36,6 +36,7 @@ const SECTIONS = [
     accent: '#FF9800',
     items: [
       { id: 'products', title: 'Products', screen: 'Products', icon: require('@assets/images/Home/section/productsbutton.png'), bg: '#FFF3E0', accent: '#FF9800' },
+      { id: 'stock', title: 'Stock', screen: 'StockScreen', icon: require('@assets/images/Home/section/inventory_management.png'), bg: '#FFF3E0', accent: '#FF9800' },
     ],
   },
   {
@@ -174,16 +175,16 @@ const HomeScreen = ({ navigation }) => {
       <View style={styles.sectionGrid}>
         {padItems(section.items).map(renderCard)}
       </View>
-    </View>
-  );
+</View>
+);
 
-  return (
+return (
     <SafeAreaView backgroundColor={COLORS.primaryThemeColor}>
       <RoundedContainer>
         {/* Company logo */}
         <View style={styles.logoContainer}>
           <Image
-            source={require('@assets/images/header/logo_header.png')}
+            source={require('@assets/images/header/golden_spoon.jpg')}
             style={styles.logoImage}
             resizeMode="contain"
           />

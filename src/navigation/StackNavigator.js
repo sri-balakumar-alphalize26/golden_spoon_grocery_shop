@@ -4,6 +4,7 @@ import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import AppNavigator from "./AppNavigator";
 import { ProductsScreen, SplashScreen, VendingCart, CartScreen } from "@screens";
+import { ProductCreationForm } from "@screens/Products";
 import { OptionsScreen } from "@screens/Home/Options";
 import { VehicleTrackingScreen, VehicleTrackingForm } from "@screens/Home/Options/VehicleTracking";
 
@@ -64,6 +65,7 @@ const POSReceiptScreen = CreateInvoicePreview;
 import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymentGateway';
 import { UsersScreen } from '@screens/Users';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
+import { StockScreen, StockDetailScreen } from '@screens/Stock';
 import { SalesReportScreen } from '@screens/SalesReport';
 import OrdersAnalysisScreen from '@screens/OrdersAnalysis/OrdersAnalysisScreen';
 import {
@@ -260,6 +262,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="Products"
         component={ProductsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ProductCreationForm"
+        component={ProductCreationForm}
         options={{ headerShown: false }}
       />
       <Stack.Screen
@@ -695,6 +702,17 @@ const StackNavigator = () => {
       <Stack.Screen
         name="OrderDetail"
         component={OrderDetailScreen}
+        options={{ headerShown: false }}
+      />
+      {/* Stock */}
+      <Stack.Screen
+        name="StockScreen"
+        component={StockScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="StockDetail"
+        component={StockDetailScreen}
         options={{ headerShown: false }}
       />
       {/* Sales Report */}

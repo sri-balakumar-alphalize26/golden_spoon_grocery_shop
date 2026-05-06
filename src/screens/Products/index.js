@@ -1,2 +1,3 @@
 import ProductsScreen from "./ProductsScreen";
-export { ProductsScreen };
+import ProductCreationForm from "./ProductCreationForm";
+export { ProductsScreen, ProductCreationForm };

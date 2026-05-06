@@ -49,16 +49,47 @@ const normalizeUrl = (raw = "") => {
   return trimmed.startsWith("http") ? trimmed : `https://${trimmed}`;
 };
 
+// Per-(URL+DB) credential storage helpers. Lets users save & auto-fill
+// credentials for multiple Odoo servers / databases.
+const _credKey = (baseUrl, db) => {
+  const u = String(baseUrl || "").trim().toLowerCase().replace(/\/+$/, "");
+  const d = String(db || "").trim();
+  return u && d ? `${u}|${d}` : "";
+};
+const _readSavedMap = async () => {
+  try {
+    const raw = await AsyncStorage.getItem("saved_credentials");
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch (_) {
+    return {};
+  }
+};
+const _writeSavedMap = async (map) => {
+  try {
+    await AsyncStorage.setItem("saved_credentials", JSON.stringify(map));
+  } catch (_) {}
+};
+
 const LoginScreenOdoo = () => {
   const navigation = useNavigation();
   const setUser = useAuthStore((state) => state.login);
 
   LogBox.ignoreLogs(["Non-serializable values were found in the navigation state"]);
 
+  // Defaults — local Odoo running on the same machine. Auto-filled on cold
+  // start so the user only needs to tap Login. `savedCredentials` (if any)
+  // overrides these in the restore effect below.
+  const DEFAULT_BASE_URL = "http://localhost:8069";
+  const DEFAULT_USERNAME = "admin";
+  const DEFAULT_PASSWORD = "admin";
+
   const [inputs, setInputs] = useState({
-    baseUrl: "",
-    username: "",
-    password: "",
+    baseUrl: DEFAULT_BASE_URL,
+    username: DEFAULT_USERNAME,
+    password: DEFAULT_PASSWORD,
   });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
@@ -69,10 +100,17 @@ const LoginScreenOdoo = () => {
   const [dbOpen, setDbOpen] = useState(false);
   const [dbFetchState, setDbFetchState] = useState("idle"); // idle | loading | ok | empty | error
 
+  // Auto-fill credentials toggle. When ON, username + password auto-populate
+  // from the saved-credentials map keyed by the current URL+DB.
+  const [autoCredentials, setAutoCredentials] = useState(false);
+
   const debounceRef = useRef(null);
   const lastFetchedUrlRef = useRef("");
 
-  // Restore saved credentials
+  // Restore saved credentials. If nothing has been saved yet, the form keeps
+  // the localhost / admin defaults seeded above. Also migrate the legacy
+  // single-blob `savedCredentials` into the new per-(URL+DB) `saved_credentials`
+  // map so the Auto Fill toggle works without forcing a fresh login.
   useEffect(() => {
     (async () => {
       try {
@@ -80,15 +118,66 @@ const LoginScreenOdoo = () => {
         if (raw) {
           const c = JSON.parse(raw);
           setInputs({
-            baseUrl: c.baseUrl || "",
-            username: c.username || "",
-            password: c.password || "",
+            baseUrl: c.baseUrl || DEFAULT_BASE_URL,
+            username: c.username || DEFAULT_USERNAME,
+            password: c.password || DEFAULT_PASSWORD,
           });
           if (c.db) setSelectedDb(c.db);
+          // One-time migration into the new map. Idempotent.
+          if (c.baseUrl && c.db && (c.username || c.password)) {
+            const key = _credKey(c.baseUrl, c.db);
+            if (key) {
+              const map = await _readSavedMap();
+              if (!map[key]) {
+                map[key] = { username: c.username || "", password: c.password || "" };
+                await _writeSavedMap(map);
+              }
+            }
+          }
         }
       } catch (_) {}
     })();
   }, []);
+
+  // Auto-fill credentials when the toggle is ON and URL+DB are both set.
+  // Re-fires when the user switches URL or DB so the right combo's creds
+  // pop in automatically.
+  useEffect(() => {
+    if (!autoCredentials) return;
+    const url = inputs.baseUrl?.trim();
+    const db = selectedDb?.trim();
+    if (!url || !db) return;
+    (async () => {
+      const map = await _readSavedMap();
+      const entry = map[_credKey(url, db)];
+      if (entry && (entry.username || entry.password)) {
+        setInputs((prev) => ({
+          ...prev,
+          username: entry.username || "",
+          password: entry.password || "",
+        }));
+      } else {
+        showToastMessage("No saved credentials yet — log in once to save");
+        setInputs((prev) => ({ ...prev, username: "", password: "" }));
+      }
+    })();
+  }, [inputs.baseUrl, selectedDb, autoCredentials]);
+
+  const toggleAutoCredentials = () => {
+    if (autoCredentials) {
+      setAutoCredentials(false);
+      setInputs((prev) => ({ ...prev, username: "", password: "" }));
+      return;
+    }
+    const url = inputs.baseUrl?.trim();
+    const db = selectedDb?.trim();
+    if (!url || !db) {
+      showToastMessage("Please enter server URL and select database first");
+      return;
+    }
+    setAutoCredentials(true);
+    // The effect above fills the fields.
+  };
 
   // Auto-fetch DB list when URL changes (debounced)
   useEffect(() => {
@@ -119,7 +208,10 @@ const LoginScreenOdoo = () => {
       if (list.length > 0) {
         setDbList(list);
         setDbFetchState("ok");
-        setSelectedDb((prev) => (prev && list.includes(prev) ? prev : list[0]));
+        // Don't auto-pick the first database — keep "Select a database" as
+        // the placeholder so the user explicitly chooses. Only preserve a
+        // previously-set value if it still exists in the fetched list.
+        setSelectedDb((prev) => (prev && list.includes(prev) ? prev : ""));
       } else {
         setDbList([]);
         setDbFetchState("empty");
@@ -131,6 +223,20 @@ const LoginScreenOdoo = () => {
   };
 
   const handleOnchange = (text, input) => {
+    if (input === "baseUrl") {
+      // URL is being edited — credentials and DB belong to the previous
+      // server, so wipe them so the user doesn't accidentally submit a
+      // stale combo. Doesn't fire on the initial restore effect since that
+      // calls setInputs directly, not via this handler.
+      setInputs((prev) => {
+        if (prev.baseUrl === text) return prev;
+        return { ...prev, baseUrl: text, username: "", password: "" };
+      });
+      setSelectedDb("");
+      setDbList([]);
+      setDbFetchState("idle");
+      return;
+    }
     setInputs((prev) => ({ ...prev, [input]: text }));
   };
 
@@ -193,6 +299,17 @@ const LoginScreenOdoo = () => {
             "savedCredentials",
             JSON.stringify({ baseUrl: url, db: dbNameUsed, username, password })
           );
+          // Also write into the per-(URL+DB) map so the Auto Fill toggle
+          // can pick this combo up next time the user lands on the same
+          // server + database.
+          try {
+            const key = _credKey(finalOdooUrl, dbNameUsed);
+            if (key) {
+              const map = await _readSavedMap();
+              map[key] = { username, password };
+              await _writeSavedMap(map);
+            }
+          } catch (_) {}
 
           setUser(userData);
 
@@ -262,7 +379,7 @@ const LoginScreenOdoo = () => {
           <View style={styles.logoWrapper}>
             <Image
               source={require("@assets/images/header/logo_header.png")}
-              style={{ width: 200, height: 180, alignSelf: "center" }}
+              style={{ width: 260, height: 234, alignSelf: "center" }}
               resizeMode="contain"
             />
           </View>
@@ -274,20 +391,14 @@ const LoginScreenOdoo = () => {
           borderTopLeftRadius={40}
           borderTopRightRadius={40}
         >
-          <View style={{ paddingTop: 8 }}>
+          <View style={{ paddingTop: 12 }}>
             <View style={{ marginVertical: 5, marginHorizontal: 10 }}>
-              <View style={{ marginTop: 0, marginBottom: 15 }}>
-                <Text
-                  style={{
-                    fontSize: 25,
-                    fontFamily: FONT_FAMILY.urbanistBold,
-                    color: "#2e2a4f",
-                    textAlign: "center",
-                  }}
-                >
-                  Login
-                </Text>
+              <View style={styles.titleBlock}>
+                <Text style={styles.titleText}>Welcome back</Text>
+                <Text style={styles.subtitleText}>Login to continue to your store</Text>
               </View>
+
+              <Text style={styles.sectionLabel}>SERVER</Text>
 
               {/* Server URL */}
               <TextInput
@@ -347,6 +458,13 @@ const LoginScreenOdoo = () => {
                             key={item}
                             style={[styles.dropdownItem, active && styles.dropdownItemActive]}
                             onPress={() => {
+                              // Wipe whatever is typed for the previous DB
+                              // when switching to a different one. The
+                              // auto-fill effect, if ON, then refills with
+                              // the saved combo for the new (URL+DB) key.
+                              if (selectedDb !== item) {
+                                setInputs((prev) => ({ ...prev, username: "", password: "" }));
+                              }
                               setSelectedDb(item);
                               setDbOpen(false);
                             }}
@@ -367,6 +485,8 @@ const LoginScreenOdoo = () => {
                   </View>
                 )}
               </View>
+
+              <Text style={[styles.sectionLabel, { marginTop: 14 }]}>ACCOUNT</Text>
 
               {/* Username */}
               <TextInput
@@ -395,6 +515,32 @@ const LoginScreenOdoo = () => {
                 login={true}
               />
 
+              {/* Auto Fill Credentials toggle — looks up { username, password }
+                  for the current URL+DB and fills the fields. Saves on each
+                  successful login. */}
+              <TouchableOpacity
+                onPress={toggleAutoCredentials}
+                activeOpacity={0.85}
+                style={styles.autoFillRow}
+              >
+                <Text style={styles.autoFillLabel} numberOfLines={1}>
+                  Auto Fill Credentials
+                </Text>
+                <View
+                  style={[
+                    styles.autoFillTrack,
+                    { backgroundColor: autoCredentials ? COLORS.primaryThemeColor : "#ccc" },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.autoFillThumb,
+                      { alignSelf: autoCredentials ? "flex-end" : "flex-start" },
+                    ]}
+                  />
+                </View>
+              </TouchableOpacity>
+
               <View style={styles.bottom}>
                 <Button title="Login" onPress={validate} />
               </View>
@@ -416,9 +562,63 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 8,
   },
+  titleBlock: {
+    alignItems: "center",
+    marginTop: 4,
+    marginBottom: 18,
+  },
+  titleText: {
+    fontSize: 26,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: "#2e2a4f",
+    letterSpacing: 0.3,
+  },
+  subtitleText: {
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: "#9aa0a6",
+    marginTop: 6,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: "#9aa0a6",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 6,
+    marginLeft: 2,
+  },
   bottom: {
     alignItems: "center",
-    marginTop: 10,
+    marginTop: 14,
+  },
+  autoFillRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+  autoFillLabel: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: "#555",
+  },
+  autoFillTrack: {
+    width: 40,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  autoFillThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#fff",
   },
   // DB field (mimics TextInput look)
   dbFieldWrap: {

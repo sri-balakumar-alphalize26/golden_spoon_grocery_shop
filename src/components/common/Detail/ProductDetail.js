@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Image, TouchableOpacity, Modal, StyleSheet, Dimensions, ActivityIndicator, Platform } from 'react-native';
+import { View, Image, TouchableOpacity, Modal, StyleSheet, Dimensions, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Text from '@components/Text';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
@@ -19,14 +19,17 @@ import { formatCurrency } from '@utils/currency';
 
 const ProductDetail = ({ navigation, route }) => {
   const { detail = {}, fromCustomerDetails = {} } = route?.params || {};
-  const [details, setDetails] = useState({});
+  // Seed with whatever the list passed in so the screen renders immediately
+  // (name, price, image_url) instead of flashing "No product details available"
+  // while the Odoo fetch round-trips.
+  const [details, setDetails] = useState(() => ({ ...detail }));
   const [loading, setLoading] = useState(false);
+  const [heroImageFailed, setHeroImageFailed] = useState(false);
   const [getDetail, setGetDetail] = useState(null);
   const [isVisibleCustomListModal, setIsVisibleCustomListModal] = useState(false);
   const [isVisibleEmployeeListModal, setIsVisibleEmployeeListModal] = useState(false);
   const [employee, setEmployee] = useState([]);
   const [isImageModalVisible, setImageModalVisible] = useState(false);
-  const [isImageLoading, setIsImageLoading] = useState(true);
   const currentUser = useAuthStore((state) => state.user);
   const currency = useAuthStore((state) => state.currency);
   const addProductStore = useProductStore((state) => state.addProduct);
@@ -48,6 +51,22 @@ const ProductDetail = ({ navigation, route }) => {
   };
 
   const isOdooProduct = !!detail.id && !detail._id;
+  const refreshAt = route?.params?.refreshAt ?? null;
+
+  // Reset the failed-image flag whenever the underlying image source changes,
+  // so a freshly-uploaded image gets a fresh chance to render after Save.
+  useEffect(() => {
+    setHeroImageFailed(false);
+  }, [details?.image_url]);
+
+  const heroImageUri = (() => {
+    const u = typeof details?.image_url === 'string' ? details.image_url : '';
+    if (!u) return '';
+    // Reject relative / malformed URLs that RN Image can't load anyway.
+    if (u.startsWith('data:image') || u.startsWith('http')) return u;
+    return '';
+  })();
+  const showNoImage = !heroImageUri || heroImageFailed;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -84,16 +103,21 @@ const ProductDetail = ({ navigation, route }) => {
   useEffect(() => {
     if (isOdooProduct) {
       const loadOdooDetails = async () => {
-        setLoading(true);
         try {
           const od = await fetchProductDetailsOdoo(detail.id);
           setDetails({
             ...detail,
             id: detail.id,
             product_name: od?.product_name || detail.product_name || detail.name,
-            image_url: od?.image_url || detail.image_url,
-            cost: od?.price ?? detail.price ?? 0,
-            sale_price: od?.price ?? detail.price ?? 0,
+            // Trust the fresh fetch as authoritative for image_url. If `od` came
+            // back without an image (empty string), don't fall back to the
+            // possibly-stale seed value.
+            image_url: (od && Object.prototype.hasOwnProperty.call(od, 'image_url'))
+              ? (od.image_url || '')
+              : (detail.image_url || ''),
+            cost: od?.cost ?? 0,
+            sale_price: od?.sale_price ?? od?.price ?? detail.price ?? 0,
+            barcode: od?.barcode || detail.barcode || '',
             minimal_sales_price: od?.minimal_sales_price ?? null,
             inventory_ledgers: od?.inventory_ledgers || [],
             total_product_quantity: od?.total_product_quantity ?? 0,
@@ -111,15 +135,14 @@ const ProductDetail = ({ navigation, route }) => {
             id: detail.id,
             product_name: detail.product_name || detail.name,
             image_url: detail.image_url,
-            cost: detail.price ?? 0,
+            cost: 0,
             sale_price: detail.price ?? 0,
+            barcode: detail.barcode || '',
             minimal_sales_price: null,
             inventory_ledgers: [],
             total_product_quantity: 0,
             uom: detail.uom || null,
           });
-        } finally {
-          setLoading(false);
         }
       };
       loadOdooDetails();
@@ -128,7 +151,7 @@ const ProductDetail = ({ navigation, route }) => {
     } else {
       setDetails(detail || {});
     }
-  }, [detail, isOdooProduct]);
+  }, [detail, isOdooProduct, refreshAt]);
 
   const handleBoxNamePress = async (boxName, warehouseId) => {
     setLoading(true);
@@ -203,33 +226,55 @@ const ProductDetail = ({ navigation, route }) => {
     (Array.isArray(details?.categ_id) ? details.categ_id[1] : null) ||
     'N/A';
 
-  const priceDisplay = formatCurrency(
-    details.cost ?? details.price ?? 0,
-    currency || { symbol: '$', position: 'before' }
-  );
-
+  const fallbackCurrency = { symbol: '$', position: 'before' };
+  const priceRaw = details.sale_price ?? details.price;
+  const priceDisplay = (priceRaw !== null && priceRaw !== undefined && priceRaw !== '')
+    ? formatCurrency(priceRaw, currency || fallbackCurrency)
+    : null;
+  const costDisplay = (details.cost !== null && details.cost !== undefined && Number(details.cost) > 0)
+    ? formatCurrency(details.cost, currency || fallbackCurrency)
+    : null;
   const minSalesDisplay = details.minimal_sales_price
-    ? formatCurrency(details.minimal_sales_price, currency || { symbol: '$', position: 'before' })
-    : 'N/A';
+    ? formatCurrency(details.minimal_sales_price, currency || fallbackCurrency)
+    : null;
+  const onHandDisplay = (() => {
+    const q = details.total_product_quantity;
+    if (q === undefined || q === null) return null;
+    const u = details?.uom?.uom_name || (Array.isArray(details?.uom) ? details.uom[1] : '');
+    return u ? `${q} ${u}` : String(q);
+  })();
+  const barcodeDisplay = (details.barcode && String(details.barcode).trim()) || null;
+  const internalRefDisplay = (details.product_code && String(details.product_code).trim()) || null;
+  const categoryDisplayOrNull = (categoryDisplay && categoryDisplay !== 'N/A') ? categoryDisplay : null;
 
   return (
     <SafeAreaView>
-      <NavigationHeader title="Product Details" onBackPress={() => navigation.goBack()} />
+      <NavigationHeader
+        title="Product Details"
+        onBackPress={() => navigation.goBack()}
+      />
       <RoundedScrollContainer>
         {details && Object.keys(details).length > 0 ? (
           <>
             <View style={s.heroCard}>
-              <TouchableOpacity activeOpacity={0.9} onPress={() => setImageModalVisible(true)} style={s.heroImageWrap}>
-                {isImageLoading && (
-                  <ActivityIndicator size="large" color={COLORS.primaryThemeColor} style={{ position: 'absolute' }} />
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => { if (!showNoImage) setImageModalVisible(true); }}
+                style={s.heroImageWrap}
+              >
+                {showNoImage ? (
+                  <View style={s.noImageBox}>
+                    <MaterialIcons name="image-not-supported" size={36} color="#cbd5e1" />
+                    <Text style={s.noImageText}>No Image</Text>
+                  </View>
+                ) : (
+                  <Image
+                    source={{ uri: heroImageUri }}
+                    style={s.heroImage}
+                    resizeMode="contain"
+                    onError={() => setHeroImageFailed(true)}
+                  />
                 )}
-                <Image
-                  source={details.image_url ? { uri: details.image_url } : require('@assets/images/error/error.png')}
-                  style={s.heroImage}
-                  resizeMode="contain"
-                  onLoadStart={() => setIsImageLoading(true)}
-                  onLoadEnd={() => setIsImageLoading(false)}
-                />
               </TouchableOpacity>
               <View style={s.heroInfo}>
                 <Text style={s.heroName} numberOfLines={3}>
@@ -246,39 +291,46 @@ const ProductDetail = ({ navigation, route }) => {
 
             <View style={s.sectionCard}>
               <Text style={s.sectionTitle}>Details</Text>
-              <DetailRow icon="category" label="Category" value={categoryDisplay} />
-              <DetailRow icon="sell" label="Price" value={priceDisplay} />
+              <DetailRow icon="category" label="Category" value={categoryDisplayOrNull} />
+              <DetailRow icon="sell" label="Sales Price" value={priceDisplay} />
+              <DetailRow icon="payments" label="Cost" value={costDisplay} />
               {!route?.params?.fromPOS && (
                 <DetailRow icon="trending-down" label="Minimum Sales Price" value={minSalesDisplay} />
               )}
-              {details?.uom && (
-                <DetailRow
-                  icon="straighten"
-                  label="Unit of Measure"
-                  value={
-                    details?.uom?.uom_name ||
-                    (Array.isArray(details?.uom) ? details.uom[1] : 'N/A')
-                  }
-                />
+              {!route?.params?.fromPOS && (
+                <DetailRow icon="inventory-2" label="On Hand Quantity" value={onHandDisplay} />
               )}
+              <DetailRow
+                icon="straighten"
+                label="Unit of Measure"
+                value={
+                  details?.uom?.uom_name ||
+                  (Array.isArray(details?.uom) ? details.uom[1] : null)
+                }
+              />
+              <DetailRow icon="qr-code-scanner" label="Barcode" value={barcodeDisplay} />
+              <DetailRow icon="tag" label="Internal Reference" value={internalRefDisplay} />
+              {isOdooProduct && !route?.params?.fromPOS ? (
+                <TouchableOpacity
+                  style={s.editProductBtn}
+                  activeOpacity={0.85}
+                  onPress={() => navigation.navigate('ProductCreationForm', { productId: detail.id })}
+                >
+                  <MaterialIcons name="edit" size={18} color="#fff" />
+                  <Text style={s.editProductBtnText}>Edit Product</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             {!route?.params?.fromPOS && renderStockDetails()}
 
-            <View style={{ flex: 1 }} />
             {route?.params?.fromPOS ? (
               <View style={{ paddingHorizontal: 16, paddingBottom: 16, paddingTop: 8 }}>
                 <Button title={'Add to POS Cart'} onPress={handleAddToPosCart} />
               </View>
             ) : null}
           </>
-        ) : (
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ fontSize: 18, color: COLORS.red, textAlign: 'center' }}>
-              No product details available.
-            </Text>
-          </View>
-        )}
+        ) : null}
       </RoundedScrollContainer>
 
       <Modal visible={isImageModalVisible} transparent animationType="fade">
@@ -291,11 +343,18 @@ const ProductDetail = ({ navigation, route }) => {
           >
             <Text style={{ color: '#111', fontSize: 28, fontWeight: '700' }}>✕</Text>
           </TouchableOpacity>
-          <Image
-            source={details.image_url ? { uri: details.image_url } : require('@assets/images/error/error.png')}
-            style={s.fullImage}
-            resizeMode="contain"
-          />
+          {showNoImage ? (
+            <View style={[s.fullImage, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8f8fa' }]}>
+              <MaterialIcons name="image-not-supported" size={64} color="#cbd5e1" />
+              <Text style={[s.noImageText, { fontSize: 14, marginTop: 8 }]}>No Image</Text>
+            </View>
+          ) : (
+            <Image
+              source={{ uri: heroImageUri }}
+              style={s.fullImage}
+              resizeMode="contain"
+            />
+          )}
         </View>
       </Modal>
 
@@ -324,17 +383,21 @@ const ProductDetail = ({ navigation, route }) => {
   );
 };
 
-const DetailRow = ({ icon, label, value }) => (
-  <View style={s.detailRow}>
-    <View style={s.detailIconBox}>
-      <MaterialIcons name={icon} size={18} color={COLORS.primaryThemeColor} />
+const DetailRow = ({ icon, label, value }) => {
+  const display =
+    value === null || value === undefined || value === '' ? '—' : String(value);
+  return (
+    <View style={s.detailRow}>
+      <View style={s.detailIconBox}>
+        <MaterialIcons name={icon} size={18} color={COLORS.primaryThemeColor} />
+      </View>
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Text style={s.detailLabel}>{label}</Text>
+        <Text style={s.detailValue} numberOfLines={2}>{display}</Text>
+      </View>
     </View>
-    <View style={{ flex: 1, marginLeft: 12 }}>
-      <Text style={s.detailLabel}>{label}</Text>
-      <Text style={s.detailValue} numberOfLines={2}>{String(value ?? 'N/A')}</Text>
-    </View>
-  </View>
-);
+  );
+};
 
 export default ProductDetail;
 
@@ -365,6 +428,18 @@ const s = StyleSheet.create({
     overflow: 'hidden',
   },
   heroImage: { width: '100%', height: '100%' },
+  noImageBox: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noImageText: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 4,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
   heroInfo: { flex: 1, paddingLeft: 14, paddingVertical: 4 },
   heroName: {
     fontSize: 18,
@@ -477,5 +552,27 @@ const s = StyleSheet.create({
     right: 18,
     zIndex: 10,
     padding: 8,
+  },
+
+  editProductBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F47B20',
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#F47B20', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 4 },
+    }),
+  },
+  editProductBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.4,
   },
 });

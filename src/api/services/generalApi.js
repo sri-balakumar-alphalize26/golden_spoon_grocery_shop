@@ -397,8 +397,25 @@ export const fetchProducts = async ({ offset, limit, categoryId, searchText }) =
 
 // 🔹 NEW: Fetch products directly from Odoo 19 via JSON-RPC
 // Reverted: Fetch products directly from Odoo 19 via JSON-RPC (ice cube shop logic)
-export const fetchProductsOdoo = async () => {
+export const fetchProductsOdoo = async ({
+  offset = 0,
+  limit = 50,
+  searchText = '',
+  posCategoryId = null,
+  categoryId = null,
+} = {}) => {
   try {
+    let domain = [];
+    if (searchText && String(searchText).trim()) {
+      const term = String(searchText).trim();
+      domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
+    }
+    if (posCategoryId) {
+      domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
+    } else if (categoryId) {
+      domain = domain.concat([['categ_id', '=', Number(categoryId)]]);
+    }
+
     const response = await axios.post(
       `${getOdooUrl()}/web/dataset/call_kw`,
       {
@@ -407,7 +424,7 @@ export const fetchProductsOdoo = async () => {
         params: {
           model: "product.product",
           method: "search_read",
-          args: [[]],
+          args: [domain],
           kwargs: {
             fields: [
               "id",
@@ -416,13 +433,13 @@ export const fetchProductsOdoo = async () => {
               "list_price",
               "qty_available",
               "image_128",
-              "image_1920",
-              "categ_id"
+              "categ_id",
             ],
-            limit: 50,
-            order: "id asc"
-          }
-        }
+            offset,
+            limit,
+            order: "name asc",
+          },
+        },
       },
       {
         headers: { "Content-Type": "application/json" },
@@ -435,12 +452,15 @@ export const fetchProductsOdoo = async () => {
     }
 
     const results = response.data.result || [];
-    const baseUrl = (ODOO_BASE_URL || '').replace(/\/$/, '');
 
-    // Attach image_url to each product
+    // Use `image_128` inline (carried over the authenticated JSON-RPC call) so
+    // we never have to hit `/web/image` from the React Native Image component
+    // anonymously (which Odoo blocks for non-public users). When image_128 is
+    // missing/false the product genuinely has no image and we leave image_url
+    // empty so the UI shows a "No Image" placeholder.
     results.forEach(p => {
       const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
-      p.image_url = hasBase64 ? `data:image/png;base64,${p.image_128}` : `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
+      p.image_url = hasBase64 ? `data:image/png;base64,${p.image_128}` : '';
     });
 
     return results;
@@ -449,6 +469,555 @@ export const fetchProductsOdoo = async () => {
     throw error;
   }
 };
+
+// ─── Product creation helpers ───────────────────────────────────────────────
+// Fetch product.category (internal accounting categories) for the form picker.
+export const fetchProductCategoriesOdoo = async () => {
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.category',
+        method: 'search_read',
+        args: [[]],
+        kwargs: { fields: ['id', 'name', 'complete_name'], order: 'name asc', limit: 200 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data && response.data.error) return [];
+    return (response.data.result || []).map((c) => ({
+      id: c.id,
+      name: c.complete_name || c.name || '',
+    }));
+  } catch (e) {
+    console.warn('fetchProductCategoriesOdoo error:', e?.message);
+    return [];
+  }
+};
+
+// Fetch pos.category — the POS cashier-screen grouping. Includes the integer
+// `color` field so the Products screen can tint each filter chip with the
+// same palette the cashier sees in Odoo.
+export const fetchPosCategoriesOdoo = async () => {
+  const baseUrl = getOdooUrl();
+  const callRead = async (model, fields) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model,
+        method: 'search_read',
+        args: [[]],
+        kwargs: { fields, order: 'name asc', limit: 200 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data.result || [];
+  };
+
+  // 1) Try pos.category with the rich field set (includes `color`).
+  // 2) If that fails, try pos.category without `color`.
+  // 3) If pos.category is unavailable entirely (e.g. point_of_sale module not
+  //    installed on this DB), fall back to product.category so the form
+  //    picker / chip filter still has something to render.
+  try {
+    let raw;
+    try {
+      raw = await callRead('pos.category', ['id', 'name', 'color']);
+    } catch (err) {
+      console.warn(
+        'fetchPosCategoriesOdoo pos.category[+color] failed, retrying without color:',
+        err?.payload?.data?.message || err?.payload?.message || err?.message
+      );
+      try {
+        raw = await callRead('pos.category', ['id', 'name']);
+      } catch (err2) {
+        console.warn(
+          'fetchPosCategoriesOdoo pos.category unavailable, falling back to product.category:',
+          err2?.payload?.data?.message || err2?.payload?.message || err2?.message
+        );
+        raw = await callRead('product.category', ['id', 'name']);
+      }
+    }
+    return raw.map((c) => ({
+      id: c.id,
+      name: c.name || '',
+      color: typeof c.color === 'number' ? c.color : 0,
+    }));
+  } catch (e) {
+    console.warn(
+      'fetchPosCategoriesOdoo error (all sources failed):',
+      e?.payload?.data?.message || e?.payload?.message || e?.message
+    );
+    return [];
+  }
+};
+
+// Create a new pos.category. Returns { result: <newId> } or { error }.
+export const createPosCategoryOdoo = async ({ name, color = 0 } = {}) => {
+  if (!name || !String(name).trim()) {
+    return { error: { message: 'Category name is required' } };
+  }
+  const baseUrl = getOdooUrl();
+  const vals = { name: String(name).trim() };
+  if (color !== undefined && color !== null) vals.color = Number(color) || 0;
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'pos.category', method: 'create', args: [vals], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      return { error: resp.data.error };
+    }
+    return { result: resp.data.result };
+  } catch (e) {
+    console.error('createPosCategoryOdoo error:', e?.message);
+    return { error: { message: e?.message || 'Create failed' } };
+  }
+};
+
+// Update an existing pos.category. Same shape as create, plus the id.
+export const updatePosCategoryOdoo = async (categoryId, { name, color } = {}) => {
+  if (!categoryId) return { error: { message: 'categoryId is required' } };
+  const baseUrl = getOdooUrl();
+  const vals = {};
+  if (name !== undefined) vals.name = String(name).trim();
+  if (color !== undefined && color !== null) vals.color = Number(color) || 0;
+  if (Object.keys(vals).length === 0) return { result: categoryId };
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'pos.category', method: 'write', args: [[categoryId], vals], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) return { error: resp.data.error };
+    return { result: categoryId };
+  } catch (e) {
+    console.error('updatePosCategoryOdoo error:', e?.message);
+    return { error: { message: e?.message || 'Update failed' } };
+  }
+};
+
+// Counts of products per POS category, plus a grand total. Returns
+// { all: <int>, [categoryId]: <int>, ... }. Used by the Products screen
+// to label each category chip with its count.
+export const fetchPosCategoryCountsOdoo = async (categoryIds = []) => {
+  const baseUrl = getOdooUrl();
+  const counts = { all: 0 };
+
+  const callCount = async (domain) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.product',
+        method: 'search_count',
+        args: [domain],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      throw new Error(resp.data.error?.data?.message || 'search_count failed');
+    }
+    return Number(resp.data.result) || 0;
+  };
+
+  try {
+    counts.all = await callCount([]);
+  } catch (e) {
+    console.warn('fetchPosCategoryCountsOdoo total failed:', e?.message);
+  }
+
+  const pairs = await Promise.all(
+    (categoryIds || []).map(async (cid) => {
+      try {
+        const n = await callCount([['pos_categ_ids', 'in', [Number(cid)]]]);
+        return [cid, n];
+      } catch (e) {
+        return [cid, 0];
+      }
+    })
+  );
+  pairs.forEach(([cid, n]) => { counts[cid] = n; });
+  return counts;
+};
+
+// Fetch uom.uom for the form unit-of-measure picker.
+export const fetchUomsOdoo = async () => {
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'uom.uom',
+        method: 'search_read',
+        args: [[]],
+        kwargs: { fields: ['id', 'name'], order: 'name asc', limit: 100 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data && response.data.error) return [];
+    return (response.data.result || []).map((u) => ({ id: u.id, name: u.name }));
+  } catch (e) {
+    console.warn('fetchUomsOdoo error:', e?.message);
+    return [];
+  }
+};
+
+// Create a product.product. Mirrors employee_attendance's payload shape but
+// online-only (no offline queue). Each optional field is omitted when empty
+// so Odoo applies defaults.
+export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty } = {}) => {
+  if (!name || !String(name).trim()) {
+    return { error: { message: 'Product name is required' } };
+  }
+  const baseUrl = getOdooUrl();
+
+  const vals = {
+    name: String(name).trim(),
+    sale_ok: true,
+    purchase_ok: true,
+  };
+  if (categId) vals.categ_id = categId;
+  if (posCategoryId) {
+    vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
+    // Setting a POS category implies the product should show on the POS.
+    // Auto-tick `available_in_pos` so the cashier screen picks it up.
+    vals.available_in_pos = true;
+  }
+  if (listPrice !== undefined && listPrice !== '' && listPrice !== null) vals.list_price = Number(listPrice) || 0;
+  if (standardPrice !== undefined && standardPrice !== '' && standardPrice !== null) vals.standard_price = Number(standardPrice) || 0;
+  if (barcode) vals.barcode = String(barcode).trim();
+  if (defaultCode) vals.default_code = String(defaultCode).trim();
+  if (uomId) { vals.uom_id = uomId; }
+  if (descriptionSale) vals.description_sale = String(descriptionSale).trim();
+  if (image) vals.image_1920 = image;
+
+  const callCreate = async (payload) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'product.product', method: 'create', args: [payload], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data.result;
+  };
+
+  let productId;
+  try {
+    productId = await callCreate(vals);
+  } catch (err) {
+    console.warn('createProductOdoo full create failed, retrying with safe fields:', err?.payload || err?.message);
+    const safe = {
+      name: vals.name,
+      sale_ok: true,
+      purchase_ok: true,
+    };
+    if (vals.list_price !== undefined) safe.list_price = vals.list_price;
+    if (vals.standard_price !== undefined) safe.standard_price = vals.standard_price;
+    if (vals.default_code) safe.default_code = vals.default_code;
+    if (vals.barcode) safe.barcode = vals.barcode;
+    if (vals.image_1920) safe.image_1920 = vals.image_1920;
+    if (vals.description_sale) safe.description_sale = vals.description_sale;
+    try {
+      productId = await callCreate(safe);
+    } catch (err2) {
+      console.error('createProductOdoo safe create also failed:', err2?.payload || err2?.message);
+      return { error: err2?.payload || { message: err2?.message || 'Create failed' } };
+    }
+  }
+
+  // Optional: bump on-hand qty via stock.change.product.qty wizard.
+  if (onHandQty !== undefined && onHandQty !== '' && Number(onHandQty) > 0 && productId) {
+    try {
+      const wizardResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.change.product.qty',
+          method: 'create',
+          args: [{ product_id: productId, new_quantity: Number(onHandQty) }],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const wizId = wizardResp.data?.result;
+      if (wizId) {
+        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: { model: 'stock.change.product.qty', method: 'change_product_qty', args: [[wizId]], kwargs: {} },
+        }, { headers: { 'Content-Type': 'application/json' } });
+      }
+    } catch (qtyErr) {
+      console.warn('createProductOdoo on-hand qty step failed:', qtyErr?.payload || qtyErr?.message);
+    }
+  }
+
+  return { result: productId };
+};
+
+// Update an existing product.product. Same payload shape as createProductOdoo,
+// with the same safe-fields fallback. `onHandQty` triggers the
+// stock.change.product.qty wizard the same way create does.
+export const updateProductOdoo = async (productId, { name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty } = {}) => {
+  if (!productId) return { error: { message: 'productId is required' } };
+  const baseUrl = getOdooUrl();
+
+  const vals = {};
+  if (name !== undefined) vals.name = String(name).trim();
+  if (categId !== undefined) vals.categ_id = categId || false;
+  if (posCategoryId !== undefined) {
+    vals.pos_categ_ids = posCategoryId ? [[6, 0, [posCategoryId]]] : [[5, 0, 0]];
+    if (posCategoryId) vals.available_in_pos = true;
+  }
+  if (listPrice !== undefined && listPrice !== null && listPrice !== '') vals.list_price = Number(listPrice) || 0;
+  if (standardPrice !== undefined && standardPrice !== null && standardPrice !== '') vals.standard_price = Number(standardPrice) || 0;
+  if (barcode !== undefined) vals.barcode = barcode ? String(barcode).trim() : false;
+  if (defaultCode !== undefined) vals.default_code = defaultCode ? String(defaultCode).trim() : false;
+  if (uomId !== undefined) { vals.uom_id = uomId; }
+  if (descriptionSale !== undefined) vals.description_sale = descriptionSale ? String(descriptionSale).trim() : false;
+  if (image) vals.image_1920 = image;
+
+  const callWrite = async (payload) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'product.product', method: 'write', args: [[productId], payload], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data.result;
+  };
+
+  let partial = false;
+  try {
+    await callWrite(vals);
+  } catch (err) {
+    console.warn('updateProductOdoo full write failed, retrying with safe fields:', err?.payload || err?.message);
+    const safe = {};
+    if (vals.name !== undefined) safe.name = vals.name;
+    if (vals.list_price !== undefined) safe.list_price = vals.list_price;
+    if (vals.standard_price !== undefined) safe.standard_price = vals.standard_price;
+    if (vals.default_code !== undefined) safe.default_code = vals.default_code;
+    if (vals.barcode !== undefined) safe.barcode = vals.barcode;
+    if (vals.image_1920 !== undefined) safe.image_1920 = vals.image_1920;
+    if (vals.description_sale !== undefined) safe.description_sale = vals.description_sale;
+    try {
+      await callWrite(safe);
+      partial = true;
+    } catch (err2) {
+      console.error('updateProductOdoo safe write also failed:', err2?.payload || err2?.message);
+      return { error: err2?.payload || { message: err2?.message || 'Save failed' } };
+    }
+  }
+
+  // On-hand qty change via stock.change.product.qty wizard
+  if (onHandQty !== undefined && onHandQty !== '' && onHandQty !== null) {
+    try {
+      const wizardResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.change.product.qty',
+          method: 'create',
+          args: [{ product_id: productId, new_quantity: Number(onHandQty) }],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const wizId = wizardResp.data?.result;
+      if (wizId) {
+        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: { model: 'stock.change.product.qty', method: 'change_product_qty', args: [[wizId]], kwargs: {} },
+        }, { headers: { 'Content-Type': 'application/json' } });
+      }
+    } catch (qtyErr) {
+      console.warn('updateProductOdoo on-hand qty step failed:', qtyErr?.payload || qtyErr?.message);
+    }
+  }
+
+  return { result: productId, partial };
+};
+
+// ─── Stock / inventory helpers ──────────────────────────────────────────────
+// fetch list of products with on-hand qty, supports filter by stock state.
+export const fetchStockProductsOdoo = async ({ offset = 0, limit = 50, searchText = '', filter = 'all' } = {}) => {
+  const baseUrl = getOdooUrl();
+  let domain = [];
+
+  if (searchText && searchText.trim() !== '') {
+    const term = searchText.trim();
+    domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
+  }
+  if (filter === 'in_stock') {
+    domain = domain.concat([['qty_available', '>', 0]]);
+  } else if (filter === 'low_stock') {
+    domain = domain.concat([['qty_available', '>', 0], ['qty_available', '<=', 5]]);
+  } else if (filter === 'out_of_stock') {
+    domain = domain.concat([['qty_available', '<=', 0]]);
+  }
+
+  const callRead = async (fields) => {
+    const response = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.product',
+        method: 'search_read',
+        args: [domain],
+        kwargs: { fields, offset, limit, order: 'name asc' },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data && response.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = response.data.error;
+      throw e;
+    }
+    return response.data.result || [];
+  };
+
+  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id'];
+  const safeFields = ['id', 'name', 'default_code', 'qty_available'];
+
+  let raw = [];
+  try {
+    raw = await callRead(richFields);
+  } catch (err) {
+    console.warn('fetchStockProductsOdoo rich fetch failed, falling back:', err?.payload || err?.message);
+    try {
+      raw = await callRead(safeFields);
+    } catch (err2) {
+      console.error('fetchStockProductsOdoo safe fetch also failed:', err2?.payload || err2?.message);
+      throw err2;
+    }
+  }
+
+  return raw.map((p) => ({
+    id: p.id,
+    name: p.name || '',
+    default_code: p.default_code || '',
+    list_price: Number(p.list_price) || 0,
+    qty_available: Number(p.qty_available) || 0,
+    virtual_available: typeof p.virtual_available === 'undefined' ? null : Number(p.virtual_available),
+    uom: Array.isArray(p.uom_id) ? { id: p.uom_id[0], name: p.uom_id[1] } : null,
+    category: Array.isArray(p.categ_id) ? { id: p.categ_id[0], name: p.categ_id[1] } : null,
+    image_url: `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`,
+  }));
+};
+
+// Detail for a single product: product info + per-location quants + last move.
+export const fetchProductStockDetailOdoo = async (productId) => {
+  if (!productId) return null;
+  const baseUrl = getOdooUrl();
+
+  const productResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+    jsonrpc: '2.0',
+    method: 'call',
+    params: {
+      model: 'product.product',
+      method: 'search_read',
+      args: [[['id', '=', productId]]],
+      kwargs: {
+        fields: ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id'],
+        limit: 1,
+      },
+    },
+  }, { headers: { 'Content-Type': 'application/json' } });
+  if (productResp.data && productResp.data.error) {
+    return { error: productResp.data.error };
+  }
+  const p = (productResp.data.result || [])[0];
+  if (!p) return null;
+
+  const product = {
+    id: p.id,
+    name: p.name || '',
+    default_code: p.default_code || '',
+    list_price: Number(p.list_price) || 0,
+    qty_available: Number(p.qty_available) || 0,
+    virtual_available: typeof p.virtual_available === 'undefined' ? null : Number(p.virtual_available),
+    uom: Array.isArray(p.uom_id) ? { id: p.uom_id[0], name: p.uom_id[1] } : null,
+    category: Array.isArray(p.categ_id) ? { id: p.categ_id[0], name: p.categ_id[1] } : null,
+    image_url: `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`,
+  };
+
+  // Quants by location
+  let quants = [];
+  try {
+    const quantResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'stock.quant',
+        method: 'search_read',
+        args: [[['product_id', '=', productId]]],
+        kwargs: {
+          fields: ['id', 'location_id', 'quantity', 'reserved_quantity'],
+          order: 'location_id',
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (!(quantResp.data && quantResp.data.error)) {
+      quants = (quantResp.data.result || []).map((q) => ({
+        id: q.id,
+        location: Array.isArray(q.location_id) ? { id: q.location_id[0], name: q.location_id[1] } : null,
+        quantity: Number(q.quantity) || 0,
+        reserved: Number(q.reserved_quantity) || 0,
+        available: (Number(q.quantity) || 0) - (Number(q.reserved_quantity) || 0),
+      }));
+    }
+  } catch (e) {
+    console.warn('fetchProductStockDetailOdoo quants fetch failed:', e?.payload || e?.message);
+  }
+
+  // Last completed move (best-effort)
+  let lastMove = null;
+  try {
+    const moveResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'stock.move.line',
+        method: 'search_read',
+        args: [[['product_id', '=', productId], ['state', '=', 'done']]],
+        kwargs: {
+          fields: ['id', 'date', 'qty_done', 'quantity', 'location_id', 'location_dest_id'],
+          order: 'date desc',
+          limit: 1,
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (!(moveResp.data && moveResp.data.error)) {
+      const m = (moveResp.data.result || [])[0];
+      if (m) {
+        lastMove = {
+          id: m.id,
+          date: m.date || null,
+          qty: Number(m.qty_done ?? m.quantity ?? 0) || 0,
+          from: Array.isArray(m.location_id) ? { id: m.location_id[0], name: m.location_id[1] } : null,
+          to: Array.isArray(m.location_dest_id) ? { id: m.location_dest_id[0], name: m.location_dest_id[1] } : null,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('fetchProductStockDetailOdoo last-move fetch failed:', e?.payload || e?.message);
+  }
+
+  return { product, quants, lastMove };
+};
+
 // Ensure this points to your Odoo URL
 
 // Fetch API token(s) and basic user info for an Odoo user id
@@ -528,29 +1097,54 @@ export const fetchProductDetailsOdoo = async (productId) => {
   try {
     if (!productId) return null;
 
-    // 1. Fetch product details
-    const productResponse = await axios.post(
-      `${getOdooUrl()}/web/dataset/call_kw`,
-      {
-        jsonrpc: '2.0',
-        method: 'call',
-        params: {
-          model: 'product.product',
-          method: 'search_read',
-          args: [[['id', '=', productId]]],
-          kwargs: {
-            fields: [
-              'id', 'name', 'list_price', 'default_code', 'uom_id', 'image_128',
-              'description_sale', 'categ_id', 'qty_available', 'virtual_available'
-            ],
-            limit: 1,
+    // 1. Fetch product details — try a rich field set first, fall back to a
+    // safe core set if any field is rejected by this Odoo db (some builds
+    // don't have `available_in_pos`, `pos_categ_ids`, etc.).
+    const callRead = async (fields) => {
+      const resp = await axios.post(
+        `${getOdooUrl()}/web/dataset/call_kw`,
+        {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'product.product',
+            method: 'search_read',
+            args: [[['id', '=', productId]]],
+            kwargs: { fields, limit: 1 },
           },
         },
-      },
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      if (resp.data && resp.data.error) {
+        const e = new Error('Odoo JSON-RPC error');
+        e.payload = resp.data.error;
+        throw e;
+      }
+      return resp.data.result || [];
+    };
 
-    if (productResponse.data.error) throw new Error('Odoo JSON-RPC error');
+    const richFields = [
+      'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode',
+      'uom_id', 'image_128', 'description_sale', 'categ_id', 'pos_categ_ids',
+      'available_in_pos',
+      'qty_available', 'virtual_available',
+    ];
+    const safeFields = [
+      'id', 'name', 'list_price', 'default_code',
+      'uom_id', 'image_128', 'categ_id', 'qty_available',
+    ];
+
+    let productResults;
+    try {
+      productResults = await callRead(richFields);
+    } catch (err) {
+      console.warn(
+        'fetchProductDetailsOdoo rich fetch failed, retrying with safe fields:',
+        err?.payload?.data?.message || err?.payload?.message || err?.message
+      );
+      productResults = await callRead(safeFields);
+    }
+    const productResponse = { data: { result: productResults } };
     const results = productResponse.data.result || [];
     const p = results[0];
     if (!p) return null;
@@ -582,18 +1176,42 @@ export const fetchProductDetailsOdoo = async (productId) => {
       }));
     }
 
-    // 3. Shape and return
+    // 3. Shape and return — use inline base64 from the authenticated JSON-RPC
+    // response. If the product has no image we leave image_url empty so the
+    // detail page shows the "No Image" placeholder instead of a broken URL.
     const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
-    const baseUrl = (ODOO_BASE_URL || '').replace(/\/$/, '');
-    const imageUrl = hasBase64
-      ? `data:image/png;base64,${p.image_128}`
-      : `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
+    const imageUrl = hasBase64 ? `data:image/png;base64,${p.image_128}` : '';
+
+    // Resolve pos.category id → name (search_read of pos_categ_ids returns
+    // just an array of ids). Best-effort; ignored on failure.
+    let pos_category = null;
+    if (Array.isArray(p.pos_categ_ids) && p.pos_categ_ids.length > 0) {
+      try {
+        const posResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'pos.category',
+            method: 'name_get',
+            args: [p.pos_categ_ids],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        if (posResp.data && Array.isArray(posResp.data.result) && posResp.data.result[0]) {
+          const [pid, pname] = posResp.data.result[0];
+          pos_category = { id: pid, name: pname };
+        }
+      } catch (_) {}
+    }
 
     return {
       id: p.id,
       product_name: p.name || '',
       image_url: imageUrl,
       price: p.list_price || 0,
+      sale_price: p.list_price || 0,
+      cost: Number(p.standard_price) || 0,
+      barcode: p.barcode || '',
       minimal_sales_price: p.list_price || null,
       inventory_ledgers,
       total_product_quantity: p.qty_available ?? p.virtual_available ?? 0,
@@ -601,6 +1219,8 @@ export const fetchProductDetailsOdoo = async (productId) => {
       product_code: p.default_code || null,
       uom: p.uom_id ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] } : null,
       categ_id: p.categ_id || null,
+      pos_category,
+      available_in_pos: !!p.available_in_pos,
       product_description: p.description_sale || null,
     };
   } catch (error) {
