@@ -1,0 +1,386 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* easy_purchase
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 19.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-03-15 00:00+0000\n"
+"PO-Revision-Date: 2026-03-15 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Arabic\n"
+"Language: ar\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: \n"
+"Plural-Forms: nplurals=6; plural=n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 ? 4 : 5;\n"
+
+#. module: easy_purchase
+#: model:ir.actions.act_window,name:easy_purchase.easy_purchase_action
+msgid "Easy Purchases"
+msgstr "المشتريات السريعة"
+
+#. module: easy_purchase
+#: model:ir.actions.act_window,name:easy_purchase.easy_purchase_payment_method_action
+msgid "Payment Methods"
+msgstr "طرق الدفع"
+
+#. module: easy_purchase
+#: model:ir.actions.report,name:easy_purchase.action_report_easy_purchase_barcode
+msgid "Barcode Labels"
+msgstr "ملصقات الباركود"
+
+#. module: easy_purchase
+#: model:ir.model,name:easy_purchase.model_easy_purchase
+msgid "Easy Purchase Entry"
+msgstr "إدخال الشراء السريع"
+
+#. module: easy_purchase
+#: model:ir.model,name:easy_purchase.model_easy_purchase_line
+msgid "Easy Purchase Line"
+msgstr "بند الشراء السريع"
+
+#. module: easy_purchase
+#: model:ir.model,name:easy_purchase.model_easy_purchase_payment_method
+msgid "Easy Purchase Payment Method"
+msgstr "طريقة دفع الشراء السريع"
+
+#. module: easy_purchase
+#: model:ir.model,name:easy_purchase.model_easy_purchase_barcode_wizard
+msgid "Easy Purchase Barcode Print Wizard"
+msgstr "معالج طباعة الباركود"
+
+#. module: easy_purchase
+#: model:ir.model,name:easy_purchase.model_report_easy_purchase_report_barcode_label
+msgid "Easy Purchase Barcode Label Report"
+msgstr "تقرير ملصق الباركود"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__name
+msgid "Reference"
+msgstr "المرجع"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__date
+msgid "Date"
+msgstr "التاريخ"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__partner_id
+msgid "Vendor"
+msgstr "المورد"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__company_id
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__company_id
+msgid "Company"
+msgstr "الشركة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__currency_id
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__currency_id
+msgid "Currency"
+msgstr "العملة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__line_ids
+msgid "Purchase Lines"
+msgstr "بنود الشراء"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__state
+msgid "Status"
+msgstr "الحالة"
+
+#. module: easy_purchase
+#: model:ir.model.fields.selection,name:easy_purchase.selection__easy_purchase__state__draft
+msgid "Draft"
+msgstr "مسودة"
+
+#. module: easy_purchase
+#: model:ir.model.fields.selection,name:easy_purchase.selection__easy_purchase__state__done
+msgid "Done"
+msgstr "مكتمل"
+
+#. module: easy_purchase
+#: model:ir.model.fields.selection,name:easy_purchase.selection__easy_purchase__state__cancelled
+msgid "Cancelled"
+msgstr "ملغي"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__amount_untaxed
+msgid "Untaxed Amount"
+msgstr "المبلغ بدون ضريبة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__amount_tax
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__tax_ids
+msgid "Taxes"
+msgstr "الضرائب"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__amount_total
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__total
+msgid "Total"
+msgstr "الإجمالي"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__purchase_order_id
+msgid "Purchase Order"
+msgstr "أمر الشراء"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__picking_id
+msgid "Receipt"
+msgstr "إيصال الاستلام"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__invoice_id
+msgid "Vendor Bill"
+msgstr "فاتورة المورد"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__payment_ids
+msgid "Registered Payments"
+msgstr "المدفوعات المسجلة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__reference
+msgid "Vendor Reference"
+msgstr "مرجع المورد"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__notes
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__notes
+msgid "Notes"
+msgstr "ملاحظات"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__auto_validate_bill
+msgid "Auto-Post Bill"
+msgstr "ترحيل الفاتورة تلقائياً"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__auto_register_payment
+msgid "Auto-Register Payment"
+msgstr "تسجيل الدفع تلقائياً"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__warehouse_id
+msgid "Warehouse"
+msgstr "المستودع"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__payment_method_id
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__name
+msgid "Payment Method"
+msgstr "طريقة الدفع"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__payment_term_id
+msgid "Payment Terms"
+msgstr "شروط الدفع"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__payment_state
+msgid "Payment Status"
+msgstr "حالة الدفع"
+
+#. module: easy_purchase
+#: model:ir.model.fields.selection,name:easy_purchase.selection__easy_purchase__payment_state__not_paid
+msgid "Not Paid"
+msgstr "غير مدفوع"
+
+#. module: easy_purchase
+#: model:ir.model.fields.selection,name:easy_purchase.selection__easy_purchase__payment_state__paid
+msgid "Paid"
+msgstr "مدفوع"
+
+#. module: easy_purchase
+#: model:ir.model.fields.selection,name:easy_purchase.selection__easy_purchase__payment_state__invoiced
+msgid "Fully Invoiced"
+msgstr "مفوتر بالكامل"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__product_id
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_barcode_wizard__product_id
+msgid "Product"
+msgstr "المنتج"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__description
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__name
+msgid "Description"
+msgstr "الوصف"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__quantity
+msgid "Quantity"
+msgstr "الكمية"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__uom_id
+msgid "Unit"
+msgstr "الوحدة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__price_unit
+msgid "Unit Price"
+msgstr "سعر الوحدة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__subtotal
+msgid "Subtotal"
+msgstr "المجموع الفرعي"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__tax_amount
+msgid "Tax Amount"
+msgstr "مبلغ الضريبة"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__purchase_id
+msgid "Purchase"
+msgstr "الشراء"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_barcode_wizard__line_id
+msgid "Purchase Line"
+msgstr "بند الشراء"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_barcode_wizard__quantity
+msgid "Number of Labels"
+msgstr "عدد الملصقات"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__journal_id
+msgid "Journal"
+msgstr "دفتر اليومية"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__journal_type
+msgid "Journal Type"
+msgstr "نوع دفتر اليومية"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__is_default
+msgid "Default Payment Method"
+msgstr "طريقة الدفع الافتراضية"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__is_vendor_account
+msgid "Vendor Account (Credit Purchase)"
+msgstr "حساب المورد (شراء بالآجل)"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase__is_credit_purchase
+msgid "Is Credit Purchase"
+msgstr "شراء بالآجل"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__sequence
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__sequence
+msgid "Sequence"
+msgstr "التسلسل"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_payment_method__active
+msgid "Active"
+msgstr "نشط"
+
+#. module: easy_purchase
+#: model:ir.model.fields,field_description:easy_purchase.field_easy_purchase_line__display_type
+msgid "Display Type"
+msgstr "نوع العرض"
+
+#. module: easy_purchase
+#: model:ir.ui.menu,name:easy_purchase.easy_purchase_menu_root
+msgid "Easy Purchase"
+msgstr "الشراء السريع"
+
+#. module: easy_purchase
+#: model:ir.ui.menu,name:easy_purchase.easy_purchase_menu_purchases
+msgid "Purchases"
+msgstr "المشتريات"
+
+#. module: easy_purchase
+#: model:ir.ui.menu,name:easy_purchase.easy_purchase_menu_action
+msgid "Purchase Entry"
+msgstr "إدخال شراء"
+
+#. module: easy_purchase
+#: model:ir.ui.menu,name:easy_purchase.easy_purchase_menu_configuration
+msgid "Configuration"
+msgstr "الإعدادات"
+
+#. module: easy_purchase
+#: model:ir.ui.menu,name:easy_purchase.easy_purchase_menu_payment_methods
+msgid "Payment Methods"
+msgstr "طرق الدفع"
+
+#. module: easy_purchase
+#: model:ir.ui.menu,name:easy_purchase.easy_purchase_menu_in_purchase
+msgid "Quick Purchase"
+msgstr "شراء سريع"
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "New"
+msgstr "جديد"
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "Please add at least one product line."
+msgstr "يرجى إضافة بند منتج واحد على الأقل."
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "Please select a Vendor."
+msgstr "يرجى اختيار المورد."
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "Please select a Payment Method."
+msgstr "يرجى اختيار طريقة الدفع."
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "Cannot cancel a completed purchase. Please reverse the related documents."
+msgstr "لا يمكن إلغاء عملية شراء مكتملة. يرجى عكس المستندات ذات الصلة."
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "Payment"
+msgstr "الدفع"
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase.py:0
+#, python-format
+msgid "Payments"
+msgstr "المدفوعات"
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase_payment_method.py:0
+#, python-format
+msgid "A payment method named \"%s\" already exists for this company."
+msgstr "طريقة دفع بنفس الاسم \"%s\" موجودة بالفعل لهذه الشركة."
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase_payment_method.py:0
+#, python-format
+msgid "A credit payment method already exists for this company: \"%s\".\nOnly one credit (Vendor Account) payment method is allowed per company."
+msgstr "طريقة دفع آجل موجودة بالفعل لهذه الشركة: \"%s\".\nيُسمح بطريقة دفع آجل واحدة فقط (حساب المورد) لكل شركة."
+
+#. module: easy_purchase
+#: code:addons/easy_purchase/models/easy_purchase_payment_method.py:0
+#, python-format
+msgid "The journal \"%s\" is already used by payment method \"%s\".\nEach payment method must use a different journal."
+msgstr "دفتر اليومية \"%s\" مستخدم بالفعل في طريقة الدفع \"%s\".\nيجب أن تستخدم كل طريقة دفع دفتر يومية مختلف."

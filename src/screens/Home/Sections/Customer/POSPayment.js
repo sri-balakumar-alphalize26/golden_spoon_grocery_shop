@@ -1,13 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ActivityIndicator, TouchableOpacity, ScrollView, StyleSheet, Modal, FlatList } from 'react-native';
+import {
+  View, Text, ActivityIndicator, TouchableOpacity, ScrollView, StyleSheet,
+  StatusBar, Platform, Dimensions, Alert, Modal,
+} from 'react-native';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
-import { COLORS } from '@constants/theme';
-import { NavigationHeader } from '@components/Header';
-import { Button } from '@components/common/Button';
-import { fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions, validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo } from '@api/services/generalApi';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
+import {
+  fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
+  validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
+} from '@api/services/generalApi';
 import { createPosOrderOdoo, createPosPaymentOdoo } from '@api/services/generalApi';
 import axios from 'axios';
-import ODOO_BASE_URL from '@api/config/odooConfig';
+import { getOdooUrl, getOdooDb } from '@api/config/odooConfig';
+import { useProductStore } from '@stores/product';
+import Toast from 'react-native-toast-message';
+
+// The default export from odooConfig is an empty string (runtime URL is only
+// available via getOdooUrl()). Use a helper so every call below hits the
+// authenticated host the user logged into.
+const odooHeaders = () => {
+  const db = getOdooDb();
+  return {
+    'Content-Type': 'application/json',
+    ...(db ? { 'X-Odoo-Database': db } : {}),
+  };
+};
+
+const NAVY = COLORS.primaryThemeColor;
+const NAVY_LIGHT = '#3d3768';
+const ORANGE = '#F47B20';
+
 // Helper to display numbers cleanly without floating point artifacts
 const displayNum = (n) => {
   const num = Number(n);
@@ -18,7 +41,7 @@ const displayNum = (n) => {
 // Helper to fetch all payment methods from Odoo
 const fetchAllPaymentMethods = async () => {
   try {
-    const response = await axios.post(`${ODOO_BASE_URL}/web/dataset/call_kw`, {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
       params: {
@@ -40,36 +63,36 @@ const fetchAllPaymentMethods = async () => {
     return [];
   }
 };
-  // Helper to fetch payment method id for a journal
-  const fetchPaymentMethodId = async (journalId) => {
-    try {
-      const response = await axios.post(`${ODOO_BASE_URL}/web/dataset/call_kw`, {
-        jsonrpc: '2.0',
-        method: 'call',
-        params: {
-          model: 'pos.payment.method',
-          method: 'search_read',
-          args: [[['journal_id', '=', journalId]]],
-          kwargs: { fields: ['id', 'name', 'journal_id'], limit: 1 },
-        },
-      }, { headers: { 'Content-Type': 'application/json' } });
-      const paymentMethodId = response.data?.result?.[0]?.id;
-      if (paymentMethodId) {
-        console.log('Fetched payment_method_id for journal', journalId, ':', paymentMethodId);
-      } else {
-        console.log('No payment_method_id found for journal', journalId);
-      }
-      return paymentMethodId;
-    } catch (e) {
-      console.error('Error fetching payment_method_id:', e);
-      return null;
+
+// Helper to fetch payment method id for a journal
+const fetchPaymentMethodId = async (journalId) => {
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.payment.method',
+        method: 'search_read',
+        args: [[['journal_id', '=', journalId]]],
+        kwargs: { fields: ['id', 'name', 'journal_id'], limit: 1 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const paymentMethodId = response.data?.result?.[0]?.id;
+    if (paymentMethodId) {
+      console.log('Fetched payment_method_id for journal', journalId, ':', paymentMethodId);
+    } else {
+      console.log('No payment_method_id found for journal', journalId);
     }
-  };
-import { useProductStore } from '@stores/product';
-import Toast from 'react-native-toast-message';
+    return paymentMethodId;
+  } catch (e) {
+    console.error('Error fetching payment_method_id:', e);
+    return null;
+  }
+};
 
 const POSPayment = ({ navigation, route }) => {
-    const [invoiceChecked, setInvoiceChecked] = useState(false);
+  const [invoiceChecked, setInvoiceChecked] = useState(false);
+  const [amountModalVisible, setAmountModalVisible] = useState(false);
   const {
     products = [],
     customer: initialCustomer,
@@ -77,7 +100,7 @@ const POSPayment = ({ navigation, route }) => {
     registerName,
     totalAmount,
     orderId,
-    discountAmount = 0
+    discountAmount = 0,
   } = route?.params || {};
   const [customer, setCustomer] = useState(initialCustomer);
   const openCustomerSelector = () => {
@@ -90,11 +113,11 @@ const POSPayment = ({ navigation, route }) => {
   };
   const [journals, setJournals] = useState([]);
   const [paymentMode, setPaymentMode] = useState('cash');
-    useEffect(() => {
-      if (paymentMode === 'account') {
-        console.log('Journals available for account payment:', journals);
-      }
-    }, [paymentMode, journals]);
+  useEffect(() => {
+    if (paymentMode === 'account') {
+      console.log('Journals available for account payment:', journals);
+    }
+  }, [paymentMode, journals]);
   const [selectedJournal, setSelectedJournal] = useState(null);
   const [paying, setPaying] = useState(false);
   const { clearProducts } = useProductStore();
@@ -103,17 +126,15 @@ const POSPayment = ({ navigation, route }) => {
   // Map journals to Odoo-style payment modes (cash / card / customer account)
   const getJournalForMode = (mode) => {
     if (!journals || journals.length === 0) return null;
-    const byName = (name) => journals.find(j => j.name && j.name.toLowerCase().includes(name));
+    const byName = (name) => journals.find((j) => j.name && j.name.toLowerCase().includes(name));
     if (mode === 'cash') {
-      // Use journal id 16 (Cash) for cash payments
-      return journals.find(j => j.id === 16) || journals.find(j => j.type === 'cash') || byName('cash') || journals.find(j => j.type === 'cashbox');
+      return journals.find((j) => j.id === 16) || journals.find((j) => j.type === 'cash') || byName('cash') || journals.find((j) => j.type === 'cashbox');
     }
     if (mode === 'card') {
-      return journals.find(j => j.type === 'bank') || byName('card') || byName('visa') || byName('master');
+      return journals.find((j) => j.type === 'bank') || byName('card') || byName('visa') || byName('master');
     }
     if (mode === 'account') {
-      // Prefer receivable/sale journals or ones with 'account' wording
-      return journals.find(j => j.type === 'sale') || journals.find(j => j.type === 'receivable') || byName('account') || journals[0];
+      return journals.find((j) => j.type === 'sale') || journals.find((j) => j.type === 'receivable') || byName('account') || journals[0];
     }
     return null;
   };
@@ -121,7 +142,7 @@ const POSPayment = ({ navigation, route }) => {
   // When payment mode or journals change, automatically pick the corresponding journal
   useEffect(() => {
     const j = getJournalForMode(paymentMode);
-      console.log('Mapping result for mode', paymentMode, j);
+    console.log('Mapping result for mode', paymentMode, j);
     setSelectedJournal(j);
   }, [paymentMode, journals]);
 
@@ -130,7 +151,7 @@ const POSPayment = ({ navigation, route }) => {
     const load = async () => {
       try {
         const list = await fetchPaymentJournalsOdoo();
-          console.log('Fetched journals from Odoo:', list);
+        console.log('Fetched journals from Odoo:', list);
         if (mounted) setJournals(list);
       } catch (e) {
         console.warn('Failed to load journals', e?.message || e);
@@ -145,10 +166,7 @@ const POSPayment = ({ navigation, route }) => {
   }, []);
 
   const computeTotal = () => {
-    // Use totalAmount from params if available, otherwise compute from products
-    if (totalAmount !== undefined && totalAmount !== null) {
-      return totalAmount;
-    }
+    if (totalAmount !== undefined && totalAmount !== null) return totalAmount;
     return (products || []).reduce((s, p) => s + ((p.price || 0) * (p.quantity || p.qty || 0)), 0);
   };
   const paidAmount = parseFloat(inputAmount) || 0;
@@ -183,33 +201,27 @@ const POSPayment = ({ navigation, route }) => {
   const handlePay = async () => {
     console.log('Customer before payment:', customer);
     console.log('Journal before payment:', selectedJournal);
+    setPaying(true);
     try {
-      // Build order lines
-      const lines = products.map(p => ({
+      const lines = products.map((p) => ({
         product_id: p.id,
         qty: p.quantity,
         price: p.price,
-        name: p.name || p.product_name || ''
+        name: p.name || p.product_name || '',
       }));
       const partnerId = customer?.id || customer?._id || null;
-      // Use companyId from session, user, or default to 1
-      const companyId = 1; // Replace with dynamic value if available
+      const companyId = 1;
 
-      // Automatically get posConfigId: prefer passed registerId, fallback to lookup by sessionId
       let posConfigId = route?.params?.registerId || route?.params?.posConfigId || null;
       if (!posConfigId && sessionId) {
         try {
-          const sessionList = await fetchPOSSessions({ limit: 10, offset: 0, state: '', });
+          const sessionList = await fetchPOSSessions({ limit: 10, offset: 0, state: '' });
           console.log('[POS CONFIG] Full session list:', sessionList);
-          const session = sessionList.find(s => s.id === sessionId);
+          const session = sessionList.find((s) => s.id === sessionId);
           console.log('[POS CONFIG] Session found for sessionId', sessionId, ':', session);
           if (session && session.config_id) {
-            // Odoo often returns many2one as [id, name]
-            if (Array.isArray(session.config_id)) {
-              posConfigId = session.config_id[0];
-            } else {
-              posConfigId = session.config_id;
-            }
+            if (Array.isArray(session.config_id)) posConfigId = session.config_id[0];
+            else posConfigId = session.config_id;
           } else {
             posConfigId = null;
           }
@@ -218,9 +230,8 @@ const POSPayment = ({ navigation, route }) => {
           console.warn('Failed to auto-fetch posConfigId from session:', e?.message || e);
         }
       }
-      // Use existing order if provided; only create if missing
       let createdOrderId = orderId || null;
-      let invoiceInfo = null; // will be populated if invoice is created
+      let invoiceInfo = null;
       if (!createdOrderId) {
         console.log('[STEP 1] No orderId passed to POSPayment. Creating a new order...');
         const posOrderPayload = { partnerId, lines, sessionId, posConfigId, companyId, orderName: '/' };
@@ -239,49 +250,26 @@ const POSPayment = ({ navigation, route }) => {
         }
       }
 
-      // Create payment in Odoo for cash or card mode
       if ((paymentMode === 'cash' || paymentMode === 'card') && selectedJournal) {
         try {
-          // Fetch payment method id for selected journal
           const paymentMethodId = await fetchPaymentMethodId(selectedJournal.id);
           if (!paymentMethodId) {
             Toast.show({ type: 'error', text1: 'Payment Error', text2: 'No payment method found for selected journal', position: 'bottom' });
             return;
           }
           const payments = [];
-          // Only create payment for the order total, not the amount received
-          // Change is calculated separately but not recorded as a negative payment
           if (paymentMode === 'cash') {
-            // For cash, create ONE payment for the order total
-            payments.push({
-              amount: total,
-              paymentMethodId,
-              journalId: selectedJournal.id,
-              paymentMode,
-            });
+            payments.push({ amount: total, paymentMethodId, journalId: selectedJournal.id, paymentMode });
             console.log(`💵 Cash payment: Total=${total}, Received=${paidAmount}, Change=${Math.abs(remaining)}`);
           } else if (paymentMode === 'card') {
-            // For card, create payment for the order total
-            payments.push({
-              amount: total,
-              paymentMethodId,
-              journalId: selectedJournal.id,
-              paymentMode,
-            });
+            payments.push({ amount: total, paymentMethodId, journalId: selectedJournal.id, paymentMode });
             console.log(`💳 Card payment: Total=${total}`);
           }
-          // Log each payment record for diagnostics
           payments.forEach((p, idx) => {
             const type = p.amount > 0 ? 'RECEIVED' : 'CHANGE';
             console.log(`[PAYMENT LOG] #${idx + 1} Type: ${type}, Amount: ${p.amount}, JournalId: ${p.journalId}, PaymentMethodId: ${p.paymentMethodId}`);
           });
-          const paymentPayload = {
-            orderId: createdOrderId,
-            payments,
-            partnerId,
-            sessionId,
-            companyId
-          };
+          const paymentPayload = { orderId: createdOrderId, payments, partnerId, sessionId, companyId };
           console.log('JSON-RPC payment payload:', paymentPayload);
           const paymentResp = await createPosPaymentOdoo(paymentPayload);
           console.log('Payment API response:', paymentResp);
@@ -290,16 +278,18 @@ const POSPayment = ({ navigation, route }) => {
             Toast.show({ type: 'error', text1: 'Payment Error', text2: paymentResp.error.message || JSON.stringify(paymentResp.error) || 'Failed to create payment', position: 'bottom' });
             return;
           }
-          
-          // Validate/finalize the order after successful payment (only if fully paid)
+
           const totalPaymentAmount = payments.reduce((sum, p) => sum + p.amount, 0);
           console.log('💰 Total payment amount:', totalPaymentAmount, 'Order total:', total);
           if (totalPaymentAmount >= total) {
             console.log('✅ Payments created. Updating order amount_paid before validation');
-            // Update order's amount_paid field
-            const updateResp = await updatePosOrderOdoo(createdOrderId, { 
+            // Persist partner_id on the order too — if the user picked the
+            // customer on the payment screen (and not on the register), it
+            // would otherwise never land on the Odoo pos.order record.
+            const updateResp = await updatePosOrderOdoo(createdOrderId, {
               amount_paid: total,
-              state: 'paid'
+              state: 'paid',
+              partner_id: partnerId || false,
             });
             if (updateResp && updateResp.error) {
               console.error('Order update error:', updateResp.error);
@@ -314,42 +304,36 @@ const POSPayment = ({ navigation, route }) => {
             } else {
               console.log('✅ Order validated successfully');
 
-              // Decide whether to create an invoice: user explicitly checked or a customer is present
               const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
               if (shouldCreateInvoice) {
                 try {
                   const actualTotal = Math.round(Number(totalAmount) * 1000) / 1000 || 0;
                   console.log('[INVOICE] Creating invoice for POS order', createdOrderId, 'totalAmount:', actualTotal);
 
-                  // Calculate gross total and ratio
                   const grossTotal = (products || []).reduce((sum, p) => sum + (Number(p.price || p.price_unit || 0) * Number(p.quantity || p.qty || 1)), 0);
                   const ratio = grossTotal > 0 ? actualTotal / grossTotal : 1;
 
-                  // Adjust prices proportionally
-                  const invoiceProducts = (products || []).map(p => ({
+                  const invoiceProducts = (products || []).map((p) => ({
                     id: p.id,
                     name: p.name || p.product_name || '',
                     quantity: Number(p.quantity || p.qty || 1),
                     price: Math.round(Number(p.price || p.price_unit || 0) * ratio * 1000) / 1000,
-                    tax_ids: p.tax_ids || []
+                    tax_ids: p.tax_ids || [],
                   }));
 
-                  // Adjust last item to ensure exact total match using 6 decimal precision
                   const currentTotal = Math.round(invoiceProducts.reduce((sum, p) => sum + (p.price * p.quantity), 0) * 1000000) / 1000000;
                   const diff = actualTotal - currentTotal;
                   console.log('[INVOICE] currentTotal:', currentTotal, 'actualTotal:', actualTotal, 'diff:', diff);
                   if (Math.abs(diff) > 0.0000001 && invoiceProducts.length > 0) {
                     const last = invoiceProducts[invoiceProducts.length - 1];
-                    // Use 6 decimal places for precision, Odoo will handle display rounding
                     const adjustedPrice = Math.round((last.price + diff / last.quantity) * 1000000) / 1000000;
                     console.log('[INVOICE] Adjusting last item price from', last.price, 'to', adjustedPrice);
                     last.price = adjustedPrice;
                   }
-                  // Final verification
                   const finalTotal = Math.round(invoiceProducts.reduce((sum, p) => sum + (p.price * p.quantity), 0) * 1000000) / 1000000;
                   console.log('[INVOICE] Final invoice total:', finalTotal, 'Expected:', actualTotal, 'Match:', Math.abs(finalTotal - actualTotal) < 0.0001);
 
-                  const invoiceDate = new Date().toISOString().slice(0,10);
+                  const invoiceDate = new Date().toISOString().slice(0, 10);
                   const invResp = await createInvoiceOdoo({ partnerId, products: invoiceProducts, invoiceDate, journalId: selectedJournal?.id || null });
                   console.log('[INVOICE] createInvoiceOdoo response:', invResp);
                   if (invResp && invResp.id) {
@@ -357,7 +341,6 @@ const POSPayment = ({ navigation, route }) => {
                     const invoiceNumber = invResp.invoiceStatus?.name || invResp.name || null;
                     invoiceInfo = { id: invoiceId, number: invoiceNumber };
 
-                    // Link invoice to POS order
                     try {
                       await linkInvoiceToPosOrderOdoo({ orderId: createdOrderId, invoiceId, setState: true, state: 'invoiced' });
                       console.log('[INVOICE] Linked invoice', invoiceId, 'to POS order', createdOrderId);
@@ -365,10 +348,9 @@ const POSPayment = ({ navigation, route }) => {
                       console.warn('[INVOICE] Failed to link invoice to POS order:', linkErr);
                     }
 
-                    // Optionally create account payment to mark invoice paid if full payment present
                     try {
-                      const totalPaymentAmount = (payments || []).reduce((s, p) => s + (p.amount || 0), 0);
-                      if (selectedJournal && selectedJournal.id && totalPaymentAmount >= total) {
+                      const totalPaymentAmount2 = (payments || []).reduce((s, p) => s + (p.amount || 0), 0);
+                      if (selectedJournal && selectedJournal.id && totalPaymentAmount2 >= total) {
                         try {
                           const payResp = await createAccountPaymentOdoo({ partnerId, journalId: selectedJournal.id, amount: total, invoiceId });
                           console.log('[INVOICE PAYMENT] createAccountPaymentOdoo response:', payResp);
@@ -399,7 +381,10 @@ const POSPayment = ({ navigation, route }) => {
         }
       }
 
-      // Proceed to receipt screen
+      // Clear the cart now that the order is paid + validated, so the
+      // register screen is empty next time the user navigates back.
+      try { clearProducts(); } catch (_) {}
+
       navigation.navigate('POSReceiptScreen', {
         orderId: createdOrderId,
         products,
@@ -410,255 +395,562 @@ const POSPayment = ({ navigation, route }) => {
         invoiceChecked,
         invoice: invoiceInfo,
         sessionId,
-        registerName
+        registerName,
       });
     } catch (e) {
       Toast.show({ type: 'error', text1: 'POS Error', text2: e?.message || 'Failed to create POS order', position: 'bottom' });
+    } finally {
+      setPaying(false);
     }
   };
 
+  // Mode → display config (kept inside render to access onPress closures cleanly)
+  const renderModeCard = (mode, label, icon, onPress) => {
+    const active = paymentMode === mode;
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.85}
+        style={[styles.modeCard, active && styles.modeCardActive]}
+      >
+        <View style={[styles.modeIconDisk, active && styles.modeIconDiskActive]}>
+          <MaterialIcons name={icon} size={22} color={active ? '#fff' : NAVY} />
+        </View>
+        <Text
+          style={[styles.modeLabel, active && styles.modeLabelActive]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderKey = (key) => {
+    const isQuickAdd = key.startsWith('+') && key !== '+/-';
+    const isAction = key === '⌫' || key === '+/-' || key === '.';
+    let style = styles.keyNumber;
+    let textStyle = styles.keyNumberText;
+    if (isQuickAdd) {
+      style = styles.keyQuickAdd;
+      textStyle = styles.keyQuickAddText;
+    } else if (isAction) {
+      style = styles.keyAction;
+      textStyle = styles.keyActionText;
+    }
+    return (
+      <TouchableOpacity
+        key={key}
+        onPress={() => handleKeypad(key)}
+        activeOpacity={0.7}
+        style={[styles.keyBase, style]}
+      >
+        <Text style={textStyle}>{key}</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const cashInsufficient = paymentMode === 'cash' && paidAmount < total;
+
+  // Tap handler for the bottom Validate button. Shows a styled popup when the
+  // user hasn't entered enough cash, otherwise runs the existing payment flow.
+  const onValidateTap = () => {
+    if (paying) return;
+    if (cashInsufficient) {
+      setAmountModalVisible(true);
+      return;
+    }
+    handlePay();
+  };
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.white }}>
-      <NavigationHeader title="Payment" onBackPress={() => navigation.goBack()} />
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
-        {/* Journal info removed — mapping remains internal */}
-        {/* Large Amount Display */}
-        <View style={{ alignItems: 'center', marginTop: 32, marginBottom: 12 }}>
-          <View style={{ backgroundColor: '#111827', paddingVertical: 16, paddingHorizontal: 28, borderRadius: 12 }}>
-            <Text style={{ fontSize: 60, fontWeight: 'bold', color: '#fff' }}>{displayNum(computeTotal())}</Text>
+    <SafeAreaView backgroundColor={NAVY}>
+      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
+
+      {/* Hero header — flat navy, no gloss/two-tone */}
+      <View style={styles.hero}>
+        <View style={styles.heroTopRow}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.heroIconBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <MaterialIcons name="arrow-back" size={22} color="#fff" />
+          </TouchableOpacity>
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={styles.heroTitle}>Payment</Text>
+            {registerName ? <Text style={styles.heroSubtitle} numberOfLines={1}>{registerName}</Text> : null}
           </View>
+          {/* Transparent spacer — same width as the back button so the title stays centered */}
+          <View style={styles.heroSpacer} />
         </View>
 
-        {/* Payment Mode Cards */}
-        <View style={{ flexDirection: 'row', justifyContent: 'center', marginBottom: 18 }}>
-          <TouchableOpacity onPress={async () => {
-            setPaymentMode('cash');
-            // Use journal id 16 for cash
-            const cashJournal = journals.find(j => j.id === 16) || journals.find(j => j.type === 'cash') || { id: 16, name: 'Cash', type: 'cash' };
-            setSelectedJournal(cashJournal);
-            setTimeout(async () => {
-              console.log('Cash card selected, journal id:', cashJournal.id);
-              // Fetch and log full payment method details for journal id 9
-              try {
-                const response = await axios.post(`${ODOO_BASE_URL}/web/dataset/call_kw`, {
-                  jsonrpc: '2.0',
-                  method: 'call',
-                  params: {
-                    model: 'pos.payment.method',
-                    method: 'search_read',
-                    args: [[['journal_id', '=', cashJournal.id]]],
-                    kwargs: { fields: ['id', 'name', 'journal_id', 'is_cash_count', 'receivable_account_id', 'split_transactions'], limit: 10 },
-                  },
-                }, { headers: { 'Content-Type': 'application/json' } });
-                const methods = response.data?.result || [];
-                if (methods.length > 0) {
-                  console.log('Payment method(s) for journal', cashJournal.id, ':', methods);
-                } else {
-                  console.log('No payment method found for journal', cashJournal.id);
-                }
-                  // Also fetch and log all payment methods for diagnostics
+        <Text style={styles.totalLabel}>TOTAL</Text>
+        <Text style={styles.totalValue}>{displayNum(total)}</Text>
+      </View>
+
+      <View style={styles.surface}>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 110 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Payment Mode segmented control */}
+          <View style={styles.modeRow}>
+            {renderModeCard('cash', 'Cash', 'payments', async () => {
+              setPaymentMode('cash');
+              const cashJournal = journals.find((j) => j.id === 16) || journals.find((j) => j.type === 'cash') || { id: 16, name: 'Cash', type: 'cash' };
+              setSelectedJournal(cashJournal);
+              setTimeout(async () => {
+                console.log('Cash card selected, journal id:', cashJournal.id);
+                try {
+                  const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+                    jsonrpc: '2.0',
+                    method: 'call',
+                    params: {
+                      model: 'pos.payment.method',
+                      method: 'search_read',
+                      args: [[['journal_id', '=', cashJournal.id]]],
+                      kwargs: { fields: ['id', 'name', 'journal_id', 'is_cash_count', 'receivable_account_id', 'split_transactions'], limit: 10 },
+                    },
+                  }, { headers: { 'Content-Type': 'application/json' } });
+                  const methods = response.data?.result || [];
+                  if (methods.length > 0) console.log('Payment method(s) for journal', cashJournal.id, ':', methods);
+                  else console.log('No payment method found for journal', cashJournal.id);
                   await fetchAllPaymentMethods();
-              } catch (e) {
-                console.error('Error fetching payment method details:', e);
-              }
-            }, 100);
-          }} style={[styles.modeCard, paymentMode === 'cash' && styles.modeCardSelected]}>
-            <Text style={styles.modeCardIcon}>💵</Text>
-            <Text style={[styles.modeCardText, paymentMode === 'cash' && styles.modeCardTextSelected]}>Cash</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={async () => {
-            setPaymentMode('card');
-            // Always use journal id 6 for card
-            const cardJournal = journals.find(j => j.id === 6) || journals.find(j => j.type === 'bank');
-            setSelectedJournal(cardJournal);
-            setTimeout(async () => {
-              if (cardJournal) {
-                console.log('Card payment selected, journal id:', cardJournal.id);
-                const paymentMethodId = await fetchPaymentMethodId(cardJournal.id);
-                // This will log: Fetched payment_method_id for journal ...
-              } else {
-                console.log('Card payment selected, no journal mapped');
-              }
-            }, 100);
-          }} style={[styles.modeCard, paymentMode === 'card' && styles.modeCardSelected]}>
-              <Text style={styles.modeCardIcon}>💳</Text>
-              <Text style={[styles.modeCardText, paymentMode === 'card' && styles.modeCardTextSelected]}>Card</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={async () => {
-                setPaymentMode('card');
-                setTimeout(async () => {
-                  if (selectedJournal) {
-                    console.log('Card payment selected, journal id:', selectedJournal.id);
-                    try {
-                      const response = await axios.post(`${ODOO_BASE_URL}/web/dataset/call_kw`, {
-                        jsonrpc: '2.0',
-                        method: 'call',
-                        params: {
-                          model: 'pos.payment.method',
-                          method: 'search_read',
-                          args: [[['journal_id', '=', selectedJournal.id]]],
-                          kwargs: { fields: ['id', 'name', 'journal_id', 'is_cash_count', 'receivable_account_id', 'split_transactions'], limit: 10 },
-                        },
-                      }, { headers: { 'Content-Type': 'application/json' } });
-                      const methods = response.data?.result || [];
-                      if (methods.length > 0) {
-                        console.log('Payment method(s) for journal', selectedJournal.id, ':', methods);
-                      } else {
-                        console.log('No payment method found for journal', selectedJournal.id);
-                      }
-                      await fetchAllPaymentMethods();
-                    } catch (e) {
-                      console.error('Error fetching payment method details:', e);
-                    }
-                  } else {
-                    console.log('Card payment selected, no journal mapped');
-                  }
-                }, 100);
-              }}
-              style={{ display: 'none' }}
-            />
-          <TouchableOpacity onPress={async () => {
-            setPaymentMode('account');
-            setTimeout(async () => {
-              if (selectedJournal) {
-                console.log('Customer Account card selected, journal id:', selectedJournal.id);
-                await fetchPaymentMethodId(selectedJournal.id);
-              } else {
-                console.log('Customer Account card selected, no journal mapped');
-              }
-            }, 100);
-          }} style={[styles.modeCard, paymentMode === 'account' && styles.modeCardSelected]}>
-            <Text style={styles.modeCardIcon}>🏦</Text>
-            <Text style={[styles.modeCardText, paymentMode === 'account' && styles.modeCardTextSelected]}>Customer Account</Text>
-          </TouchableOpacity>
-        </View>
+                } catch (e) { console.error('Error fetching payment method details:', e); }
+              }, 100);
+            })}
+            {renderModeCard('card', 'Card', 'credit-card', async () => {
+              setPaymentMode('card');
+              const cardJournal = journals.find((j) => j.id === 6) || journals.find((j) => j.type === 'bank');
+              setSelectedJournal(cardJournal);
+              setTimeout(async () => {
+                if (cardJournal) {
+                  console.log('Card payment selected, journal id:', cardJournal.id);
+                  await fetchPaymentMethodId(cardJournal.id);
+                } else {
+                  console.log('Card payment selected, no journal mapped');
+                }
+              }, 100);
+            })}
+            {renderModeCard('account', 'Customer\nAccount', 'account-balance-wallet', async () => {
+              setPaymentMode('account');
+              setTimeout(async () => {
+                if (selectedJournal) {
+                  console.log('Customer Account card selected, journal id:', selectedJournal.id);
+                  await fetchPaymentMethodId(selectedJournal.id);
+                } else {
+                  console.log('Customer Account card selected, no journal mapped');
+                }
+              }, 100);
+            })}
+          </View>
 
-        {/* Payment Input and Keypad */}
-        <View style={{ alignItems: 'center', marginBottom: 18 }}>
-          <View style={{
-            width: '80%',
-            backgroundColor: '#f6f8fa',
-            borderRadius: 18,
-            padding: 20,
-            alignItems: 'center',
-            marginBottom: 12,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.12,
-            shadowRadius: 8,
-            elevation: 4,
-          }}>
+          {/* Amount input panel */}
+          <View style={styles.inputCard}>
+            <Text style={styles.inputModeLabel}>
+              {paymentMode === 'account' ? 'CHARGED TO ACCOUNT' : (paymentMode === 'card' ? 'CARD' : 'CASH')}
+            </Text>
+
             {paymentMode === 'account' ? (
-              <>
-                <Text style={{ color: '#2b6cb0', fontSize: 22, marginTop: 6 }}>Amount to be charged to account</Text>
-                <Text style={{ color: '#2b6cb0', fontSize: 26, fontWeight: 'bold', marginBottom: 8 }}>{displayNum(total)}</Text>
-              </>
+              <Text style={styles.inputAmount}>{displayNum(total)}</Text>
             ) : (
-              <>
-                <Text style={{ fontSize: 26, color: '#222', marginBottom: 8, fontWeight: 'bold' }}>
-                  {paymentMode === 'card' ? 'Card' : 'Cash'}
+              <View style={styles.inputRow}>
+                <Text style={styles.inputAmount}>
+                  {inputAmount ? displayNum(parseFloat(inputAmount)) : '0'}
                 </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-                  <Text style={{ fontSize: 36, color: '#222', textAlign: 'center', flex: 1, fontWeight: 'bold' }}>{inputAmount ? displayNum(parseFloat(inputAmount)) : '0'}</Text>
-                  {inputAmount ? (
-                    <TouchableOpacity onPress={() => setInputAmount('')} style={{ marginLeft: 8 }}>
-                      <Text style={{ fontSize: 28, color: '#c00', fontWeight: 'bold' }}>✕</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                {remaining < 0 ? (
-                  <>
-                    <Text style={{ color: 'green', fontSize: 22, marginTop: 6 }}>Change</Text>
-                    <Text style={{ color: 'green', fontSize: 26, fontWeight: 'bold', marginBottom: 8 }}>{displayNum(Math.abs(remaining))}</Text>
-                  </>
-                ) : (
-                  <>
-                    <Text style={{ color: '#c00', fontSize: 22, marginTop: 6 }}>Remaining</Text>
-                    <Text style={{ color: '#c00', fontSize: 26, fontWeight: 'bold', marginBottom: 8 }}>{displayNum(remaining)}</Text>
-                  </>
-                )}
-              </>
-            )}
-          </View>
-
-          {/* Keypad */}
-          <View style={{
-            backgroundColor: '#f6f8fa',
-            borderRadius: 18,
-            padding: 18,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.10,
-            shadowRadius: 6,
-            elevation: 3,
-            marginTop: 4,
-          }}>
-            {keypadRows.map((row, i) => (
-              <View key={i} style={{ flexDirection: 'row', justifyContent: 'center', marginBottom: 12 }}>
-                {row.map((key) => {
-                  const isAction = key === 'C' || key === '⌫' || key.startsWith('+');
-                  return (
-                    <TouchableOpacity
-                      key={key}
-                      onPress={() => handleKeypad(key)}
-                      style={{
-                        width: 80,
-                        height: 64,
-                        backgroundColor: isAction ? '#2b6cb0' : '#fff',
-                        borderRadius: 14,
-                        marginHorizontal: 10,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderWidth: 1,
-                        borderColor: isAction ? '#255a95' : '#eee',
-                        shadowColor: isAction ? '#2b6cb0' : '#000',
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: isAction ? 0.18 : 0.08,
-                        shadowRadius: 4,
-                        elevation: isAction ? 2 : 1,
-                      }}
-                    >
-                      <Text style={{ fontSize: 28, color: isAction ? '#fff' : '#222', fontWeight: key.startsWith('+') || isAction ? 'bold' : 'normal' }}>{key}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                {inputAmount ? (
+                  <TouchableOpacity onPress={() => setInputAmount('')} style={styles.clearBtn}>
+                    <MaterialIcons name="close" size={20} color="#dc2626" />
+                  </TouchableOpacity>
+                ) : null}
               </View>
-            ))}
-          </View>
-        </View>
+            )}
 
-        {/* Customer/Validate */}
-          <View style={{ marginHorizontal: 18, marginTop: 10 }}>
-            <TouchableOpacity onPress={openCustomerSelector} style={{
-              backgroundColor: '#f6f8fa',
-              borderRadius: 16,
-              paddingVertical: 24,
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: '#eee',
-              elevation: 2,
-              flexDirection: 'column',
-              justifyContent: 'center',
-            }}>
-              <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#222' }}>Customer</Text>
-              <Text style={{ fontSize: 22, color: '#444', marginTop: 4 }}>{customer?.name || 'Select'}</Text>
+            {paymentMode !== 'account' ? (
+              <View style={styles.statusPillRow}>
+                {remaining > 0 ? (
+                  <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
+                    <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
+                    <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
+                      Remaining {displayNum(remaining)}
+                    </Text>
+                  </View>
+                ) : remaining < 0 ? (
+                  <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
+                    <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
+                    <Text style={[styles.statusPillText, { color: '#15803d' }]}>
+                      Change {displayNum(Math.abs(remaining))}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={[styles.statusPill, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+                    <MaterialIcons name="check-circle" size={14} color="#1d4ed8" />
+                    <Text style={[styles.statusPillText, { color: '#1d4ed8' }]}>Exact amount</Text>
+                  </View>
+                )}
+              </View>
+            ) : null}
+          </View>
+
+          {/* Keypad — only useful for cash/card */}
+          {paymentMode !== 'account' ? (
+            <View style={styles.keypadCard}>
+              {keypadRows.map((row, i) => (
+                <View key={i} style={styles.keyRow}>
+                  {row.map((k) => renderKey(k))}
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {/* Options strip: Customer only */}
+          <View style={styles.optionsCard}>
+            <TouchableOpacity
+              onPress={openCustomerSelector}
+              style={[styles.optionRow, customer ? styles.optionRowActive : null]}
+              activeOpacity={0.85}
+            >
+              <View style={[styles.optionIcon, customer && { backgroundColor: '#dcfce7' }]}>
+                <MaterialIcons name="person" size={18} color={customer ? '#15803d' : NAVY} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.optionLabel}>Customer</Text>
+                <Text style={styles.optionValue} numberOfLines={1}>
+                  {customer?.name || 'No customer selected'}
+                </Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
             </TouchableOpacity>
           </View>
-        <View style={{ alignItems: 'center', marginTop: 18, marginBottom: 20 }}>
-          <Button title="Validate" onPress={handlePay} style={{ width: '90%', paddingVertical: 16, borderRadius: 10 }} textStyle={{ fontSize: 20 }} />
+        </ScrollView>
+
+        {/* Validate footer — solid orange, always tappable; popup if cash short */}
+        <View style={styles.footer}>
+          <TouchableOpacity
+            onPress={onValidateTap}
+            activeOpacity={0.85}
+            style={styles.validateBtn}
+          >
+            <View style={styles.validateInner}>
+              {paying ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <MaterialIcons name="check-circle" size={20} color="#fff" />
+                  <Text style={styles.validateText}>Validate Payment</Text>
+                </>
+              )}
+            </View>
+          </TouchableOpacity>
         </View>
-      </ScrollView>
+      </View>
+
+      {/* Amount Required popup — styled like LogoutModal */}
+      <Modal
+        visible={amountModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setAmountModalVisible(false)}
+      >
+        <View style={styles.alertBg}>
+          <View style={styles.alertCard}>
+            <View style={styles.alertIconDisk}>
+              <MaterialCommunityIcons name="cash-multiple" size={28} color={ORANGE} />
+            </View>
+            <Text style={styles.alertTitle}>Amount Required</Text>
+            <Text style={styles.alertText}>
+              Please enter the cash received. You still need {displayNum(remaining)} to cover the total.
+            </Text>
+            <TouchableOpacity
+              onPress={() => setAmountModalVisible(false)}
+              style={styles.alertOkBtn}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.alertOkText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
 export default POSPayment;
 
+const ctaShadow = (color) => Platform.select({
+  ios: { shadowColor: color, shadowOpacity: 0.32, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+  android: { elevation: 7 },
+});
+
+const cardShadow = Platform.select({
+  ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } },
+  android: { elevation: 4 },
+});
+
 const styles = StyleSheet.create({
-  modeCard: { flex: 1, marginHorizontal: 6, backgroundColor: '#f6f8fa', borderRadius: 12, paddingVertical: 18, alignItems: 'center', borderWidth: 2, borderColor: '#eee', elevation: 2 },
-  modeCardSelected: { backgroundColor: '#2b6cb0', borderColor: '#255a95' },
-  modeCardIcon: { fontSize: 28, marginBottom: 8 },
-  modeCardText: { color: '#222', fontWeight: '700', fontSize: 18 },
-  modeCardTextSelected: { color: '#fff' },
+  // Hero — compact
+  hero: {
+    backgroundColor: NAVY,
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 38,
+  },
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  heroIconBtn: {
+    width: 32, height: 32, borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  // Same-size transparent spacer so the title stays centred without showing
+  // a tinted empty square on the right.
+  heroSpacer: {
+    width: 32, height: 32,
+    backgroundColor: 'transparent',
+  },
+  heroTitle: {
+    color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.3,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  heroSubtitle: {
+    color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: '500',
+    marginTop: 1, fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  totalLabel: {
+    color: 'rgba(255,255,255,0.65)', fontSize: 10,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    letterSpacing: 1, textAlign: 'center', marginBottom: 4,
+  },
+  totalValue: {
+    color: '#fff', fontSize: 30,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center', letterSpacing: 0.4,
+  },
+
+  // Surface
+  surface: {
+    flex: 1,
+    backgroundColor: '#f6f7fb',
+    borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    marginTop: -22,
+  },
+
+  // Payment mode segmented control — smaller cards
+  modeRow: {
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6,
+  },
+  modeCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#eef0f5',
+    ...cardShadow,
+  },
+  modeCardActive: {
+    backgroundColor: NAVY, borderColor: NAVY, ...ctaShadow(NAVY),
+  },
+  modeIconDisk: {
+    width: 34, height: 34, borderRadius: 11,
+    backgroundColor: '#eef0f5',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 5,
+  },
+  modeIconDiskActive: { backgroundColor: 'rgba(255,255,255,0.18)' },
+  modeLabel: {
+    fontSize: 11, color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center', letterSpacing: 0.2,
+  },
+  modeLabelActive: { color: '#fff' },
+
+  // Input card — tighter
+  inputCard: {
+    marginHorizontal: 12, marginTop: 6, marginBottom: 6,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 12, paddingHorizontal: 14,
+    ...cardShadow,
+  },
+  inputModeLabel: {
+    fontSize: 10, color: '#8896ab',
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    letterSpacing: 1, marginBottom: 4, textAlign: 'center',
+  },
+  inputRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  inputAmount: {
+    flex: 1,
+    fontSize: 26, color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center', letterSpacing: 0.3,
+  },
+  clearBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 4,
+  },
+  statusPillRow: {
+    flexDirection: 'row', justifyContent: 'center', marginTop: 6,
+  },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 999, borderWidth: 1,
+  },
+  statusPillText: {
+    fontSize: 11, fontFamily: FONT_FAMILY.urbanistBold, marginLeft: 3,
+  },
+
+  // Keypad — compact
+  keypadCard: {
+    marginHorizontal: 12, marginTop: 6,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 8, paddingHorizontal: 8,
+    ...cardShadow,
+  },
+  keyRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  keyBase: {
+    flex: 1, aspectRatio: 1.7, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    marginHorizontal: 3,
+  },
+  keyNumber: {
+    backgroundColor: '#f8f9fc', borderWidth: 1, borderColor: '#eef0f5',
+  },
+  keyNumberText: {
+    fontSize: 17, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  keyQuickAdd: {
+    backgroundColor: ORANGE,
+    ...ctaShadow(ORANGE),
+  },
+  keyQuickAddText: {
+    fontSize: 13, color: '#fff', fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  keyAction: {
+    backgroundColor: '#eef0f5',
+  },
+  keyActionText: {
+    fontSize: 15, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold,
+  },
+
+  // Options card — tighter
+  optionsCard: {
+    marginHorizontal: 12, marginTop: 6,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 2, paddingHorizontal: 12,
+    ...cardShadow,
+  },
+  optionRow: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 9,
+  },
+  optionRowActive: {},
+  optionIcon: {
+    width: 30, height: 30, borderRadius: 10,
+    backgroundColor: '#eef0f5',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  optionLabel: {
+    fontSize: 10, color: '#8896ab',
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  optionValue: {
+    fontSize: 12, color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold, marginTop: 1,
+  },
+  optionDivider: { height: 1, backgroundColor: '#f1f2f6' },
+  toggleTrack: {
+    width: 36, height: 20, borderRadius: 10,
+    backgroundColor: '#e5e7eb', justifyContent: 'center', paddingHorizontal: 2,
+  },
+  toggleTrackOn: { backgroundColor: ORANGE },
+  toggleThumb: {
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: '#fff',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+      android: { elevation: 2 },
+    }),
+  },
+  toggleThumbOn: { transform: [{ translateX: 16 }] },
+
+  // Footer — slimmer
+  footer: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    ...Platform.select({
+      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: -4 } },
+      android: { elevation: 12 },
+    }),
+  },
+  validateBtn: {
+    backgroundColor: ORANGE,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center', justifyContent: 'center',
+    ...ctaShadow(ORANGE),
+  },
+  validateInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+
+  // Amount-required alert — same look as the LogoutModal-style close popup
+  alertBg: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center', alignItems: 'center', padding: 18,
+  },
+  alertCard: {
+    width: '100%', maxWidth: 380,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 2, borderColor: NAVY,
+    paddingVertical: 22, paddingHorizontal: 18,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } },
+      android: { elevation: 14 },
+    }),
+  },
+  alertIconDisk: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#fff7ed',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 12,
+  },
+  alertTitle: {
+    fontSize: 17, fontWeight: '800', color: '#1a1a2e',
+    textAlign: 'center', marginBottom: 6,
+  },
+  alertText: {
+    fontSize: 13, color: '#6b7280',
+    textAlign: 'center', lineHeight: 18,
+    marginBottom: 18, paddingHorizontal: 4,
+  },
+  alertOkBtn: {
+    alignSelf: 'stretch',
+    paddingVertical: 14, borderRadius: 10,
+    backgroundColor: NAVY,
+    alignItems: 'center', justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: NAVY, shadowOpacity: 0.32, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 5 },
+    }),
+  },
+  alertOkText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.4 },
+  validateText: {
+    color: '#fff', fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3, marginLeft: 4,
+  },
 });

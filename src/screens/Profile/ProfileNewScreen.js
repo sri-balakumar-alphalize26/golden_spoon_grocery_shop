@@ -1,177 +1,291 @@
 import React, { useState } from 'react';
-import { View, Image, StyleSheet } from 'react-native';
-import { SafeAreaView, ButtonContainer } from '@components/containers';
+import { View, Image, ScrollView, StyleSheet, TouchableOpacity, StatusBar } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { SafeAreaView } from '@components/containers';
 import Text from '@components/Text';
-import { Button } from '@components/common/Button';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CommonActions } from '@react-navigation/native';
 import { LogoutModal } from '@components/Modal';
+import { version as appVersion } from '../../../package.json';
+
+const NAVY = COLORS.primaryThemeColor;
 
 const ProfileNewScreen = ({ navigation }) => {
   const user = useAuthStore((s) => s.user);
   const [isVisible, setIsVisible] = useState(false);
+  const hideLogoutAlert = () => setIsVisible(false);
 
-  const displayName = (
+  const displayName =
     user?.related_profile?.name ||
     user?.user_name ||
     user?.name ||
     user?.username ||
-    'User'
-  );
-
-  const companyName = (
-    user?.company?.name?.toUpperCase?.() ||
-    (Array.isArray(user?.company_id) && user?.company_id?.[1]?.toUpperCase?.()) ||
-    (typeof user?.company_id === 'string' ? user?.company_id?.toUpperCase?.() : undefined) ||
-    user?.user_companies?.current_company?.name?.toUpperCase?.() ||
-    null
-  );
+    'User';
 
   const subtitle = user?.user_name || user?.username || user?.login || null;
 
-  const onLogout = async () => {
+  const details = [
+    { icon: 'fingerprint', label: 'User ID', value: user?.uid ?? '-', color: '#2196F3' },
+    {
+      icon: 'storage',
+      label: 'Database',
+      value: user?.odoo_db || user?.db || user?.database || '-',
+      color: '#FF9800',
+    },
+    {
+      icon: 'admin-panel-settings',
+      label: 'Role',
+      value: user?.is_admin ? 'Admin' : 'User',
+      color: '#9C27B0',
+    },
+    {
+      icon: 'alternate-email',
+      label: 'Login',
+      value: user?.login || user?.user_email || subtitle || '-',
+      color: '#00897B',
+    },
+  ];
+
+  const handleLogout = async () => {
     try {
       await AsyncStorage.removeItem('userData');
-    } catch {}
-    navigation.reset({ index: 0, routes: [{ name: 'Splash' }] });
+      try {
+        const allKeys = await AsyncStorage.getAllKeys();
+        const cartKeys = allKeys.filter((k) => k.startsWith('cart_'));
+        if (cartKeys.length > 0) await AsyncStorage.multiRemove(cartKeys);
+      } catch (_) {}
+      navigation.dispatch(
+        CommonActions.reset({ index: 0, routes: [{ name: 'Splash' }] })
+      );
+    } catch (e) {
+      console.error('Error logging out:', e);
+    } finally {
+      hideLogoutAlert();
+    }
   };
 
   return (
-    <SafeAreaView backgroundColor={COLORS.white}>
-      <View style={styles.container}>
+    <SafeAreaView backgroundColor={NAVY}>
+      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Navy header banner with company logo */}
+        <View style={styles.header}>
+          <Image
+            source={require('@assets/images/header/logo_header.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+        </View>
+
+        {/* Profile card */}
         <View style={styles.card}>
-          <View style={styles.avatarWrap}>
-            <Image
-              source={require('@assets/images/Profile/user.png')}
-              style={styles.avatar}
-              resizeMode="contain"
-            />
-          </View>
-          <Text style={styles.name}>{displayName}</Text>
-          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-          {companyName ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{companyName}</Text>
+          {/* Human round avatar — preserved per request (image, not initial) */}
+          <View style={styles.avatarWrapper}>
+            <View style={styles.avatarRing}>
+              <Image
+                source={require('@assets/images/Profile/user.png')}
+                style={styles.avatar}
+                resizeMode="contain"
+              />
             </View>
-          ) : null}
+          </View>
+
+          <Text style={styles.username}>{displayName}</Text>
+          <View style={styles.connectedBadge}>
+            <MaterialIcons name="verified" size={13} color="#4CAF50" />
+            <Text style={styles.connectedText}>Connected</Text>
+          </View>
+
+          <View style={styles.dividerLine} />
+
+          {/* Account Details rows */}
+          {details.map((item, index) => (
+            <View key={index} style={{ width: '100%' }}>
+              <View style={styles.row}>
+                <View style={[styles.iconBox, { backgroundColor: item.color + '18' }]}>
+                  <MaterialIcons name={item.icon} size={20} color={item.color} />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.label}>{item.label}</Text>
+                  <Text style={styles.value} numberOfLines={1}>{String(item.value)}</Text>
+                </View>
+              </View>
+              {index < details.length - 1 && <View style={styles.divider} />}
+            </View>
+          ))}
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.row}>
-            <Text style={styles.label}>Account</Text>
-            <Text style={styles.value}>Signed in</Text>
-          </View>
-          {subtitle ? (
-            <View style={styles.rowDivider} />
-          ) : null}
-          {subtitle ? (
-            <View style={styles.row}>
-              <Text style={styles.label}>Username</Text>
-              <Text style={styles.value}>{subtitle}</Text>
-            </View>
-          ) : null}
-        </View>
+        {/* Logout button */}
+        <TouchableOpacity
+          style={styles.logoutButton}
+          activeOpacity={0.85}
+          onPress={() => setIsVisible(true)}
+        >
+          <MaterialIcons name="logout" size={20} color="#fff" />
+          <Text style={styles.logoutText}>Logout</Text>
+        </TouchableOpacity>
 
-        <ButtonContainer>
-          <Button title="LOGOUT" paddingHorizontal={50} onPress={() => setIsVisible(true)} />
-        </ButtonContainer>
-      </View>
+        <Text style={styles.version}>Powered by 369ai  |  v{appVersion}</Text>
+      </ScrollView>
 
       <LogoutModal
         isVisible={isVisible}
-        hideLogoutAlert={() => setIsVisible(false)}
-        handleLogout={onLogout}
+        hideLogoutAlert={hideLogoutAlert}
+        handleLogout={handleLogout}
       />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.white,
+  content: {
+    flexGrow: 1,
+    backgroundColor: '#F2F4F8',
+    paddingBottom: 100,
+  },
+  header: {
+    backgroundColor: NAVY,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 30,
+    paddingBottom: 100,
+  },
+  logo: {
+    width: 320,
+    height: 128,
+    backgroundColor: 'transparent',
   },
   card: {
-    marginTop: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
     marginHorizontal: 16,
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    paddingVertical: 20,
-    paddingHorizontal: 16,
-    alignItems: 'center',
+    marginTop: -40,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    paddingTop: 60,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 5,
+    alignItems: 'center',
   },
-  avatarWrap: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+  // Avatar — kept as the human round IMAGE (user.png) per user request.
+  avatarWrapper: {
+    position: 'absolute',
+    top: -44,
+    alignSelf: 'center',
+    borderRadius: 44,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  avatarRing: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: '#f5f6fa',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    overflow: 'hidden',
   },
   avatar: {
-    width: 90,
-    height: 90,
+    width: 76,
+    height: 76,
   },
-  name: {
+  username: {
     fontSize: 22,
     fontFamily: FONT_FAMILY.urbanistBold,
-    color: '#242760',
+    color: NAVY,
+    marginBottom: 4,
   },
-  subtitle: {
-    marginTop: 4,
-    fontSize: 14,
-    color: '#60636c',
-    fontFamily: FONT_FAMILY.urbanistRegular,
+  connectedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    marginBottom: 20,
   },
-  badge: {
-    marginTop: 10,
-    backgroundColor: '#f3f4f6',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
+  connectedText: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#4CAF50',
   },
-  badgeText: {
-    fontFamily: FONT_FAMILY.urbanistSemiBold,
-    color: '#111827',
-  },
-  section: {
-    marginTop: 20,
-    backgroundColor: '#fff',
-    marginHorizontal: 16,
-    borderRadius: 12,
-    paddingVertical: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
+  dividerLine: {
+    width: '100%',
+    height: 1,
+    backgroundColor: '#ECECEC',
+    marginBottom: 16,
   },
   row: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 12,
+    width: '100%',
   },
-  rowDivider: {
-    height: 1,
-    backgroundColor: '#f1f2f6',
-    marginHorizontal: 16,
+  iconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowText: {
+    flex: 1,
+    marginLeft: 14,
   },
   label: {
-    fontFamily: FONT_FAMILY.urbanistSemiBold,
-    color: '#4b5563',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: COLORS.gray,
+    marginBottom: 2,
   },
   value: {
+    fontSize: 16,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: NAVY,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#F0F0F0',
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 18,
+    paddingVertical: 14,
+    backgroundColor: '#e74c3c',
+    borderRadius: 14,
+    shadowColor: '#e74c3c',
+    shadowOpacity: 0.32,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
+  },
+  logoutText: {
+    color: '#fff',
+    fontSize: 15,
     fontFamily: FONT_FAMILY.urbanistBold,
-    color: '#111827',
+    letterSpacing: 0.4,
+  },
+  version: {
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#B0B0B0',
+    textAlign: 'center',
+    marginTop: 20,
   },
 });
 

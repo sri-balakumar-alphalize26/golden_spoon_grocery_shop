@@ -1,0 +1,9 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_easy_purchase_user,easy.purchase.user,model_easy_purchase,purchase.group_purchase_user,1,1,1,0
+access_easy_purchase_manager,easy.purchase.manager,model_easy_purchase,purchase.group_purchase_manager,1,1,1,1
+access_easy_purchase_line_user,easy.purchase.line.user,model_easy_purchase_line,purchase.group_purchase_user,1,1,1,0
+access_easy_purchase_line_manager,easy.purchase.line.manager,model_easy_purchase_line,purchase.group_purchase_manager,1,1,1,1
+access_easy_purchase_payment_method_user,easy.purchase.payment.method.user,model_easy_purchase_payment_method,purchase.group_purchase_user,1,0,0,0
+access_easy_purchase_payment_method_manager,easy.purchase.payment.method.manager,model_easy_purchase_payment_method,purchase.group_purchase_manager,1,1,1,1
+access_easy_purchase_barcode_wizard_user,easy.purchase.barcode.wizard.user,model_easy_purchase_barcode_wizard,purchase.group_purchase_user,1,1,1,1
+access_easy_purchase_barcode_wizard_manager,easy.purchase.barcode.wizard.manager,model_easy_purchase_barcode_wizard,purchase.group_purchase_manager,1,1,1,1

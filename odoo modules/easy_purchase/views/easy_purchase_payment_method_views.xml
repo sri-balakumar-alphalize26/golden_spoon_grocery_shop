@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="easy_purchase_payment_method_form_view" model="ir.ui.view">
+        <field name="name">easy.purchase.payment.method.form</field>
+        <field name="model">easy.purchase.payment.method</field>
+        <field name="arch" type="xml">
+            <form string="Payment Method">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" string="Payment Method"/>
+                        <h1><field name="name" placeholder="e.g. Cash, Bank Transfer, Vendor Credit"/></h1>
+                    </div>
+                    <group>
+                        <group string="PAYMENT CONFIGURATION">
+                            <field name="is_vendor_account" string="Vendor Account (Credit Purchase)"/>
+                            <field name="journal_id" string="Payment Journal" invisible="is_vendor_account"
+                                required="not is_vendor_account"/>
+                            <field name="journal_type" invisible="1"/>
+                            <field name="is_default" string="Default Payment Method"/>
+                        </group>
+                        <group string="SETTINGS">
+                            <field name="sequence"/>
+                            <field name="active"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <!-- HOW IT WORKS: for cash/bank payments -->
+                    <group string="HOW IT WORKS" invisible="is_vendor_account">
+                        <div class="alert alert-info" colspan="2">
+                            <strong>Cash / Bank / Card / UPI Payment:</strong><br/>
+                            When this method is used, a payment is created and posted:<br/>
+                            • <b>Debit:</b> Account Payable (vendor) → settles the partner ledger<br/>
+                            • <b>Credit:</b> Cash/Bank Account (from selected journal) → appears in Cash/Bank Book<br/>
+                            • The bill is automatically reconciled and marked as <b>Paid</b><br/><br/>
+                            <span class="text-danger"><b>IMPORTANT:</b> Make sure the selected journal has
+                            <b>Outstanding Receipts Account</b> and <b>Outstanding Payments Account</b>
+                            configured in Accounting → Configuration → Journals → [Journal] → Outstanding Accounts tab.
+                            Without these, payments will NOT create journal entries.</span>
+                        </div>
+                    </group>
+                    <!-- HOW IT WORKS: for vendor credit -->
+                    <group string="HOW IT WORKS" invisible="not is_vendor_account">
+                        <div class="alert alert-info" colspan="2">
+                            <strong>Vendor Account (Credit Purchase):</strong><br/>
+                            No payment is created. The bill stays <b>unpaid</b> and the amount
+                            remains in the vendor's payable account (Partner Ledger).<br/>
+                            Use this for credit purchases where the vendor is paid later.
+                        </div>
+                    </group>
+                    <field name="notes" placeholder="Internal notes about this payment method..."/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="easy_purchase_payment_method_list_view" model="ir.ui.view">
+        <field name="name">easy.purchase.payment.method.list</field>
+        <field name="model">easy.purchase.payment.method</field>
+        <field name="arch" type="xml">
+            <list string="Payment Methods">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="is_vendor_account" string="Credit Purchase"/>
+                <field name="journal_id" string="Payment Journal"/>
+                <field name="is_default" string="Default Payment Method"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="easy_purchase_payment_method_action" model="ir.actions.act_window">
+        <field name="name">Payment Methods</field>
+        <field name="res_model">easy.purchase.payment.method</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('company_id', '=', allowed_company_ids[0])]</field>
+        <field name="context">{'default_company_id': allowed_company_ids[0]}</field>
+    </record>
+</odoo>

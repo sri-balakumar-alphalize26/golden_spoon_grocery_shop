@@ -226,7 +226,11 @@ export const fetchPOSSessions = async ({ limit = 20, offset = 0, state = '' } = 
     if (Array.isArray(state) && state.length) {
       domain = [["state", "in", state]];
     } else if (state === 'opened') {
-      domain = [["state", "in", ["opening_control", "opened"]]];
+      // Strict match: only fully-opened sessions (state === 'opened').
+      // Sessions still in `opening_control` (cash-control pending) should appear
+      // as "Available Registers" with an "Open Register" button — matching
+      // Odoo's POS UI which only shows "Continue Selling" for `opened`.
+      domain = [["state", "=", "opened"]];
     } else if (state) {
       domain = [["state", "=", state]];
     }
@@ -267,6 +271,65 @@ export const fetchPOSSessions = async ({ limit = 20, offset = 0, state = '' } = 
   } catch (error) {
     console.error("fetchPOSSessions error:", error);
     throw error;
+  }
+};
+
+// Fetch draft `pos.order` records for a session — used when close-register
+// fails with "There are still orders in draft state" so we can offer the user
+// a one-tap clean-up.
+export const fetchDraftPosOrders = async (sessionId) => {
+  if (!sessionId) return [];
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'search_read',
+        args: [[['session_id', '=', Number(sessionId)], ['state', '=', 'draft']]],
+        kwargs: { fields: ['id', 'name', 'amount_total', 'state'], limit: 200 },
+      },
+    }, {
+      headers: { 'Content-Type': 'application/json', ...(getOdooDb() ? { 'X-Odoo-Database': getOdooDb() } : {}) },
+      withCredentials: true,
+    });
+    if (response.data?.error) {
+      console.error('[fetchDraftPosOrders] Odoo error:', response.data.error);
+      return [];
+    }
+    return response.data?.result || [];
+  } catch (e) {
+    console.error('[fetchDraftPosOrders] exception:', e?.message || e);
+    return [];
+  }
+};
+
+// Delete (unlink) draft pos.order records — equivalent to Odoo's "Discard"
+// on each one. Used to unblock close-register after the user confirms.
+export const unlinkPosOrders = async (orderIds = []) => {
+  if (!orderIds?.length) return { success: true, count: 0 };
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'unlink',
+        args: [orderIds.map(Number)],
+        kwargs: {},
+      },
+    }, {
+      headers: { 'Content-Type': 'application/json', ...(getOdooDb() ? { 'X-Odoo-Database': getOdooDb() } : {}) },
+      withCredentials: true,
+    });
+    if (response.data?.error) {
+      const msg = response.data.error?.data?.message || response.data.error?.message || 'Failed to delete draft orders';
+      console.error('[unlinkPosOrders] Odoo error:', msg);
+      return { error: msg };
+    }
+    return { success: true, count: orderIds.length };
+  } catch (e) {
+    return { error: e?.message || 'Network error' };
   }
 };
 
@@ -1716,7 +1779,7 @@ export const createPosPaymentOdoo = async ({ orderId, payments, amount, journalI
 // `pos.session` record for the config if one isn't already open. After it
 // returns, we look up the just-opened session id by searching `pos.session`
 // for this config in an open state.
-export const createPOSSesionOdoo = async ({ configId, userId }) => {
+export const createPOSSesionOdoo = async ({ configId, userId, openingCash = 0, openingNote = '' }) => {
   const buildPayload = (model, method, args, kwargs = {}) => ({
     jsonrpc: '2.0',
     method: 'call',
@@ -1777,7 +1840,9 @@ export const createPOSSesionOdoo = async ({ configId, userId }) => {
     // as the public method for this. We pass 0 / '' (no opening cash, no
     // note) so the user doesn't have to validate cash control manually.
     if (session && session.state === 'opening_control' && sessionId) {
-      const advancePayload = buildPayload('pos.session', 'set_opening_control', [[sessionId], 0, '']);
+      const cashAmount = Number(openingCash) || 0;
+      const noteText = String(openingNote || '');
+      const advancePayload = buildPayload('pos.session', 'set_opening_control', [[sessionId], cashAmount, noteText]);
       console.log('[OPEN POS SESSION] advancing opening_control → opened via set_opening_control', advancePayload);
       try {
         const advanceResp = await axios.post(url, advancePayload, { headers, withCredentials: true });
@@ -1786,7 +1851,7 @@ export const createPOSSesionOdoo = async ({ configId, userId }) => {
         if (advanceResp.data?.error) {
           // Method missing or refused — fall back to a direct write on `state`.
           console.warn('[OPEN POS SESSION] set_opening_control failed, attempting direct write fallback:', advanceResp.data.error?.data?.message || advanceResp.data.error?.message);
-          const writePayload = buildPayload('pos.session', 'write', [[sessionId], { state: 'opened', cash_register_balance_start: 0 }]);
+          const writePayload = buildPayload('pos.session', 'write', [[sessionId], { state: 'opened', cash_register_balance_start: cashAmount, opening_notes: noteText || false }]);
           console.log('[OPEN POS SESSION] direct write fallback payload', writePayload);
           const writeResp = await axios.post(url, writePayload, { headers, withCredentials: true });
           console.log('[OPEN POS SESSION] direct write raw response', writeResp?.data);

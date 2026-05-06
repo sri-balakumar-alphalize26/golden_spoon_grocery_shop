@@ -66,6 +66,14 @@ import { UsersScreen } from '@screens/Users';
 import { MyOrdersScreen } from '@screens/MyOrders';
 import { SalesReportScreen } from '@screens/SalesReport';
 import OrdersAnalysisScreen from '@screens/OrdersAnalysis/OrdersAnalysisScreen';
+import {
+  EasyPurchaseListScreen,
+  EasyPurchaseFormScreen,
+  EasyPurchaseDetailScreen,
+  PaymentMethodsScreen,
+  PaymentMethodFormScreen,
+  BarcodePrintScreen,
+} from '@screens/EasyPurchase';
 
 
 
@@ -80,6 +88,14 @@ const StackNavigator = () => {
   // routes back to it.
   return (
     <Stack.Navigator initialRouteName="Splash">
+      {/* Easy Purchase */}
+      <Stack.Screen name="EasyPurchaseList" component={EasyPurchaseListScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="EasyPurchaseForm" component={EasyPurchaseFormScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="EasyPurchaseDetail" component={EasyPurchaseDetailScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="PaymentMethods" component={PaymentMethodsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="PaymentMethodForm" component={PaymentMethodFormScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="BarcodePrint" component={BarcodePrintScreen} options={{ headerShown: false }} />
+
       <Stack.Screen
         name="SalesOrderChoice"
         component={SalesOrderChoice}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="easy_purchase_menu_root" name="Easy Purchase" sequence="45" web_icon="easy_purchase,static/description/icon.png" groups="purchase.group_purchase_user"/>
+    <menuitem id="easy_purchase_menu_purchases" name="Purchases" parent="easy_purchase_menu_root" sequence="10"/>
+    <menuitem id="easy_purchase_menu_action" name="Purchase Entry" parent="easy_purchase_menu_purchases" action="easy_purchase_action" sequence="10"/>
+    <menuitem id="easy_purchase_menu_configuration" name="Configuration" parent="easy_purchase_menu_root" sequence="90" groups="purchase.group_purchase_manager"/>
+    <menuitem id="easy_purchase_menu_payment_methods" name="Payment Methods" parent="easy_purchase_menu_configuration" action="easy_purchase_payment_method_action" sequence="10"/>
+    <menuitem id="easy_purchase_menu_in_purchase" name="Quick Purchase" parent="purchase.menu_purchase_root" action="easy_purchase_action" sequence="5"/>
+</odoo>

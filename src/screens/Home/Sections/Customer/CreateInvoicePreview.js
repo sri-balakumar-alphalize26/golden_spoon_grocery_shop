@@ -1,8 +1,14 @@
-import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, SafeAreaView, StyleSheet } from 'react-native';
+import React, { useCallback } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, StatusBar, BackHandler } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { NavigationHeader } from '@components/Header';
+import { CommonActions, useFocusEffect } from '@react-navigation/native';
+import { useProductStore } from '@stores/product';
+
+const NAVY = '#2E294E';
+const ORANGE = '#F47B20';
 
 // Helper to display numbers cleanly without floating point artifacts
 const displayNum = (n) => {
@@ -13,16 +19,35 @@ const displayNum = (n) => {
 
 const CreateInvoicePreview = ({ navigation, route }) => {
   const params = route?.params || {};
+  const { clearProducts } = useProductStore();
+
+  // Done = wipe the in-memory cart and reset navigation to the Home tab.
+  // Used both by the explicit "Done" button and the back-arrow in the hero.
+  const onDone = () => {
+    try { clearProducts(); } catch (_) {}
+    navigation.dispatch(
+      CommonActions.reset({ index: 0, routes: [{ name: 'AppNavigator' }] })
+    );
+  };
+
+  // Hardware / gesture back → run the same Done flow instead of letting the
+  // navigator pop back to the Payment screen.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        onDone();
+        return true; // we handled it — stop the default pop
+      });
+      return () => sub.remove();
+    }, [])
+  );
   const customer = params.customer || params.partner || params.partnerInfo || null;
-  // Support multiple shapes used across the app: { items, subtotal, tax, service, total }
-  // and legacy/vending: { products, totalAmount }
+  // Support multiple shapes used across the app
   const rawItems = params.items || params.products || [];
-  // Normalize items: ensure qty, unit/price, discount_percent, subtotal present
   const items = Array.isArray(rawItems) ? rawItems.map((it) => {
     const qty = Number(it.qty ?? it.quantity ?? it.quantity_available ?? 1);
     const price = Number(it.price ?? it.unit ?? it.price_unit ?? it.list_price ?? 0);
     const grossTotal = price * qty;
-    // Use fixed discount_amount from item if present, otherwise fall back to percentage calculation
     const discountAmount = Number(it.discount_amount || 0) || (grossTotal * Number(it.discount_percent ?? it.discount ?? 0) / 100);
     const discountPercent = grossTotal > 0 ? (discountAmount / grossTotal) * 100 : 0;
     const netTotal = grossTotal - discountAmount;
@@ -33,149 +58,256 @@ const CreateInvoicePreview = ({ navigation, route }) => {
       price,
       discount_percent: discountPercent,
       discount_amount: discountAmount,
-      subtotal: typeof it.subtotal !== 'undefined' ? Number(it.subtotal) : netTotal
+      subtotal: typeof it.subtotal !== 'undefined' ? Number(it.subtotal) : netTotal,
     };
   }) : [];
 
   const subtotal = typeof params.subtotal !== 'undefined' ? Number(params.subtotal) : (typeof params.totalAmount !== 'undefined' ? Number(params.totalAmount) : items.reduce((s, it) => s + (it.subtotal || 0), 0));
   const tax = typeof params.tax !== 'undefined' ? Number(params.tax) : 0;
   const service = typeof params.service !== 'undefined' ? Number(params.service) : 0;
-  // Discount in Rs (absolute value, not percentage)
   const discount = typeof params.discount !== 'undefined' ? Number(params.discount) : 0;
   const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + tax + service - discount;
   const orderId = params.orderId || params.id || params.invoiceId || null;
 
   const grandTotal = total;
-  const totalQty = items.reduce((sum, item) => sum + (item.qty || item.quantity || 0), 0);
-  // Payment amounts: accept multiple param names used across screens
+  const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
   const paidAmount = typeof params.amount !== 'undefined' ? Number(params.amount) : (typeof params.paid !== 'undefined' ? Number(params.paid) : (typeof params.paymentAmount !== 'undefined' ? Number(params.paymentAmount) : 0));
   const cashDisplay = paidAmount > 0 ? paidAmount : grandTotal;
   const changeAmount = paidAmount > grandTotal ? (paidAmount - grandTotal) : 0;
 
+  const orderNumber = String(orderId || '000002').padStart(6, '0');
+  const dateStr = new Date().toLocaleDateString('en-GB');
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+  const onPrintShare = async () => {
+    try {
+      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
+      const { uri } = await Print.printToFileAsync({ html });
+      if (!uri) throw new Error('Failed to generate PDF');
+      await Sharing.shareAsync(uri);
+    } catch (err) {
+      console.error('Print/share error', err);
+    }
+  };
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
-      <NavigationHeader title="Invoice Preview" onBackPress={() => navigation.goBack()} />
-      <ScrollView contentContainerStyle={styles.container}>
-        <View style={styles.invoiceBox}>
-          <View style={{ height: 8 }} />
-          
-          {/* Customer Details (if selected) */}
-          {customer && (
-            <View style={{ borderWidth: 1, borderColor: '#ddd', padding: 4, marginBottom: 8 }}>
-              <Text style={{ fontWeight: '800', textAlign: 'center', paddingVertical: 6 }}>Customer Details / تفاصيل</Text>
-              <View style={{ borderTopWidth: 1, borderTopColor: '#eee', paddingTop: 6 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ fontSize: 13 }}>Name / الاسم:</Text>
-                  <Text style={{ fontWeight: '700' }}>{customer.name || customer.display_name || customer.partner_name || ''}</Text>
-                </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ fontSize: 13 }}>Phone / الهاتف:</Text>
-                  <Text style={{ fontWeight: '700' }}>{customer.phone || customer.mobile || customer.phone_number || ''}</Text>
-                </View>
+    <SafeAreaView style={{ flex: 1, backgroundColor: NAVY }} edges={['top']}>
+      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
+
+      {/* Hero header — flat navy, no gloss/two-tone */}
+      <View style={s.hero}>
+        <View style={s.heroTop}>
+          <TouchableOpacity
+            onPress={onDone}
+            style={s.heroIconBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <MaterialIcons name="arrow-back" size={20} color="#fff" />
+          </TouchableOpacity>
+          <Text style={s.heroTitle}>Invoice</Text>
+          <View style={s.heroSpacer} />
+        </View>
+
+        <View style={s.successDisk}>
+          <MaterialIcons name="check" size={36} color="#fff" />
+        </View>
+        <Text style={s.successText}>Order Placed</Text>
+        <Text style={s.orderRef}>#{orderNumber}</Text>
+      </View>
+
+      <View style={s.surface}>
+        <ScrollView
+          contentContainerStyle={{ padding: 14, paddingBottom: 110 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Date / time strip — no cashier */}
+          <View style={s.metaStrip}>
+            <View style={s.metaCell}>
+              <View style={s.metaIconDisk}>
+                <MaterialIcons name="event" size={16} color={NAVY} />
+              </View>
+              <View style={{ marginLeft: 8 }}>
+                <Text style={s.metaCaption}>DATE</Text>
+                <Text style={s.metaValue}>{dateStr}</Text>
               </View>
             </View>
-          )}
-
-          {/* Invoice Info */}
-          <Text style={styles.invoiceNo}>No: {String(orderId || '000002').padStart(6, '0')}</Text>
-          <Text style={styles.dateText}>Date: {new Date().toLocaleDateString('en-GB')}</Text>
-          <Text style={styles.cashier}>Cashier: Admin</Text>
-          
-          {/* Product Table */}
-          <View style={styles.tableContainer}>
-            <View style={styles.tableHeader}>
-              <Text style={[styles.headerCell, { flex: 2 }]}>Product Name{'\n'}اسم المنتج</Text>
-              <Text style={[styles.headerCell, { flex: 0.6 }]}>Qty{'\n'}كمية</Text>
-              <Text style={[styles.headerCell, { flex: 0.9 }]}>Unit{'\n'}سعر</Text>
-              <Text style={[styles.headerCell, { flex: 0.9 }]}>Disc{'\n'}خصم</Text>
-              <Text style={[styles.headerCell, { flex: 0.9 }]}>Total{'\n'}المجموع</Text>
+            <View style={s.metaSep} />
+            <View style={s.metaCell}>
+              <View style={s.metaIconDisk}>
+                <MaterialIcons name="access-time" size={16} color={NAVY} />
+              </View>
+              <View style={{ marginLeft: 8 }}>
+                <Text style={s.metaCaption}>TIME</Text>
+                <Text style={s.metaValue}>{timeStr}</Text>
+              </View>
             </View>
+          </View>
 
-            {items.map((item, idx) => {
-              const itemQty = item.qty || item.quantity || 1;
-              const itemPrice = item.price || item.unit || item.price_unit || 0;
-              const itemDiscount = item.discount_amount || 0;
-              const itemTotal = item.subtotal || ((itemPrice * itemQty) - itemDiscount);
+          {/* Plain paper-receipt preview — black on white, mirrors the print output */}
+          <View style={s.paperOuter}>
+            <Text style={s.paperSectionLabel}>RECEIPT PREVIEW</Text>
+            <View style={s.paperSheet}>
+              {/* Company header */}
+              <Text style={s.paperCompany}>Multaqa Al-Hadhara Trading L.L.C.</Text>
+              <Text style={s.paperMetaLine}>CR No: 1202389</Text>
+              <Text style={s.paperMetaLine}>Muscat, Oman</Text>
+              <Text style={s.paperMetaLine}>99881702, 93686812</Text>
 
-              return (
-                <View key={idx} style={styles.productItem}>
-                  <Text style={styles.productNumber}>{idx + 1}.</Text>
-                  <View style={styles.productRow}>
-                    <Text style={[styles.productCell, { flex: 2 }]}>{item.name || 'Product'}</Text>
-                    <Text style={[styles.productCell, { flex: 0.6, textAlign: 'center' }]}>{itemQty}</Text>
-                    <Text style={[styles.productCell, { flex: 0.9, textAlign: 'right' }]}>{displayNum(itemPrice)}</Text>
-                    <Text style={[styles.productCell, { flex: 0.9, textAlign: 'right' }]}>{itemDiscount > 0 ? `-${displayNum(itemDiscount)}` : '0'}</Text>
-                    <Text style={[styles.productCell, { flex: 0.9, textAlign: 'right' }]}>{displayNum(itemTotal)}</Text>
+              <View style={s.paperRule} />
+
+              {/* INVOICE title block */}
+              <View style={s.paperTitleBox}>
+                <Text style={s.paperTitle}>INVOICE / فاتورة</Text>
+              </View>
+
+              {/* Customer block */}
+              {customer ? (
+                <View style={s.paperCustomerBox}>
+                  <Text style={s.paperCustomerHeader}>Customer Details / تفاصيل</Text>
+                  <View style={s.paperCustomerRow}>
+                    <Text style={s.paperPlain}>Name / الاسم:</Text>
+                    <Text style={s.paperPlainBold} numberOfLines={1}>
+                      {customer.name || customer.display_name || customer.partner_name || ''}
+                    </Text>
                   </View>
+                  {(customer.phone || customer.mobile || customer.phone_number) ? (
+                    <View style={s.paperCustomerRow}>
+                      <Text style={s.paperPlain}>Phone / الهاتف:</Text>
+                      <Text style={s.paperPlainBold}>
+                        {customer.phone || customer.mobile || customer.phone_number}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
-              );
-            })}
-          </View>
-          
-          <View style={styles.divider} />
-          
-          {/* Totals */}
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal / المجموع الفرعي</Text>
-            <Text style={styles.totalValue}>{displayNum(subtotal || total)}</Text>
-          </View>
+              ) : null}
 
-          {discount > 0 && (
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Discount / الخصم</Text>
-              <Text style={[styles.totalValue, { color: '#c00' }]}>-{displayNum(discount)}</Text>
+              {/* Meta — No / Date / Cashier */}
+              <View style={s.paperMetaRow}>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'left' }]}>No: {orderNumber}</Text>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'center' }]}>Date: {dateStr}</Text>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>Cashier: Admin</Text>
+              </View>
+
+              {/* Items table */}
+              <View style={s.paperTableHead}>
+                <Text style={[s.paperHeadCell, { flex: 0.4 }]}>#</Text>
+                <Text style={[s.paperHeadCell, { flex: 2 }]}>Product</Text>
+                <Text style={[s.paperHeadCell, { flex: 0.6, textAlign: 'center' }]}>Qty</Text>
+                <Text style={[s.paperHeadCell, { flex: 0.9, textAlign: 'right' }]}>Unit</Text>
+                <Text style={[s.paperHeadCell, { flex: 0.9, textAlign: 'right' }]}>Disc</Text>
+                <Text style={[s.paperHeadCell, { flex: 1, textAlign: 'right' }]}>Total</Text>
+              </View>
+              {items.map((item, idx) => {
+                const itemTotal = item.subtotal || ((item.price * item.qty) - (item.discount_amount || 0));
+                return (
+                  <View key={idx}>
+                    <View style={s.paperRow}>
+                      <Text style={[s.paperPlain, { flex: 0.4 }]}>{idx + 1}.</Text>
+                      <Text style={[s.paperPlain, { flex: 2 }]} numberOfLines={1}>{item.name || 'Product'}</Text>
+                      <Text style={[s.paperPlain, { flex: 0.6, textAlign: 'center' }]}>{item.qty}</Text>
+                      <Text style={[s.paperPlain, { flex: 0.9, textAlign: 'right' }]}>{displayNum(item.price)}</Text>
+                      <Text style={[s.paperPlain, { flex: 0.9, textAlign: 'right' }]}>
+                        {item.discount_amount > 0 ? `-${displayNum(item.discount_amount)}` : '0'}
+                      </Text>
+                      <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>{displayNum(itemTotal)}</Text>
+                    </View>
+                    {idx < items.length - 1 ? <View style={s.paperDottedRule} /> : null}
+                  </View>
+                );
+              })}
+
+              <View style={[s.paperDottedRule, { marginTop: 6 }]} />
+
+              {/* Totals */}
+              <View style={s.paperTotalsRow}>
+                <Text style={s.paperPlain}>Subtotal / المجموع الفرعي</Text>
+                <Text style={s.paperPlainBold}>{displayNum(subtotal || total)}</Text>
+              </View>
+              {tax > 0 ? (
+                <View style={s.paperTotalsRow}>
+                  <Text style={s.paperPlain}>Tax</Text>
+                  <Text style={s.paperPlainBold}>{displayNum(tax)}</Text>
+                </View>
+              ) : null}
+              {service > 0 ? (
+                <View style={s.paperTotalsRow}>
+                  <Text style={s.paperPlain}>Service</Text>
+                  <Text style={s.paperPlainBold}>{displayNum(service)}</Text>
+                </View>
+              ) : null}
+              {discount > 0 ? (
+                <View style={s.paperTotalsRow}>
+                  <Text style={s.paperPlain}>Discount / الخصم</Text>
+                  <Text style={s.paperPlainBold}>-{displayNum(discount)}</Text>
+                </View>
+              ) : null}
+
+              <View style={s.paperHeavyRule} />
+              <View style={s.paperTotalsRow}>
+                <Text style={s.paperGrandLabel}>Grand Total / الإجمالي</Text>
+                <Text style={s.paperGrandValue}>{displayNum(grandTotal)}</Text>
+              </View>
+
+              <View style={s.paperRule} />
+
+              {/* Payment */}
+              <Text style={s.paperPaymentTitle}>Payment Details / تفاصيل الدفع</Text>
+              <View style={s.paperTotalsRow}>
+                <Text style={s.paperPlain}>Cash:</Text>
+                <Text style={s.paperPlainBold}>{displayNum(cashDisplay)}</Text>
+              </View>
+              <View style={s.paperTotalsRow}>
+                <Text style={s.paperPlain}>Change / الباقي:</Text>
+                <Text style={s.paperPlainBold}>{displayNum(changeAmount)}</Text>
+              </View>
+
+              <View style={[s.paperDottedRule, { marginTop: 8 }]} />
+
+              {/* Footer */}
+              <Text style={s.paperFooter}>Thank you for your purchase!</Text>
+              <Text style={[s.paperFooter, { fontSize: 11 }]}>شكرا لشرائك!</Text>
             </View>
-          )}
-
-          <View style={styles.dividerThick} />
-
-          <View style={styles.grandTotalRow}>
-            <Text style={styles.grandTotalLabel}>Grand Total / الإجمالي:</Text>
-            <Text style={styles.grandTotalValue}>{displayNum(grandTotal)}</Text>
           </View>
 
-          <View style={styles.dividerThick} />
-
-          {/* Payment Details */}
-          <Text style={styles.paymentTitle}>Payment Details / تفاصيل الدفع</Text>
-
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>Cash:</Text>
-            <Text style={styles.paymentValue}>{displayNum(cashDisplay)}</Text>
+          {/* Thank you footer */}
+          <View style={s.thankYou}>
+            <MaterialCommunityIcons name="hand-heart" size={22} color={ORANGE} />
+            <Text style={s.thankYouText}>Thank you for your purchase!</Text>
+            <Text style={s.thankYouSub}>شكرا لشرائك</Text>
           </View>
+        </ScrollView>
 
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>Change / الباقي:</Text>
-            <Text style={styles.paymentValue}>{displayNum(changeAmount)}</Text>
+        {/* Sticky bottom action — Done + Print row */}
+        <View style={s.footer}>
+          <View style={s.footerRow}>
+            <TouchableOpacity
+              onPress={onDone}
+              activeOpacity={0.85}
+              style={s.doneBtn}
+            >
+              <MaterialIcons name="check" size={18} color={NAVY} />
+              <Text style={s.doneText}>Done</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onPrintShare} activeOpacity={0.85} style={s.printBtn}>
+              <View style={s.printIconDisk}>
+                <MaterialCommunityIcons name="printer" size={18} color={ORANGE} />
+              </View>
+              <View style={{ marginLeft: 10 }}>
+                <Text style={s.printText}>Print Invoice</Text>
+                <Text style={s.printSub}>Save · Share PDF</Text>
+              </View>
+            </TouchableOpacity>
           </View>
-          
-          <View style={styles.divider} />
         </View>
-
-        <View style={{ marginTop: 16 }}>
-          <TouchableOpacity 
-            onPress={async () => {
-              try {
-                  const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
-                const { uri } = await Print.printToFileAsync({ html });
-                if (!uri) throw new Error('Failed to generate PDF');
-                await Sharing.shareAsync(uri);
-              } catch (err) {
-                console.error('Print/share error', err);
-              }
-            }} 
-            style={{ backgroundColor: '#111827', paddingVertical: 14, borderRadius: 8, alignItems: 'center' }}>
-            <Text style={{ color: '#fff', fontWeight: '800' }}>Print / Share Invoice</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 };
 
-// Rich HTML generator to mimic Odoo POS receipt (80mm thermal, bilingual layout, dotted separators)
+// Rich HTML generator — UNCHANGED. Keeps the exact 80-mm thermal-receipt
+// layout the user already had (bilingual, dotted separators, RTL).
 const generateInvoiceHtml = ({ items = [], subtotal = 0, tax = 0, service = 0, total = 0, discount = 0, orderId = '', paidAmount = 0, customer = null } = {}) => {
-  // Helper to display numbers cleanly in HTML
   const formatCurrencyHtml = (amount) => {
     const num = Number(amount);
     if (isNaN(num)) return '0';
@@ -190,7 +322,6 @@ const generateInvoiceHtml = ({ items = [], subtotal = 0, tax = 0, service = 0, t
     const itemDiscount = item.discount_amount || (grossTotal * discountPercent / 100);
     const itemTotal = item.subtotal ?? (grossTotal - itemDiscount);
     const nameEsc = escapeHtml(item.name || 'Product');
-    // render product name on its own line and a small unit line (e.g., KG) below like the Odoo receipt
     return `<tr>
       <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${formatCurrencyHtml(itemTotal)}</span></td>
       <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${itemDiscount > 0 ? '-' + formatCurrencyHtml(itemDiscount) : '0'}</span></td>
@@ -314,161 +445,258 @@ const escapeHtml = (unsafe) => {
   });
 };
 
-const styles = StyleSheet.create({
-  container: { 
-    padding: 16,
-    backgroundColor: '#f5f5f5',
-  },
-  invoiceBox: { 
-    backgroundColor: '#fff', 
-    borderRadius: 4,
-    padding: 20,
-    marginBottom: 16,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  companyName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  companyArabic: {
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  companyDetails: {
-    fontSize: 12,
-    textAlign: 'center',
-    marginBottom: 2,
-    color: '#333',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#ddd',
-    marginVertical: 8,
-  },
-  dividerThick: {
-    height: 2,
-    backgroundColor: '#000',
-    marginVertical: 10,
-  },
-  invoiceTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginVertical: 8,
-  },
-  invoiceNo: {
-    fontSize: 13,
-    textAlign: 'right',
-    marginBottom: 4,
-  },
-  dateText: {
-    fontSize: 13,
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  cashier: {
-    fontSize: 13,
-    textAlign: 'left',
-    marginBottom: 8,
-  },
-  tableContainer: {
-    marginTop: 12,
-  },
-  tableHeader: {
-    flexDirection: 'row',
-    borderBottomWidth: 2,
-    borderBottomColor: '#000',
-    paddingBottom: 6,
-    marginBottom: 8,
-  },
-  headerCell: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  productItem: {
-    marginBottom: 12,
-  },
-  productNumber: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 2,
-  },
-  productRow: {
-    flexDirection: 'row',
+const cardShadow = Platform.select({
+  ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.07, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  android: { elevation: 3 },
+});
+
+const ctaShadow = (color) => Platform.select({
+  ios: { shadowColor: color, shadowOpacity: 0.32, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
+  android: { elevation: 7 },
+});
+
+const s = StyleSheet.create({
+  // Hero
+  hero: {
+    backgroundColor: NAVY,
+    paddingTop: 6,
+    paddingBottom: 56,
+    paddingHorizontal: 14,
     alignItems: 'center',
   },
-  productCell: {
-    fontSize: 12,
+  heroTop: { flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', marginBottom: 18 },
+  heroIconBtn: {
+    width: 32, height: 32, borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 4,
+  heroSpacer: {
+    width: 32, height: 32,
+    backgroundColor: 'transparent',
   },
-  totalLabel: {
-    fontSize: 13,
+  heroTitle: {
+    flex: 1, color: '#fff', fontSize: 16, fontWeight: '800',
+    textAlign: 'center', letterSpacing: 0.4,
   },
-  totalValue: {
-    fontSize: 13,
-    textAlign: 'right',
+  successDisk: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: '#10b981',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 4, borderColor: 'rgba(255,255,255,0.18)',
+    marginBottom: 10,
   },
-  grandTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  successText: { color: '#fff', fontSize: 17, fontWeight: '800', letterSpacing: 0.3 },
+  orderRef: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '600', marginTop: 3 },
+
+  // Surface
+  surface: {
+    flex: 1, backgroundColor: '#f6f7fb',
+    borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    marginTop: -22,
+  },
+
+  // Meta strip
+  metaStrip: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingVertical: 12, paddingHorizontal: 12,
+    marginBottom: 12,
+    ...cardShadow,
+  },
+  metaCell: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  metaIconDisk: {
+    width: 32, height: 32, borderRadius: 10,
+    backgroundColor: '#eef0f5',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  metaCaption: {
+    color: '#8896ab', fontSize: 10, fontWeight: '700',
+    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2,
+  },
+  metaValue: { color: NAVY, fontSize: 13, fontWeight: '800' },
+  metaSep: { width: 1, height: 32, backgroundColor: '#eef0f5', marginHorizontal: 8 },
+
+  // Cards
+  card: {
+    backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 12,
+    ...cardShadow,
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  cardHeaderIcon: {
+    width: 28, height: 28, borderRadius: 9,
+    alignItems: 'center', justifyContent: 'center', marginRight: 8,
+  },
+  cardTitle: { fontSize: 13, fontWeight: '800', color: NAVY, letterSpacing: 0.3 },
+  qtyChip: { backgroundColor: '#fff7ed', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
+  qtyChipText: { color: '#9a3412', fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+
+  // Key-value rows
+  kvRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
+  kvLabel: { color: '#8896ab', fontSize: 12, fontWeight: '600' },
+  kvValue: { color: NAVY, fontSize: 13, fontWeight: '700', maxWidth: '60%', textAlign: 'right' },
+  kvDivider: { height: 1, backgroundColor: '#f1f2f6' },
+
+  // Items list
+  emptyText: { color: '#9ca3af', fontSize: 12, fontWeight: '500', paddingVertical: 12, textAlign: 'center' },
+  lineRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 8,
+    borderTopWidth: 1, borderTopColor: '#f1f2f6',
+  },
+  lineNumDisk: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#eef0f5',
+    alignItems: 'center', justifyContent: 'center', marginRight: 10,
+  },
+  lineNumText: { color: NAVY, fontSize: 11, fontWeight: '800' },
+  lineName: { color: NAVY, fontSize: 13, fontWeight: '800' },
+  lineMeta: { color: '#8896ab', fontSize: 11, fontWeight: '600', marginTop: 2 },
+  lineAmt: { color: NAVY, fontSize: 13, fontWeight: '900', marginLeft: 8 },
+
+  // Total row (grand)
+  totalDivider: { height: 1.5, backgroundColor: NAVY, marginTop: 8, marginBottom: 6 },
+  grandTotalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
+  grandTotalLabel: { color: NAVY, fontSize: 14, fontWeight: '800' },
+  grandTotalValue: { color: ORANGE, fontSize: 22, fontWeight: '900', letterSpacing: 0.3 },
+
+  // Payment card (navy)
+  payRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
+  payLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '700' },
+  payValue: { color: '#fff', fontSize: 14, fontWeight: '900' },
+  payRowDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.12)' },
+
+  // Plain paper-receipt preview — black on white, no colour
+  paperOuter: {
+    marginBottom: 12,
+  },
+  paperSectionLabel: {
+    fontSize: 10, fontWeight: '700', color: '#8896ab',
+    letterSpacing: 0.6, textTransform: 'uppercase',
+    marginBottom: 6, marginLeft: 2,
+  },
+  paperSheet: {
+    backgroundColor: '#fff',
+    borderWidth: 1, borderColor: '#d1d5db',
+    paddingVertical: 14, paddingHorizontal: 14,
+  },
+  paperCompany: {
+    fontSize: 13, fontWeight: '700', color: '#000',
+    textAlign: 'center', marginBottom: 4,
+  },
+  paperMetaLine: {
+    fontSize: 11, color: '#000', textAlign: 'center', marginBottom: 2,
+  },
+  paperRule: {
+    height: 0, borderBottomWidth: 1, borderBottomColor: '#000',
     marginVertical: 8,
   },
-  grandTotalLabel: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  grandTotalValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'right',
-  },
-  paymentTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginVertical: 8,
-    textDecorationLine: 'underline',
-  },
-  paymentRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 4,
-  },
-  paymentLabel: {
-    fontSize: 13,
-  },
-  paymentValue: {
-    fontSize: 13,
-    textAlign: 'right',
-  },
-  totalQtyText: {
-    fontSize: 13,
-    textAlign: 'center',
+  paperHeavyRule: {
+    height: 0, borderBottomWidth: 2, borderBottomColor: '#000',
     marginVertical: 6,
   },
-  footer: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginTop: 8,
+  paperDottedRule: {
+    height: 0, borderBottomWidth: 1, borderBottomColor: '#000',
+    borderStyle: 'dashed', marginTop: 4, marginBottom: 4,
   },
-  footerArabic: {
-    fontSize: 12,
-    textAlign: 'center',
+  paperTitleBox: {
+    borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#000',
+    paddingVertical: 6, marginVertical: 4,
+  },
+  paperTitle: {
+    fontSize: 12, fontWeight: '700', color: '#000', textAlign: 'center',
+  },
+  paperCustomerBox: {
+    borderWidth: 1, borderColor: '#000',
+    paddingVertical: 6, paddingHorizontal: 8, marginVertical: 6,
+  },
+  paperCustomerHeader: {
+    fontSize: 11, fontWeight: '700', color: '#000',
+    textAlign: 'center', marginBottom: 4,
+  },
+  paperCustomerRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  paperMetaRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginVertical: 6,
+  },
+  paperTableHead: {
+    flexDirection: 'row',
+    borderBottomWidth: 1, borderBottomColor: '#000',
+    paddingBottom: 4, marginTop: 8, marginBottom: 4,
+  },
+  paperHeadCell: {
+    fontSize: 11, fontWeight: '700', color: '#000',
+  },
+  paperRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 4,
+  },
+  paperPlain: {
+    fontSize: 11, color: '#000',
+  },
+  paperPlainBold: {
+    fontSize: 11, fontWeight: '700', color: '#000',
+  },
+  paperTotalsRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 3,
+  },
+  paperGrandLabel: {
+    fontSize: 13, fontWeight: '700', color: '#000',
+  },
+  paperGrandValue: {
+    fontSize: 13, fontWeight: '700', color: '#000',
+  },
+  paperPaymentTitle: {
+    fontSize: 12, fontWeight: '700', color: '#000',
+    textDecorationLine: 'underline', textAlign: 'center',
+    marginTop: 4, marginBottom: 4,
+  },
+  paperFooter: {
+    fontSize: 12, color: '#000', textAlign: 'center',
     marginTop: 4,
   },
+
+  // Thank you
+  thankYou: { alignItems: 'center', paddingVertical: 18 },
+  thankYouText: { color: NAVY, fontSize: 14, fontWeight: '800', marginTop: 6 },
+  thankYouSub: { color: '#8896ab', fontSize: 12, fontWeight: '600', marginTop: 2 },
+
+  // Footer CTA
+  footer: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    paddingHorizontal: 12, paddingTop: 10, paddingBottom: 12,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    ...Platform.select({
+      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: -4 } },
+      android: { elevation: 12 },
+    }),
+  },
+  footerRow: { flexDirection: 'row', gap: 10 },
+  doneBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 14, borderRadius: 12,
+    backgroundColor: '#fff',
+    borderWidth: 1.5, borderColor: NAVY,
+  },
+  doneText: { color: NAVY, fontSize: 14, fontWeight: '800', marginLeft: 6, letterSpacing: 0.3 },
+  printBtn: {
+    flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: ORANGE,
+    borderRadius: 12,
+    paddingVertical: 12, paddingHorizontal: 14,
+    ...ctaShadow(ORANGE),
+  },
+  printIconDisk: {
+    width: 34, height: 34, borderRadius: 11,
+    backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  printText: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 0.3 },
+  printSub: { color: 'rgba(255,255,255,0.85)', fontSize: 10, fontWeight: '600', marginTop: 1 },
 });
 
 export default CreateInvoicePreview;

@@ -36,6 +36,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [addAmount, setAddAmount] = useState('');
   const [customer, setCustomer] = useState(null);
   const [lineDiscountInput, setLineDiscountInput] = useState('');
+  const [noteModalVisible, setNoteModalVisible] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [noteDraft, setNoteDraft] = useState('');
 
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
@@ -240,40 +243,94 @@ const TakeoutDelivery = ({ navigation, route }) => {
 
   const renderLine = ({ item }) => {
     const isSelected = selectedLine && String(selectedLine.id) === String(item.id);
+    const imgUrl = item.rawItem?.image_url || item.rawItem?.image_128 || null;
+    const initial = (item.name || '?').trim().charAt(0).toUpperCase();
     return (
-      <TouchableOpacity onPress={() => { setSelectedLine(prev => (prev && String(prev.id) === String(item.id) ? null : item)); }} style={{ flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#f0f0f0', backgroundColor: isSelected ? '#eef6ff' : '#fff', borderLeftWidth: isSelected ? 4 : 0, borderLeftColor: isSelected ? '#2563eb' : 'transparent' }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-        <Image 
-          source={{ uri: item.rawItem?.image_url || item.rawItem?.image_128 || 'https://via.placeholder.com/60' }}
-          style={{ width: 60, height: 60, borderRadius: 8, backgroundColor: '#f5f5f5' }}
-          resizeMode="cover"
-        />
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => { setSelectedLine(prev => (prev && String(prev.id) === String(item.id) ? null : item)); }}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          marginHorizontal: 12,
+          marginBottom: 10,
+          backgroundColor: '#fff',
+          borderRadius: 14,
+          padding: 10,
+          borderWidth: 1,
+          borderColor: isSelected ? '#2E294E' : '#eef0f5',
+          shadowColor: '#1a1a2e',
+          shadowOpacity: 0.05,
+          shadowRadius: 6,
+          shadowOffset: { width: 0, height: 2 },
+          elevation: 2,
+        }}
+      >
+        {/* Thumbnail (image or letter) */}
+        <View style={{
+          width: 52, height: 52, borderRadius: 12,
+          backgroundColor: '#eef0f5',
+          alignItems: 'center', justifyContent: 'center',
+          overflow: 'hidden', marginRight: 12,
+        }}>
+          {imgUrl ? (
+            <Image
+              source={{ uri: imgUrl }}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="cover"
+            />
+          ) : (
+            <Text style={{ fontSize: 20, fontWeight: '800', color: '#2E294E' }}>{initial}</Text>
+          )}
+        </View>
+
+        {/* Name + price-each + discount chip */}
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 4 }}>{item.name}</Text>
-          <Text style={{ fontSize: 14, color: '#666' }}>{displayNum(item.unit)} each</Text>
+          <Text style={{ fontSize: 14, fontWeight: '800', color: '#1a1a2e' }} numberOfLines={1}>
+            {item.name}
+          </Text>
+          <Text style={{ fontSize: 11, color: '#8896ab', fontWeight: '600', marginTop: 2 }}>
+            {displayNum(item.unit)} each
+          </Text>
           {(item.discount_amount > 0) ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
-              <Text style={{ fontSize:12, color:'#ff5722', fontWeight:'700' }}>-{displayNum(item.discount_amount)} discount</Text>
-              <TouchableOpacity onPress={() => setProductDiscount(item.rawItem?.id ?? item.id, 0)} style={{ marginLeft: 8, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}>
-                <Text style={{ fontSize:12, color:'#b91c1c', fontWeight:'700' }}>Remove</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+              <View style={{ backgroundColor: '#ffedd5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                <Text style={{ fontSize: 10, color: '#9a3412', fontWeight: '700' }}>
+                  −{displayNum(item.discount_amount)}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setProductDiscount(item.rawItem?.id ?? item.id, 0)}
+                style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
+              >
+                <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
               </TouchableOpacity>
             </View>
           ) : null}
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6', borderRadius: 8 }}>
-          <TouchableOpacity onPress={() => handleDecrement(item)} style={{ padding: 8, paddingHorizontal: 12 }}>
-            <Text style={{ fontSize: 18, fontWeight: '700' }}>-</Text>
+
+        {/* Qty stepper */}
+        <View style={{
+          flexDirection: 'row', alignItems: 'center',
+          backgroundColor: '#f6f7fb', borderRadius: 999,
+          marginRight: 10, paddingHorizontal: 2,
+        }}>
+          <TouchableOpacity onPress={() => handleDecrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: '#2E294E' }}>−</Text>
           </TouchableOpacity>
-          <Text style={{ fontWeight: '700', paddingHorizontal: 8 }}>{item.qty}</Text>
-          <TouchableOpacity onPress={() => handleIncrement(item)} style={{ padding: 8, paddingHorizontal: 12 }}>
-            <Text style={{ fontSize: 18, fontWeight: '700' }}>+</Text>
+          <Text style={{ minWidth: 24, textAlign: 'center', fontWeight: '800', color: '#1a1a2e', fontSize: 13 }}>
+            {item.qty}
+          </Text>
+          <TouchableOpacity onPress={() => handleIncrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E294E' }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
           </TouchableOpacity>
         </View>
-      </View>
-      <View style={{ alignItems: 'flex-end', maxWidth: 140 }}>
-        <Text style={{ fontWeight: '800', marginLeft: 12 }}>{displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}</Text>
-      </View>
-    </TouchableOpacity>
+
+        {/* Subtotal */}
+        <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
+          {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
+        </Text>
+      </TouchableOpacity>
     );
   };
 
@@ -362,18 +419,38 @@ const TakeoutDelivery = ({ navigation, route }) => {
               <MaterialIcons name="person-outline" size={14} color="#6b21a8" style={{ marginRight: 4 }} />
               <Text style={{ fontWeight: '800', color: '#6b21a8', fontSize: 12 }}>{route?.params?.userName || 'Administrator'}</Text>
             </View>
-            <TouchableOpacity style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: '#f3f4f6',
-              paddingVertical: 8,
-              paddingHorizontal: 12,
-              borderRadius: 999,
-              marginRight: 8,
-              marginBottom: 8,
-            }}>
-              <MaterialIcons name="edit-note" size={14} color="#374151" style={{ marginRight: 4 }} />
-              <Text style={{ fontWeight: '800', color: '#374151', fontSize: 12 }}>Note</Text>
+            <TouchableOpacity
+              onPress={() => { setNoteDraft(noteText); setNoteModalVisible(true); }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: noteText ? '#fef3c7' : '#f3f4f6',
+                paddingVertical: 8,
+                paddingHorizontal: 12,
+                borderRadius: 999,
+                marginRight: 8,
+                marginBottom: 8,
+                borderWidth: noteText ? 1 : 0,
+                borderColor: '#f59e0b',
+              }}
+            >
+              <MaterialIcons
+                name="edit-note"
+                size={14}
+                color={noteText ? '#92400e' : '#374151'}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontWeight: '800',
+                  color: noteText ? '#92400e' : '#374151',
+                  fontSize: 12,
+                  maxWidth: 140,
+                }}
+              >
+                {noteText ? noteText : 'Note'}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={openCustomerSelector} style={{
               flexDirection: 'row',
@@ -409,18 +486,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
                 <Text style={{ fontWeight: '800', color: '#92400e', fontSize: 12 }}>Discount</Text>
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: '#f3f4f6',
-              paddingVertical: 8,
-              paddingHorizontal: 12,
-              borderRadius: 999,
-              marginRight: 8,
-              marginBottom: 8,
-            }}>
-              <MaterialIcons name="more-horiz" size={16} color="#374151" />
-            </TouchableOpacity>
           </View>
 
           {/* Add Products primary CTA (full width) */}
@@ -446,57 +511,35 @@ const TakeoutDelivery = ({ navigation, route }) => {
             <Text style={{ fontWeight: '900', color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>Add Products</Text>
           </TouchableOpacity>
 
-          {/* New / Place Order row */}
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <TouchableOpacity
-              onPress={handleNewOrder}
-              activeOpacity={0.85}
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: '#fff',
-                borderWidth: 1.5,
-                borderColor: '#2E294E',
-                paddingVertical: 14,
-                borderRadius: 14,
-              }}
-            >
-              <MaterialIcons name="add-circle-outline" size={18} color="#2E294E" style={{ marginRight: 6 }} />
-              <Text style={{ fontWeight: '800', fontSize: 15, color: '#2E294E' }}>New</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={handlePlaceOrder}
-              disabled={creatingOrder}
-              activeOpacity={0.85}
-              style={{
-                flex: 2,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: '#10b981',
-                paddingVertical: 14,
-                borderRadius: 14,
-                opacity: creatingOrder ? 0.6 : 1,
-                shadowColor: '#10b981',
-                shadowOffset: { width: 0, height: 5 },
-                shadowOpacity: 0.32,
-                shadowRadius: 10,
-                elevation: 7,
-              }}
-            >
-              {creatingOrder ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <>
-                  <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
-                  <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
+          {/* Place Order — full width below Add Products */}
+          <TouchableOpacity
+            onPress={handlePlaceOrder}
+            disabled={creatingOrder}
+            activeOpacity={0.85}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#10b981',
+              paddingVertical: 14,
+              borderRadius: 14,
+              opacity: creatingOrder ? 0.6 : 1,
+              shadowColor: '#10b981',
+              shadowOffset: { width: 0, height: 5 },
+              shadowOpacity: 0.32,
+              shadowRadius: 10,
+              elevation: 7,
+            }}
+          >
+            {creatingOrder ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -710,6 +753,71 @@ const TakeoutDelivery = ({ navigation, route }) => {
             <TouchableOpacity onPress={() => setDeleteModalVisible(false)} style={{ padding:12, marginTop:8 }}>
               <Text style={{ color:'#6b7280' }}>Close</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Order Note Modal */}
+      <Modal
+        visible={noteModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setNoteModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+          <View style={{
+            width: '100%', maxWidth: 480,
+            backgroundColor: '#fff', borderRadius: 16, padding: 18,
+            shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <MaterialIcons name="edit-note" size={22} color="#2E294E" />
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#1a1a2e', marginLeft: 8 }}>Order Note</Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                onPress={() => setNoteModalVisible(false)}
+                style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <MaterialIcons name="close" size={18} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              value={noteDraft}
+              onChangeText={setNoteDraft}
+              placeholder="e.g. No onions, deliver after 6pm…"
+              placeholderTextColor="#9ca3af"
+              multiline
+              style={{
+                minHeight: 110, textAlignVertical: 'top',
+                borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10,
+                padding: 12, fontSize: 14, color: '#111827',
+                backgroundColor: '#f9fafb', marginBottom: 14,
+              }}
+            />
+
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {noteText ? (
+                <TouchableOpacity
+                  onPress={() => { setNoteText(''); setNoteDraft(''); setNoteModalVisible(false); }}
+                  style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#fee2e2', alignItems: 'center' }}
+                >
+                  <Text style={{ color: '#b91c1c', fontWeight: '800', fontSize: 13 }}>Clear</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                onPress={() => setNoteModalVisible(false)}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#f3f4f6', alignItems: 'center' }}
+              >
+                <Text style={{ color: '#6b7280', fontWeight: '800', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { setNoteText(noteDraft.trim()); setNoteModalVisible(false); }}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#2E294E', alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Save</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
