@@ -16,6 +16,21 @@ const MUTED = '#8896ab';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CHART_WIDTH = SCREEN_WIDTH - 24 - 28; // page padding 12 each side + card padding 14 each side
 
+// Odoo serialises date_order as a naive UTC string ("2026-05-07 04:57:00")
+// with no timezone marker. Hermes parses that as LOCAL time, so the chart
+// buckets land on the wrong day for users near the day-rollover and the
+// per-order timestamps display the raw UTC clock rather than the cashier's
+// local time. Force-parse as UTC so subsequent toLocale* calls convert it
+// back into the device's zone — matching what Odoo's own web UI does.
+const parseOdooDate = (s) => {
+  if (!s) return null;
+  const str = String(s);
+  const iso = str.includes('T') ? str : str.replace(' ', 'T');
+  const withTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
+  const d = new Date(withTz);
+  return isNaN(d.getTime()) ? null : d;
+};
+
 const STATE_META = {
   paid: { label: 'Paid', color: '#22C55E', bg: '#DCFCE7', fg: '#166534' },
   done: { label: 'Posted', color: '#16A34A', bg: '#DCFCE7', fg: '#166534' },
@@ -53,8 +68,9 @@ const OrdersAnalysisScreen = ({ navigation, route }) => {
     const buckets = {};
     orders.forEach((o) => {
       if (o.state === 'cancel') return;
-      const key = o.date_order
-        ? new Date(o.date_order).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      const parsed = parseOdooDate(o.date_order);
+      const key = parsed
+        ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
         : 'Unknown';
       buckets[key] = (buckets[key] || 0) + (Number(o.amount_total) || 0);
     });
@@ -188,8 +204,9 @@ const OrdersAnalysisScreen = ({ navigation, route }) => {
                   ? order.partner_id[1]
                   : order.partner_id || 'Walk-in customer';
                 const meta = stateMeta(order.state);
-                const dateText = order.date_order
-                  ? new Date(order.date_order).toLocaleString('en-US', {
+                const parsed = parseOdooDate(order.date_order);
+                const dateText = parsed
+                  ? parsed.toLocaleString('en-US', {
                       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                     })
                   : '—';
