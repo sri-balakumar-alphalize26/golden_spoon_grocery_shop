@@ -1,34 +1,35 @@
-import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Modal, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useEffect, useCallback, useRef, useState, useMemo } from 'react';
+import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import Text from '@components/Text';
 import { NavigationHeader } from '@components/Header';
-import { fetchUsersOdoo, createUserOdoo } from '@api/services/generalApi';
+import { fetchUsersOdoo } from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { OverlayLoader } from '@components/Loader';
-import { RoundedContainer, SafeAreaView, SearchContainer } from '@components/containers';
+import { SafeAreaView, SearchContainer } from '@components/containers';
 import { EmptyState } from '@components/common/empty';
 import useDataFetching from '@hooks/useDataFetching';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Toast from 'react-native-toast-message';
-import { TextInput as FormInput } from '@components/common/TextInput';
-import { COLORS } from '@constants/theme';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
+
+const NAVY = COLORS.primaryThemeColor;
+const MUTED = '#8896ab';
+const SOFT_BG = '#F5F6FA';
+
+// Pastel tints for the avatar bubble — keyed off the user id so the
+// same person keeps the same colour across renders.
+const AVATAR_TINTS = ['#fde68a', '#bfdbfe', '#bbf7d0', '#fbcfe8', '#fed7aa', '#ddd6fe', '#fecaca'];
+const tintFor = (id) => AVATAR_TINTS[Math.abs(Number(id) || 0) % AVATAR_TINTS.length];
+
+const initialOf = (name) => (name || '?').trim().charAt(0).toUpperCase() || '?';
 
 const UsersScreen = ({ navigation }) => {
   const authUser = useAuthStore((s) => s.user);
   const [isAdmin, setIsAdmin] = useState(false);
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchUsersOdoo);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [newUser, setNewUser] = useState({
-    name: '',
-    login: '',
-    password: '',
-    email: '',
-    phone: '',
-  });
-  const [errors, setErrors] = useState({});
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text }),
@@ -39,7 +40,7 @@ const UsersScreen = ({ navigation }) => {
   const lastParamsRef = useRef({ searchText: '' });
   const hasAttemptedFetchRef = useRef(false);
 
-  // Check admin status
+  // Admin guard — only uid 2 / is_admin / is_superuser can see the list.
   useEffect(() => {
     const checkAdmin = authUser?.uid === 2 || authUser?.is_admin === true || authUser?.is_superuser === true;
     setIsAdmin(checkAdmin);
@@ -56,15 +57,16 @@ const UsersScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
-      if (!isAdmin) return; // Don't fetch if not admin
-
+      if (!isAdmin) return;
       const paramsChanged = lastParamsRef.current.searchText !== searchText;
-
       if (!hasLoadedRef.current || paramsChanged) {
         hasAttemptedFetchRef.current = true;
         fetchData({ searchText });
         hasLoadedRef.current = true;
         lastParamsRef.current = { searchText };
+      } else {
+        // Refresh on focus so a returning create/edit reflects in the list.
+        fetchData({ searchText });
       }
     }, [searchText, isAdmin])
   );
@@ -73,81 +75,82 @@ const UsersScreen = ({ navigation }) => {
     fetchMoreData({ searchText });
   }, [searchText, fetchMoreData]);
 
-  const handleInputChange = (field, value) => {
-    setNewUser(prev => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: '' }));
+  // Build a flat list with synthetic header rows so the FlashList
+  // renders two sections: ADMINISTRATORS first, then USERS.
+  const sectionedData = useMemo(() => {
+    const admins = data.filter((u) => u._isAdmin);
+    const others = data.filter((u) => !u._isAdmin);
+    const out = [];
+    if (admins.length > 0) {
+      out.push({ _kind: 'header', label: 'ADMINISTRATORS', count: admins.length });
+      for (const u of admins) out.push({ _kind: 'user', ...u });
     }
-  };
-
-  const validateForm = () => {
-    const newErrors = {};
-    if (!newUser.name.trim()) newErrors.name = 'Name is required';
-    if (!newUser.login.trim()) newErrors.login = 'Login is required';
-    if (!newUser.password.trim()) newErrors.password = 'Password is required';
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleCreateUser = async () => {
-    if (!validateForm()) return;
-
-    setCreating(true);
-    try {
-      const result = await createUserOdoo({
-        name: newUser.name.trim(),
-        login: newUser.login.trim(),
-        password: newUser.password,
-        email: newUser.email.trim(),
-        phone: newUser.phone.trim(),
-      });
-
-      if (result.error) {
-        Toast.show({
-          type: 'error',
-          text1: 'Error',
-          text2: result.error.data?.message || 'Failed to create user',
-        });
-      } else {
-        Toast.show({
-          type: 'success',
-          text1: 'Success',
-          text2: 'User created successfully',
-        });
-        setShowCreateModal(false);
-        setNewUser({ name: '', login: '', password: '', email: '', phone: '' });
-        fetchData({ searchText });
-      }
-    } catch (error) {
-      Toast.show({
-        type: 'error',
-        text1: 'Error',
-        text2: 'Failed to create user',
-      });
-    } finally {
-      setCreating(false);
+    if (others.length > 0) {
+      out.push({ _kind: 'header', label: 'USERS', count: others.length });
+      for (const u of others) out.push({ _kind: 'user', ...u });
     }
-  };
+    return out;
+  }, [data]);
 
-  const renderUserItem = useCallback(({ item }) => (
-    <TouchableOpacity style={styles.userCard}>
-      <View style={styles.userIcon}>
-        <Icon name="person" size={24} color="#461c8aff" />
-      </View>
-      <View style={styles.userInfo}>
-        <Text style={styles.userName}>{item.name}</Text>
-        <Text style={styles.userLogin}>@{item.login}</Text>
-        {item.email ? <Text style={styles.userDetail}>{item.email}</Text> : null}
-        {item.phone ? <Text style={styles.userDetail}>{item.phone}</Text> : null}
-        <View style={[styles.statusBadge, item.active ? styles.activeBadge : styles.inactiveBadge]}>
-          <Text style={styles.statusText}>{item.active ? 'Active' : 'Inactive'}</Text>
+  const renderRow = useCallback(({ item }) => {
+    if (item._kind === 'header') {
+      return (
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionHeaderText}>{item.label}</Text>
+          <Text style={styles.sectionHeaderCount}>{item.count}</Text>
         </View>
-      </View>
-    </TouchableOpacity>
-  ), []);
+      );
+    }
+    const tint = tintFor(item.id);
+    const initial = initialOf(item.name);
+    return (
+      <TouchableOpacity
+        style={styles.userCard}
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate('UserDetails', { mode: 'edit', user: item })}
+      >
+        <View style={[styles.avatar, { backgroundColor: tint }]}>
+          <Text style={styles.avatarInitial}>{initial}</Text>
+        </View>
+        <View style={styles.userInfo}>
+          <View style={styles.nameRow}>
+            <Text style={styles.userName} numberOfLines={1}>{item.name}</Text>
+            {item._isAdmin ? (
+              <View style={styles.adminBadge}>
+                <Icon name="shield" size={10} color="#fff" />
+                <Text style={styles.adminBadgeText}>ADMIN</Text>
+              </View>
+            ) : null}
+            <View style={[styles.statusDot, item.active ? styles.dotActive : styles.dotInactive]} />
+          </View>
+          <View style={styles.metaRow}>
+            <Icon name="alternate-email" size={13} color={MUTED} />
+            <Text style={styles.userMeta} numberOfLines={1}>{item.login}</Text>
+          </View>
+          {item.email ? (
+            <View style={styles.metaRow}>
+              <Icon name="mail-outline" size={13} color={MUTED} />
+              <Text style={styles.userMeta} numberOfLines={1}>{item.email}</Text>
+            </View>
+          ) : null}
+          {item.phone ? (
+            <View style={styles.metaRow}>
+              <Icon name="phone" size={13} color={MUTED} />
+              <Text style={styles.userMeta} numberOfLines={1}>{item.phone}</Text>
+            </View>
+          ) : null}
+        </View>
+        <Icon name="chevron-right" size={22} color="#C9CDD6" />
+      </TouchableOpacity>
+    );
+  }, [navigation]);
 
-  const keyExtractor = useCallback((item, index) => `user-${item.id || index}`, []);
+  const keyExtractor = useCallback((item, index) => {
+    if (item._kind === 'header') return `hdr-${item.label}-${index}`;
+    return `user-${item.id || index}`;
+  }, []);
+
+  const getItemType = useCallback((item) => item._kind, []);
 
   const renderEmptyState = useCallback(() => (
     <EmptyState
@@ -166,148 +169,70 @@ const UsersScreen = ({ navigation }) => {
     if (data.length > 0) {
       return (
         <FlashList
-          data={data}
-          renderItem={renderUserItem}
+          data={sectionedData}
+          renderItem={renderRow}
           keyExtractor={keyExtractor}
-          contentContainerStyle={{ padding: 10, paddingBottom: 50 }}
+          getItemType={getItemType}
+          contentContainerStyle={{ padding: 12, paddingBottom: 90 }}
           onEndReached={handleLoadMore}
           showsVerticalScrollIndicator={false}
           onEndReachedThreshold={0.5}
-          estimatedItemSize={120}
-          removeClippedSubviews={true}
+          estimatedItemSize={96}
+          removeClippedSubviews
         />
       );
     }
     return null;
   };
 
-  // Don't render main content if not admin
   if (!isAdmin) {
     return (
-      <SafeAreaView>
+      <SafeAreaView backgroundColor={SOFT_BG}>
         <NavigationHeader
           title="Users"
           onBackPress={() => navigation.goBack()}
         />
-        <RoundedContainer>
-          <View style={styles.accessDeniedContainer}>
-            <Icon name="lock" size={64} color="#ccc" />
-            <Text style={styles.accessDeniedText}>Access Denied</Text>
-            <Text style={styles.accessDeniedSubtext}>
-              Only administrators can access this feature
-            </Text>
-          </View>
-        </RoundedContainer>
+        <View style={styles.accessDeniedContainer}>
+          <Icon name="lock" size={64} color="#ccc" />
+          <Text style={styles.accessDeniedText}>Access Denied</Text>
+          <Text style={styles.accessDeniedSubtext}>
+            Only administrators can access this feature
+          </Text>
+        </View>
       </SafeAreaView>
     );
   }
 
+  const headerCount = data.length
+    ? `${data.length}${data.length === 1 ? ' user' : ' users'}`
+    : '';
+
   return (
-    <SafeAreaView>
+    <SafeAreaView backgroundColor={SOFT_BG}>
       <NavigationHeader
         title="Users"
         onBackPress={() => navigation.goBack()}
       />
       <SearchContainer
-        placeholder="Search Users"
+        placeholder="Search by name or login"
         onChangeText={handleSearchTextChange}
         value={searchText}
       />
-      <RoundedContainer>
-        {renderUsers()}
-      </RoundedContainer>
+      {headerCount ? (
+        <View style={styles.countRow}>
+          <Text style={styles.countText}>{headerCount}</Text>
+        </View>
+      ) : null}
+      <View style={{ flex: 1 }}>{renderUsers()}</View>
 
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => setShowCreateModal(true)}
+        onPress={() => navigation.navigate('UserDetails', { mode: 'create' })}
+        activeOpacity={0.85}
       >
-        <Icon name="add" size={28} color="#fff" />
+        <Icon name="person-add-alt-1" size={22} color="#fff" />
+        <Text style={styles.fabText}>New User</Text>
       </TouchableOpacity>
-
-      <Modal
-        visible={showCreateModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowCreateModal(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalOverlay}
-        >
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Create New User</Text>
-              <TouchableOpacity onPress={() => setShowCreateModal(false)}>
-                <Icon name="close" size={24} color="#461c8aff" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={styles.formScrollView}
-              contentContainerStyle={styles.formContainer}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              <FormInput
-                label="Name *"
-                placeholder="Enter full name"
-                value={newUser.name}
-                onChangeText={(text) => handleInputChange('name', text)}
-                error={errors.name}
-              />
-              <FormInput
-                label="Login *"
-                placeholder="Enter username"
-                value={newUser.login}
-                onChangeText={(text) => handleInputChange('login', text)}
-                error={errors.login}
-                autoCapitalize="none"
-              />
-              <FormInput
-                label="Password *"
-                placeholder="Enter password"
-                value={newUser.password}
-                onChangeText={(text) => handleInputChange('password', text)}
-                error={errors.password}
-                secureTextEntry
-              />
-              <FormInput
-                label="Email"
-                placeholder="Enter email"
-                value={newUser.email}
-                onChangeText={(text) => handleInputChange('email', text)}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-              <FormInput
-                label="Phone"
-                placeholder="Enter phone number"
-                value={newUser.phone}
-                onChangeText={(text) => handleInputChange('phone', text)}
-                keyboardType="phone-pad"
-              />
-            </ScrollView>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.button, styles.cancelButton]}
-                onPress={() => setShowCreateModal(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.button, styles.createButton]}
-                onPress={handleCreateUser}
-                disabled={creating}
-              >
-                <Text style={styles.createButtonText}>
-                  {creating ? 'Creating...' : 'Create User'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
 
       <OverlayLoader visible={loading} />
     </SafeAreaView>
@@ -315,139 +240,139 @@ const UsersScreen = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
+  countRow: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  countText: {
+    fontSize: 12,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingTop: 12,
+    paddingBottom: 6,
+  },
+  sectionHeaderText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.8,
+  },
+  sectionHeaderCount: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    backgroundColor: '#fff',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  adminBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: NAVY,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    gap: 3,
+  },
+  adminBadgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.4,
+  },
   userCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+    }),
   },
-  userIcon: {
+  avatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#f5f0ff',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
+  },
+  avatarInitial: {
+    fontSize: 20,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
   userInfo: {
     flex: 1,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   userName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#2d2d2d',
-    marginBottom: 4,
+    fontSize: 15,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    flexShrink: 1,
   },
-  userLogin: {
-    fontSize: 14,
-    color: '#461c8aff',
-    marginBottom: 4,
-    fontWeight: '600',
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
-  userDetail: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 2,
+  dotActive: {
+    backgroundColor: '#22C55E',
   },
-  statusBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginTop: 6,
+  dotInactive: {
+    backgroundColor: '#9CA3AF',
   },
-  activeBadge: {
-    backgroundColor: '#e8f5e9',
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 3,
+    gap: 5,
   },
-  inactiveBadge: {
-    backgroundColor: '#ffebee',
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '600',
+  userMeta: {
+    fontSize: 12,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    flexShrink: 1,
   },
   fab: {
     position: 'absolute',
-    right: 20,
+    right: 16,
     bottom: 20,
-    width: 56,
-    height: 56,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderRadius: 28,
-    backgroundColor: '#461c8aff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '85%',
-  },
-  modalHeader: {
+    backgroundColor: NAVY,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    gap: 6,
+    ...Platform.select({
+      ios: { shadowColor: NAVY, shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 6 },
+    }),
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#461c8aff',
-  },
-  formScrollView: {
-    flexGrow: 0,
-    flexShrink: 1,
-  },
-  formContainer: {
-    padding: 20,
-    paddingBottom: 10,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    padding: 20,
-    gap: 12,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#f5f5f5',
-  },
-  createButton: {
-    backgroundColor: '#461c8aff',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  createButtonText: {
+  fabText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 13,
+    letterSpacing: 0.4,
   },
   accessDeniedContainer: {
     flex: 1,
@@ -456,17 +381,18 @@ const styles = StyleSheet.create({
     paddingVertical: 100,
   },
   accessDeniedText: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 22,
     color: '#666',
-    marginTop: 20,
+    marginTop: 18,
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
   accessDeniedSubtext: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#999',
-    marginTop: 10,
+    marginTop: 8,
     textAlign: 'center',
     paddingHorizontal: 40,
+    fontFamily: FONT_FAMILY.urbanistMedium,
   },
 });
 

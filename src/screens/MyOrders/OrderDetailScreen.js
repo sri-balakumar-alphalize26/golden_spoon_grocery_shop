@@ -66,7 +66,7 @@ const formatDate = (s) => {
 
 const OrderDetailScreen = ({ navigation, route }) => {
   const { orderId } = route?.params || {};
-  const currency = useAuthStore((state) => state.currency) || { symbol: '$', position: 'before' };
+  const currency = useAuthStore((state) => state.currency) || { symbol: 'ر.ع.', position: 'before' };
   const [loading, setLoading] = useState(true);
   const [order, setOrder] = useState(null);
   // Each `pos.payment` attached to this order — drives the Payments card so

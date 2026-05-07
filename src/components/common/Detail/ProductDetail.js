@@ -226,7 +226,7 @@ const ProductDetail = ({ navigation, route }) => {
     (Array.isArray(details?.categ_id) ? details.categ_id[1] : null) ||
     'N/A';
 
-  const fallbackCurrency = { symbol: '$', position: 'before' };
+  const fallbackCurrency = { symbol: 'ر.ع.', position: 'before' };
   const priceRaw = details.sale_price ?? details.price;
   const priceDisplay = (priceRaw !== null && priceRaw !== undefined && priceRaw !== '')
     ? formatCurrency(priceRaw, currency || fallbackCurrency)

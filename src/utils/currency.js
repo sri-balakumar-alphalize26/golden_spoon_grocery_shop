@@ -1,9 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Default currency configuration
+// Default currency configuration — Omani Rial (always-OMR mode).
 const DEFAULT_CURRENCY = {
-  symbol: '$',
-  name: 'USD',
+  symbol: 'ر.ع.',
+  name: 'OMR',
   position: 'before',
 };
 

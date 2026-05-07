@@ -44,7 +44,7 @@ const OrdersAnalysisScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency);
   const { period = 'today', ordersData } = route?.params || {};
 
-  const fmtMoney = (amount) => formatCurrencyUtil(amount, currency || { symbol: '$', position: 'before' });
+  const fmtMoney = (amount) => formatCurrencyUtil(amount, currency || { symbol: 'ر.ع.', position: 'before' });
 
   const periodLabel = (() => {
     switch (period) {

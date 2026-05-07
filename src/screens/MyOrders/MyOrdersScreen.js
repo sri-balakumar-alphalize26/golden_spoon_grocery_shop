@@ -171,7 +171,7 @@ const MyOrdersScreen = ({ navigation }) => {
               </Text>
             </View>
           </View>
-          <Text style={styles.orderAmount}>{formatCurrency(item.amount_total, currency || { symbol: '$', position: 'before' })}</Text>
+          <Text style={styles.orderAmount}>{formatCurrency(item.amount_total, currency || { symbol: 'ر.ع.', position: 'before' })}</Text>
         </View>
 
         <View style={styles.orderDetails}>

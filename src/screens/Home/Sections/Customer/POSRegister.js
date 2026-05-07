@@ -308,7 +308,7 @@ const POSRegister = ({ navigation }) => {
                 {typeof item.cash_register_balance_start === 'number'
                   ? formatCurrency(
                       item.cash_register_balance_start,
-                      currency || { symbol: '$', position: 'before' }
+                      currency || { symbol: 'ر.ع.', position: 'before' }
                     )
                   : '—'}
               </Text>

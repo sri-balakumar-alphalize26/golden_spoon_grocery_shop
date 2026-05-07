@@ -19,7 +19,11 @@ const NavigationHeader = ({
     refreshIcon = false,
     refreshPress = () => { },
     checkIcon = false,
-    checkPress = () => { }
+    checkPress = () => { },
+    // Optional right-side text action (e.g. 'Save'). When provided, a
+    // pill-style button appears in the same slot the check-circle uses.
+    saveLabel,
+    onSavePress = () => { },
 }) => {
 
     const logoSource = backgroundColor === COLORS.primaryThemeColor
@@ -55,6 +59,12 @@ const NavigationHeader = ({
                 <TouchableOpacity activeOpacity={0.8} onPress={checkPress}>
                     <Feather name="check-circle" size={30} color={COLORS.orange} />
                 </TouchableOpacity>
+            }
+            {saveLabel ?
+                <TouchableOpacity activeOpacity={0.8} onPress={onSavePress} style={styles.saveBtn}>
+                    <Text style={[styles.saveBtnText, { color }]}>{saveLabel}</Text>
+                </TouchableOpacity>
+                : null
             }
             {refreshIcon &&
                 <TouchableOpacity activeOpacity={0.8} onPress={refreshPress}>
@@ -92,6 +102,19 @@ const styles = StyleSheet.create({
         height: 30,
         resizeMode: 'contain',
         tintColor: COLORS.white,
+    },
+    saveBtn: {
+        paddingHorizontal: 14,
+        paddingVertical: 6,
+        borderRadius: 18,
+        backgroundColor: 'rgba(255,255,255,0.16)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.35)',
+    },
+    saveBtnText: {
+        fontFamily: FONT_FAMILY.urbanistBold,
+        fontSize: 14,
+        letterSpacing: 0.6,
     },
 });
 

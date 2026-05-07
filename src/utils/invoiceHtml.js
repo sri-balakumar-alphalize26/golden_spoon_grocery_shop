@@ -47,10 +47,14 @@ export const generateInvoiceHtml = ({
   payments = [],
 } = {}) => {
   const orderRef = extractOrderRef(orderName, orderId);
+  // OMR receipts: prefix the rial-omani Arabic abbreviation. Decimals
+  // are kept at 2 to match what the rest of the app shows on screen
+  // (formatCurrency uses .toFixed(2)).
+  const CURRENCY_SYMBOL = 'ر.ع.';
   const formatCurrencyHtml = (amount) => {
     const num = Number(amount);
-    if (isNaN(num)) return '0';
-    return parseFloat(num.toPrecision(12)).toString();
+    if (isNaN(num)) return `${CURRENCY_SYMBOL} 0.00`;
+    return `${CURRENCY_SYMBOL} ${num.toFixed(2)}`;
   };
 
   const rows = items.map((item, idx) => {

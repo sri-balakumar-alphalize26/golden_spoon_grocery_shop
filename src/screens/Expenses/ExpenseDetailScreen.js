@@ -66,7 +66,7 @@ const formatDate = (s) => {
 const ExpenseDetailScreen = ({ navigation, route }) => {
   const { expenseId } = route?.params || {};
   const authUser = useAuthStore((state) => state.user);
-  const currency = useAuthStore((state) => state.currency) || { symbol: '$', position: 'before' };
+  const currency = useAuthStore((state) => state.currency) || { symbol: 'ر.ع.', position: 'before' };
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);

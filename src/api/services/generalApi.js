@@ -3494,12 +3494,73 @@ export const deleteDiscountOdoo = async ({ id } = {}) => {
   }
 };
 
+// Discover which field on res.users holds the user's groups m2m. Odoo
+// 17 used `groups_id`; Odoo 19 renamed it (likely to `group_ids`). The
+// helper probes `fields_get` once on first use and caches the result
+// for the rest of the session — every create/read/write of a user
+// goes through this so a single rename propagates everywhere.
+let _cachedUserGroupsField = null;
+const _resolveUserGroupsField = async () => {
+  if (_cachedUserGroupsField) return _cachedUserGroupsField;
+  try {
+    const probe = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.users',
+        method: 'fields_get',
+        args: [['groups_id', 'group_ids', 'all_group_ids', 'direct_group_ids']],
+        kwargs: { attributes: ['type', 'relation'] },
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const fields = probe.data?.result || {};
+    // Try in priority order. Skip computed-only fields by preferring
+    // names that are typically writable many2many.
+    const candidates = ['group_ids', 'groups_id', 'direct_group_ids', 'all_group_ids'];
+    let resolved = candidates.find(
+      (n) => fields[n] && fields[n].relation === 'res.groups'
+    );
+    if (!resolved) {
+      // Last-ditch fallback — fetch every field and pick anything that
+      // relates to res.groups. Costlier but only runs once per session.
+      const all = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.users',
+          method: 'fields_get',
+          args: [[]],
+          kwargs: { attributes: ['type', 'relation'] },
+        },
+        id: new Date().getTime(),
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const allFields = all.data?.result || {};
+      resolved = Object.keys(allFields).find(
+        (n) => allFields[n].relation === 'res.groups' && allFields[n].type === 'many2many'
+      ) || 'groups_id';
+    }
+    console.log(`[USERS] resolved groups field: ${resolved}`);
+    _cachedUserGroupsField = resolved;
+    return resolved;
+  } catch (e) {
+    console.warn('[USERS] fields_get probe failed, falling back to groups_id:', e?.message || e);
+    _cachedUserGroupsField = 'groups_id';
+    return 'groups_id';
+  }
+};
+
 // Create a new user in Odoo
-export const createUserOdoo = async ({ name, login, password, email = '', phone = '', groups = [] } = {}) => {
+export const createUserOdoo = async ({
+  name, login, password, email = '', phone = '',
+  groups = [], companyIds, defaultCompanyId,
+} = {}) => {
   try {
     if (!name) throw new Error('name is required');
     if (!login) throw new Error('login is required');
     if (!password) throw new Error('password is required');
+
+    const groupsField = await _resolveUserGroupsField();
 
     const userVals = {
       name,
@@ -3511,7 +3572,13 @@ export const createUserOdoo = async ({ name, login, password, email = '', phone 
 
     // Add groups if provided (e.g., [1, 2, 3] for group IDs)
     if (Array.isArray(groups) && groups.length > 0) {
-      userVals.groups_id = [[6, 0, groups]];
+      userVals[groupsField] = [[6, 0, groups]];
+    }
+    if (Array.isArray(companyIds) && companyIds.length > 0) {
+      userVals.company_ids = [[6, 0, companyIds]];
+    }
+    if (defaultCompanyId !== undefined && defaultCompanyId !== null) {
+      userVals.company_id = Number(defaultCompanyId);
     }
 
     console.log('[CREATE USER] Creating user with payload:', userVals);
@@ -3542,7 +3609,37 @@ export const createUserOdoo = async ({ name, login, password, email = '', phone 
   }
 };
 
-// Fetch users from Odoo
+// Cached id of the base.group_system (Settings) group — used to tag
+// each user as admin/non-admin in the list. Resolved once via
+// ir.model.data; the lookup is identical to the one used for the
+// Role radio in UserDetailsScreen.
+let _cachedAdminGroupId = null;
+const _resolveAdminGroupId = async () => {
+  if (_cachedAdminGroupId) return _cachedAdminGroupId;
+  try {
+    const res = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'ir.model.data',
+        method: 'search_read',
+        args: [[['module', '=', 'base'], ['name', '=', 'group_system']]],
+        kwargs: { fields: ['res_id'], limit: 1 },
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const id = res.data?.result?.[0]?.res_id || null;
+    _cachedAdminGroupId = id;
+    return id;
+  } catch (e) {
+    console.warn('[USERS] admin group lookup failed:', e?.message || e);
+    return null;
+  }
+};
+
+// Fetch users from Odoo. Each row is tagged with `_isAdmin` based on
+// membership in the Settings group (base.group_system) so the list
+// screen can render admins and regular users in separate sections.
 export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
   try {
     let domain = [];
@@ -3556,6 +3653,9 @@ export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = '' }
       ];
     }
 
+    const groupsField = await _resolveUserGroupsField();
+    const adminGroupId = await _resolveAdminGroupId();
+
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -3564,7 +3664,7 @@ export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = '' }
         method: 'search_read',
         args: [domain],
         kwargs: {
-          fields: ['id', 'name', 'login', 'email', 'phone', 'active'],
+          fields: ['id', 'name', 'login', 'email', 'phone', 'active', groupsField],
           offset,
           limit,
           order: 'name asc',
@@ -3578,12 +3678,399 @@ export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = '' }
       return { error: response.data.error };
     }
 
-    const users = response.data.result || [];
-    console.log('[FETCH USERS] Retrieved users count:', users.length);
+    const users = (response.data.result || []).map((u) => {
+      const groupIds = Array.isArray(u[groupsField]) ? u[groupsField] : [];
+      return {
+        ...u,
+        _isAdmin: !!(adminGroupId && groupIds.includes(adminGroupId)),
+      };
+    });
+    console.log(`[FETCH USERS] Retrieved ${users.length} users (${users.filter(u => u._isAdmin).length} admins)`);
     return users;
   } catch (error) {
     console.error('fetchUsersOdoo error:', error);
     throw error;
+  }
+};
+
+// Read a single user with the fields the edit form needs.
+export const fetchUserDetailsOdoo = async (userId) => {
+  try {
+    const id = Number(userId);
+    if (!id) return null;
+    const groupsField = await _resolveUserGroupsField();
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.users',
+        method: 'read',
+        args: [[id]],
+        kwargs: {
+          fields: ['id', 'name', 'login', 'email', 'phone', 'active',
+                   'company_id', 'company_ids', groupsField, 'share'],
+        },
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data?.error) {
+      console.error('[FETCH USER] Odoo error:', response.data.error);
+      return null;
+    }
+    const row = response.data.result?.[0] || null;
+    // Normalise to a stable `groups_id` key so callers don't have to
+    // care which field name the server actually uses.
+    if (row && groupsField !== 'groups_id') {
+      row.groups_id = row[groupsField] || [];
+    }
+    return row;
+  } catch (error) {
+    console.error('fetchUserDetailsOdoo error:', error);
+    return null;
+  }
+};
+
+// Build the Access Rights tree for the user form across Odoo versions.
+//
+// Odoo 18+ refactored access-rights into a new pivot model
+// `res.groups.privilege` (each privilege = one row in the user form,
+// e.g. Accounting / Bank / Point of Sale). Odoo 19 also DELETED
+// `res.groups.category_id`, so the legacy approach can't work there.
+//
+// Strategy:
+//   1) Probe `res.groups.privilege.fields_get` — if the model exists,
+//      it's Odoo 18/19 and we use the privilege pivot.
+//   2) If the probe fails ("Object … doesn't exist"), fall back to the
+//      legacy `ir.module.category.group_ids` path so older Odoos
+//      keep working unchanged.
+//
+// In both cases we return the same shape:
+//   { sections: [{ id, name, leaves: [{ id, name, groups: [...] }, ...] }],
+//     adminCategory: { id, settingsGroupId } | null }
+// The screen (UserDetailsScreen.js) is unaware of which path produced it.
+const _rpc = async ({ model, method, args = [], kwargs = {} }) => {
+  return axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+    jsonrpc: '2.0',
+    method: 'call',
+    params: { model, method, args, kwargs },
+    id: new Date().getTime(),
+  }, { headers: { 'Content-Type': 'application/json' } });
+};
+
+const _buildSections = (leaves) => {
+  const sectionsMap = new Map();
+  for (const lf of leaves) {
+    const sectionName = lf.parentName || lf.name;
+    const sectionKey = lf.parentId ? `parent-${lf.parentId}` : `solo-${lf.id}`;
+    if (!sectionsMap.has(sectionKey)) {
+      sectionsMap.set(sectionKey, {
+        id: sectionKey,
+        name: sectionName,
+        sequence: lf.parentSequence ?? lf.sequence ?? 0,
+        leaves: [],
+      });
+    }
+    sectionsMap.get(sectionKey).leaves.push(lf);
+  }
+  return Array.from(sectionsMap.values())
+    .sort((a, b) => (a.sequence - b.sequence) || a.name.localeCompare(b.name))
+    .map((s) => ({
+      ...s,
+      leaves: s.leaves.sort(
+        (a, b) => (a.sequence - b.sequence) || a.name.localeCompare(b.name)
+      ),
+    }));
+};
+
+const _findAdminCategory = (leaves) => {
+  for (const lf of leaves) {
+    const settings = lf.groups.find((g) => /^settings$/i.test(g.name));
+    if (settings) return { id: lf.id, settingsGroupId: settings.id };
+  }
+  return null;
+};
+
+export const fetchGroupCategoriesOdoo = async () => {
+  // ─── Path A: Odoo 18/19 — res.groups.privilege ──────────────────────────
+  try {
+    const probe = await _rpc({
+      model: 'res.groups.privilege',
+      method: 'fields_get',
+      args: [[]],
+      kwargs: { attributes: ['type', 'relation', 'string'] },
+    });
+    if (!probe.data?.error) {
+      const fields = probe.data.result || {};
+      console.log('[FETCH GROUP CATS] privilege.fields =', Object.keys(fields).join(','));
+
+      // Pick the relation field that points to res.groups. Try a few
+      // likely names first, then any field whose `relation` is res.groups.
+      const candidates = ['implied_ids', 'group_ids', 'res_groups_ids', 'groups_ids'];
+      let groupsField = candidates.find((n) => fields[n]?.relation === 'res.groups');
+      if (!groupsField) {
+        groupsField = Object.keys(fields).find((n) => fields[n]?.relation === 'res.groups');
+      }
+      console.log(`[FETCH GROUP CATS] using groupsField=${groupsField || '<none>'}`);
+
+      if (groupsField) {
+        const privRes = await _rpc({
+          model: 'res.groups.privilege',
+          method: 'search_read',
+          args: [[]],
+          kwargs: {
+            fields: ['id', 'name', 'sequence', 'category_id', groupsField],
+            order: 'sequence asc, id asc',
+          },
+        });
+        if (privRes.data?.error) {
+          console.error('[FETCH GROUP CATS] privilege search_read error:', privRes.data.error);
+        } else {
+          const privileges = privRes.data.result || [];
+
+          // Bulk-read every referenced group for [id, name].
+          const allGroupIds = new Set();
+          for (const p of privileges) {
+            const ids = Array.isArray(p[groupsField]) ? p[groupsField] : [];
+            for (const gid of ids) allGroupIds.add(gid);
+          }
+          const groupsById = new Map();
+          if (allGroupIds.size > 0) {
+            const grpRes = await _rpc({
+              model: 'res.groups',
+              method: 'read',
+              args: [Array.from(allGroupIds)],
+              kwargs: { fields: ['id', 'name'] },
+            });
+            if (!grpRes.data?.error) {
+              for (const g of grpRes.data.result || []) {
+                groupsById.set(g.id, { id: g.id, name: g.name });
+              }
+            }
+          }
+
+          // Each privilege = one leaf. category_id is the section header.
+          const leaves = [];
+          for (const p of privileges) {
+            const ids = Array.isArray(p[groupsField]) ? p[groupsField] : [];
+            const groups = ids.map((gid) => groupsById.get(gid)).filter(Boolean);
+            if (groups.length === 0) continue;
+            const catTuple = Array.isArray(p.category_id) ? p.category_id : null;
+            leaves.push({
+              id: p.id,
+              name: p.name || `Privilege ${p.id}`,
+              sequence: p.sequence ?? 0,
+              parentId: catTuple ? catTuple[0] : null,
+              parentName: catTuple ? catTuple[1] : null,
+              groups,
+            });
+          }
+          const sections = _buildSections(leaves);
+          let adminCategory = _findAdminCategory(leaves);
+
+          // Odoo 18/19 dropped Administration from the privilege list,
+          // so the User/Administrator radio is no longer derivable from
+          // privilege groups. Look up base.group_system directly via
+          // ir.model.data and synthesise an adminCategory whose `id` is
+          // a synthetic key — the screen's groupByCategory map happily
+          // tracks it alongside real privilege ids and includes the
+          // group_system id in groups_id at save time.
+          if (!adminCategory) {
+            try {
+              const xmlRes = await _rpc({
+                model: 'ir.model.data',
+                method: 'search_read',
+                args: [[['module', '=', 'base'], ['name', '=', 'group_system']]],
+                kwargs: { fields: ['res_id'], limit: 1 },
+              });
+              const settingsId = xmlRes.data?.result?.[0]?.res_id || null;
+              if (settingsId) {
+                adminCategory = { id: 'admin-pseudo', settingsGroupId: settingsId };
+              }
+            } catch (e) {
+              console.warn('[FETCH GROUP CATS] group_system lookup failed:', e?.message || e);
+            }
+          }
+          console.log(`[FETCH GROUP CATS] (privilege) ${leaves.length} leaves, ${sections.length} sections, admin=${!!adminCategory}`);
+          return { sections, adminCategory };
+        }
+      }
+    } else {
+      const msg = probe.data.error?.data?.message || probe.data.error?.message || '';
+      // "doesn't exist" / "not found" → model missing → use legacy path.
+      // Anything else also falls through to legacy as a last resort.
+      console.log('[FETCH GROUP CATS] privilege probe error, trying legacy:', msg);
+    }
+  } catch (error) {
+    console.warn('[FETCH GROUP CATS] privilege path threw, falling back:', error?.message || error);
+  }
+
+  // ─── Path B: legacy Odoo 17 — ir.module.category.group_ids ──────────────
+  try {
+    const groupIdsField = 'group_ids';
+    const catRes = await _rpc({
+      model: 'ir.module.category',
+      method: 'search_read',
+      args: [[]],
+      kwargs: { fields: ['id', 'name', 'sequence', 'parent_id', groupIdsField] },
+    });
+    if (catRes.data?.error) {
+      console.error('[FETCH GROUP CATS] (legacy) category error:', catRes.data.error);
+      return { sections: [], adminCategory: null };
+    }
+    const categories = catRes.data.result || [];
+
+    const allGroupIds = new Set();
+    for (const c of categories) {
+      const ids = Array.isArray(c[groupIdsField]) ? c[groupIdsField] : [];
+      for (const gid of ids) allGroupIds.add(gid);
+    }
+    const groupsById = new Map();
+    if (allGroupIds.size > 0) {
+      const grpRes = await _rpc({
+        model: 'res.groups',
+        method: 'read',
+        args: [Array.from(allGroupIds)],
+        kwargs: { fields: ['id', 'name'] },
+      });
+      if (!grpRes.data?.error) {
+        for (const g of grpRes.data.result || []) {
+          groupsById.set(g.id, { id: g.id, name: g.name });
+        }
+      }
+    }
+
+    const catById = new Map();
+    categories.forEach((c) => catById.set(c.id, c));
+    const leaves = [];
+    for (const c of categories) {
+      const ids = Array.isArray(c[groupIdsField]) ? c[groupIdsField] : [];
+      if (ids.length === 0) continue;
+      const groups = ids.map((gid) => groupsById.get(gid)).filter(Boolean);
+      if (groups.length === 0) continue;
+      leaves.push({
+        id: c.id,
+        name: c.name,
+        sequence: c.sequence ?? 0,
+        parentId: Array.isArray(c.parent_id) ? c.parent_id[0] : null,
+        parentName: Array.isArray(c.parent_id) ? c.parent_id[1] : null,
+        parentSequence: Array.isArray(c.parent_id)
+          ? (catById.get(c.parent_id[0])?.sequence ?? c.sequence)
+          : c.sequence,
+        groups,
+      });
+    }
+    const sections = _buildSections(leaves);
+    const adminCategory = _findAdminCategory(leaves);
+    console.log(`[FETCH GROUP CATS] (legacy) ${leaves.length} leaves, ${sections.length} sections, admin=${!!adminCategory}`);
+    return { sections, adminCategory };
+  } catch (error) {
+    console.error('fetchGroupCategoriesOdoo error:', error);
+    return { sections: [], adminCategory: null };
+  }
+};
+
+// All companies — feeds the Companies (multi) and Default Company dropdowns.
+export const fetchCompaniesOdoo = async () => {
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.company',
+        method: 'search_read',
+        args: [[]],
+        kwargs: { fields: ['id', 'name'], order: 'name asc' },
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data?.error) {
+      console.error('[FETCH COMPANIES] error:', response.data.error);
+      return [];
+    }
+    return response.data.result || [];
+  } catch (error) {
+    console.error('fetchCompaniesOdoo error:', error);
+    return [];
+  }
+};
+
+// Update an existing user. groupIds is the FULL set of group ids the user
+// should belong to after the write — Odoo's [[6, 0, ids]] command replaces
+// the whole many2many.
+export const updateUserOdoo = async ({
+  userId,
+  name,
+  login,
+  email,
+  phone,
+  active,
+  companyIds,
+  defaultCompanyId,
+  groupIds,
+} = {}) => {
+  try {
+    const id = Number(userId);
+    if (!id) throw new Error('userId is required');
+    const groupsField = await _resolveUserGroupsField();
+    const vals = {};
+    if (name !== undefined) vals.name = name;
+    if (login !== undefined) vals.login = login;
+    if (email !== undefined) vals.email = email;
+    if (phone !== undefined) vals.phone = phone;
+    if (active !== undefined) vals.active = !!active;
+    if (Array.isArray(companyIds)) vals.company_ids = [[6, 0, companyIds]];
+    if (defaultCompanyId !== undefined && defaultCompanyId !== null) {
+      vals.company_id = Number(defaultCompanyId);
+    }
+    if (Array.isArray(groupIds)) vals[groupsField] = [[6, 0, groupIds]];
+
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.users',
+        method: 'write',
+        args: [[id], vals],
+        kwargs: {},
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data?.error) {
+      console.error('[UPDATE USER] Odoo error:', response.data.error);
+      return { error: response.data.error };
+    }
+    return { result: !!response.data.result };
+  } catch (error) {
+    console.error('updateUserOdoo error:', error);
+    return { error };
+  }
+};
+
+// Change a user's password (admin path; Odoo enforces ACL server-side).
+export const updateUserPasswordOdoo = async (userId, newPassword) => {
+  try {
+    const id = Number(userId);
+    if (!id) throw new Error('userId is required');
+    if (!newPassword) throw new Error('newPassword is required');
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.users',
+        method: 'write',
+        args: [[id], { password: newPassword }],
+        kwargs: {},
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (response.data?.error) {
+      console.error('[UPDATE PASSWORD] Odoo error:', response.data.error);
+      return { error: response.data.error };
+    }
+    return { result: !!response.data.result };
+  } catch (error) {
+    console.error('updateUserPasswordOdoo error:', error);
+    return { error };
   }
 };
 
@@ -4069,13 +4556,13 @@ export const fetchCompanyCurrency = async () => {
 
     if (response.data && response.data.error) {
       console.error('[FETCH CURRENCY] Odoo error:', response.data.error);
-      return { symbol: '$', name: 'USD' }; // Fallback
+      return { symbol: 'ر.ع.', name: 'OMR', position: 'before' }; // Fallback
     }
 
     const companies = response.data.result || [];
     if (companies.length === 0) {
       console.warn('[FETCH CURRENCY] No company found, using fallback');
-      return { symbol: '$', name: 'USD' };
+      return { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
     }
 
     const currencyId = Array.isArray(companies[0].currency_id)
@@ -4099,13 +4586,13 @@ export const fetchCompanyCurrency = async () => {
 
     if (currencyResponse.data && currencyResponse.data.error) {
       console.error('[FETCH CURRENCY] Currency read error:', currencyResponse.data.error);
-      return { symbol: '$', name: 'USD' };
+      return { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
     }
 
     const currencyData = currencyResponse.data.result[0];
     const currencyInfo = {
-      symbol: currencyData.symbol || '$',
-      name: currencyData.name || 'USD',
+      symbol: currencyData.symbol || 'ر.ع.',
+      name: currencyData.name || 'OMR',
       position: currencyData.position || 'before', // 'before' or 'after'
     };
 
@@ -4113,7 +4600,7 @@ export const fetchCompanyCurrency = async () => {
     return currencyInfo;
   } catch (error) {
     console.error('fetchCompanyCurrency error:', error);
-    return { symbol: '$', name: 'USD', position: 'before' }; // Fallback
+    return { symbol: 'ر.ع.', name: 'OMR', position: 'before' }; // Fallback
   }
 };
 

@@ -69,7 +69,7 @@ import { SupplierPaymentCreation, SupplierPaymentScreen } from "@screens/Home/Op
 // Use the old Icecube invoice/receipt preview as the POS receipt screen
 const POSReceiptScreen = CreateInvoicePreview;
 import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymentGateway';
-import { UsersScreen } from '@screens/Users';
+import { UsersScreen, UserDetailsScreen } from '@screens/Users';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { StockScreen, StockDetailScreen } from '@screens/Stock';
 import { ExpensesScreen, ExpenseFormScreen, ExpenseDetailScreen } from '@screens/Expenses';
@@ -708,6 +708,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="UsersScreen"
         component={UsersScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="UserDetails"
+        component={UserDetailsScreen}
         options={{ headerShown: false }}
       />
       {/* Orders */}

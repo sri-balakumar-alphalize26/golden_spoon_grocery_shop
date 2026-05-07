@@ -69,7 +69,7 @@ const prettyDateLabel = (iso) => {
 
 const SalesReportScreen = ({ navigation }) => {
   const currency = useAuthStore((state) => state.currency);
-  const fallbackCurrency = { symbol: '$', position: 'before' };
+  const fallbackCurrency = { symbol: 'ر.ع.', position: 'before' };
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

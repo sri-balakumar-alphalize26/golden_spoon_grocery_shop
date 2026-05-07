@@ -1,8 +1,11 @@
 // stores/auth/login
 import { create } from 'zustand';
-import { fetchUserApiToken, fetchCompanyCurrency } from '@api/services/generalApi';
+import { fetchUserApiToken } from '@api/services/generalApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveCurrencyConfig } from '@utils/currency';
+
+// App is locked to Omani Rial regardless of the Odoo company currency.
+const APP_CURRENCY = { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
 
 const useAuthStore = create((set) => ({
     isLoggedIn: false,
@@ -12,17 +15,17 @@ const useAuthStore = create((set) => ({
     initializeAuth: async () => {
         try {
             const userData = await AsyncStorage.getItem('userData');
-            const currencyData = await AsyncStorage.getItem('currencyConfig');
-
+            // Ignore any persisted currency — the app is locked to OMR.
             if (userData) {
                 const user = JSON.parse(userData);
-                const currency = currencyData ? JSON.parse(currencyData) : null;
-                set({ isLoggedIn: true, user, currency });
+                set({ isLoggedIn: true, user, currency: APP_CURRENCY });
                 console.log('[AUTH] Restored user session:', user.uid || user.id);
-                console.log('[AUTH] Restored currency:', currency);
+            } else {
+                set({ currency: APP_CURRENCY });
             }
         } catch (error) {
             console.error('[AUTH] Failed to restore session:', error);
+            set({ currency: APP_CURRENCY });
         }
     },
     // login: accepts a user object (from Odoo or admin) and enriches it with API token(s)
@@ -33,15 +36,10 @@ const useAuthStore = create((set) => ({
             const enrichedUser = { ...userData };
             set({ user: enrichedUser });
 
-            // Fetch and store currency configuration
-            try {
-                const currencyConfig = await fetchCompanyCurrency();
-                set({ currency: currencyConfig });
-                await saveCurrencyConfig(currencyConfig);
-                console.log('[AUTH] Currency fetched and saved:', currencyConfig);
-            } catch (currencyError) {
-                console.warn('[AUTH] Failed to fetch currency, using default:', currencyError);
-            }
+            // App-wide currency is locked to OMR — skip the Odoo fetch.
+            set({ currency: APP_CURRENCY });
+            await saveCurrencyConfig(APP_CURRENCY);
+            console.log('[AUTH] Currency locked to OMR:', APP_CURRENCY);
 
             try {
                 await AsyncStorage.setItem('userData', JSON.stringify(enrichedUser));
