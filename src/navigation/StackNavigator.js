@@ -27,7 +27,13 @@ import CreateInvoice from '@screens/Home/Sections/Customer/CreateInvoice';
 import CreateInvoicePreview from '@screens/Home/Sections/Customer/CreateInvoicePreview';
 import { InventoryDetails, InventoryForm, InventoryScreen } from "@screens/Home/Options/Inventory";
 import { ProductDetail } from "@components/common/Detail";
-import { CustomerDetails, CustomerScreen, CustomerInfo } from "@screens/Home/Sections/Customer";
+import {
+  CustomerDetails,
+  CustomerScreen,
+  CustomerInfo,
+  CustomerIdProofsScreen,
+  CustomerIdProofDetailScreen,
+} from "@screens/Home/Sections/Customer";
 import { MarketStudyScreen } from "@screens/Home/Options/MarketStudy";
 import { EditVisitPlan, VisitPlanForm, VisitsPlanScreen, VisitPlanDetails } from "@screens/Home/Options/VisitsPlan";
 import { EditVisit, VisitDetails, VisitScreen } from "@screens/Home/Options/Visits"; //customer visit
@@ -299,6 +305,16 @@ const StackNavigator = () => {
       <Stack.Screen
         name="CustomerInfo"
         component={CustomerInfo}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="CustomerIdProofs"
+        component={CustomerIdProofsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="CustomerIdProofDetail"
+        component={CustomerIdProofDetailScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

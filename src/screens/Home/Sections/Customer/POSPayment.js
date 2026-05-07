@@ -10,8 +10,14 @@ import {
   fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
   validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
   fetchPosConfigPaymentMethods,
+  fetchPartnerIdProofOdoo,
 } from '@api/services/generalApi';
 import { createPosOrderOdoo, createPosPaymentOdoo } from '@api/services/generalApi';
+import { IdProofCards } from '@components/IdProof';
+// react-native-modal — used here for the ID-proof popup so it animates
+// in like LogoutModal (slide-up + dimmed backdrop) instead of the
+// instant fade the built-in `Modal` gives us.
+import RNModal from 'react-native-modal';
 import axios from 'axios';
 import { getOdooUrl, getOdooDb } from '@api/config/odooConfig';
 import { useProductStore } from '@stores/product';
@@ -105,6 +111,15 @@ const POSPayment = ({ navigation, route }) => {
     discountAmount = 0,
   } = route?.params || {};
   const [customer, setCustomer] = useState(initialCustomer);
+
+  // ID-proof verification state for the selected customer. Loaded the
+  // moment a customer is picked so the chip can flip from "Add" to
+  // "Verified" without an extra fetch round-trip when the cashier taps
+  // it. `loaded` flips true after at least one fetch attempt so we can
+  // distinguish "still loading" from "definitely missing".
+  const [idProof, setIdProof] = useState({ front: null, back: null, loaded: false });
+  const [idProofModalVisible, setIdProofModalVisible] = useState(false);
+
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
       selectMode: true,
@@ -120,6 +135,32 @@ const POSPayment = ({ navigation, route }) => {
       console.log('Journals available for account payment:', journals);
     }
   }, [paymentMode, journals]);
+
+  // Pull the selected customer's ID-proof binaries the moment they're
+  // picked. The chip below the customer card uses these to flip
+  // between "ID Proof on file" (green) and "Add ID Proof" (amber).
+  useEffect(() => {
+    let alive = true;
+    const partnerId = customer?.id || customer?._id;
+    if (!partnerId) {
+      setIdProof({ front: null, back: null, loaded: false });
+      return undefined;
+    }
+    setIdProof({ front: null, back: null, loaded: false });
+    fetchPartnerIdProofOdoo(partnerId)
+      .then((res) => {
+        if (!alive) return;
+        setIdProof({
+          front: res?.id_proof_front || null,
+          back: res?.id_proof_back || null,
+          loaded: true,
+        });
+      })
+      .catch(() => {
+        if (alive) setIdProof({ front: null, back: null, loaded: true });
+      });
+    return () => { alive = false; };
+  }, [customer?.id, customer?._id]);
   const [selectedJournal, setSelectedJournal] = useState(null);
   const [paying, setPaying] = useState(false);
   const { clearProducts } = useProductStore();
@@ -866,6 +907,41 @@ const POSPayment = ({ navigation, route }) => {
               <MaterialIcons name={customer ? 'edit' : 'add'} size={16} color="#fff" />
             </View>
           </TouchableOpacity>
+
+          {/* ID-proof chip — only relevant when a customer is selected.
+              Green ✓ when at least the Front photo is on file, amber
+              warning when missing. Tap to open the view modal. */}
+          {customer ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIdProofModalVisible(true)}
+              style={[
+                styles.idProofChip,
+                idProof.front
+                  ? { backgroundColor: '#DCFCE7', borderColor: '#86EFAC' }
+                  : { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' },
+              ]}
+            >
+              <MaterialIcons
+                name={idProof.front ? 'verified' : 'badge'}
+                size={16}
+                color={idProof.front ? '#166534' : '#9A3412'}
+              />
+              <Text
+                style={[
+                  styles.idProofChipText,
+                  { color: idProof.front ? '#166534' : '#9A3412' },
+                ]}
+              >
+                {!idProof.loaded
+                  ? 'Loading ID proof…'
+                  : idProof.front
+                    ? (idProof.back ? 'ID Proof on file (Front + Back)' : 'ID Proof on file (Front only)')
+                    : 'No ID proof — tap to add'}
+              </Text>
+              <MaterialIcons name="chevron-right" size={18} color={idProof.front ? '#166534' : '#9A3412'} />
+            </TouchableOpacity>
+          ) : null}
         </ScrollView>
 
         {/* Validate footer — solid orange, always tappable; popup if cash short */}
@@ -1110,6 +1186,56 @@ const POSPayment = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
+
+      {/* ID Proof view modal — same shape as LogoutModal: slide-up via
+          react-native-modal, white card with navy 2px border, navy
+          primary buttons in a row. Read-only quick check; tap
+          "Open contact" to jump to CustomerInfo for edits. */}
+      <RNModal
+        isVisible={idProofModalVisible}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.7}
+        animationInTiming={400}
+        animationOutTiming={300}
+        backdropTransitionInTiming={400}
+        backdropTransitionOutTiming={300}
+        onBackButtonPress={() => setIdProofModalVisible(false)}
+        onBackdropPress={() => setIdProofModalVisible(false)}
+      >
+        <View style={styles.idProofPopupContainer}>
+          <Text style={styles.idProofPopupTitle}>
+            {`ID Proof — ${customer?.name || ''}`}
+          </Text>
+          <View style={{ alignSelf: 'stretch', marginTop: 14 }}>
+            <IdProofCards
+              front={idProof.front}
+              back={idProof.back}
+              onChange={() => {}}
+              readOnly
+            />
+          </View>
+          <View style={styles.idProofPopupBtnRow}>
+            <TouchableOpacity
+              style={[styles.idProofPopupBtn, { flex: 1 }]}
+              onPress={() => setIdProofModalVisible(false)}
+            >
+              <Text style={styles.idProofPopupBtnText}>CLOSE</Text>
+            </TouchableOpacity>
+            {customer?.id ? (
+              <TouchableOpacity
+                style={[styles.idProofPopupBtn, { flex: 1 }]}
+                onPress={() => {
+                  setIdProofModalVisible(false);
+                  navigation.navigate('CustomerInfo', { partnerId: customer.id, mode: 'edit' });
+                }}
+              >
+                <Text style={styles.idProofPopupBtnText}>OPEN CONTACT</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+      </RNModal>
     </SafeAreaView>
   );
 };
@@ -1355,6 +1481,61 @@ const styles = StyleSheet.create({
     width: 30, height: 30, borderRadius: 15,
     alignItems: 'center', justifyContent: 'center',
     marginLeft: 8,
+  },
+  // ID-proof chip — shows under the customer card on POSPayment.
+  idProofChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 14,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    gap: 8,
+  },
+  idProofChipText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  // ID-proof popup — mirrors LogoutModal (white card, navy 2px border,
+  // navy primary buttons in a row).
+  idProofPopupContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    borderColor: NAVY,
+    borderWidth: 2,
+    paddingVertical: 22,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  idProofPopupTitle: {
+    marginVertical: 8,
+    fontSize: 16,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center',
+  },
+  idProofPopupBtnRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignSelf: 'stretch',
+    marginTop: 18,
+    gap: 10,
+  },
+  idProofPopupBtn: {
+    backgroundColor: NAVY,
+    borderRadius: 10,
+    padding: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  idProofPopupBtnText: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.4,
   },
   toggleTrack: {
     width: 36, height: 20, borderRadius: 10,

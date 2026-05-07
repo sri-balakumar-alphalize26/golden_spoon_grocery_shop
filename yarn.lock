@@ -3936,6 +3936,13 @@ expo-build-properties@~0.11.1:
     ajv "^8.11.0"
     semver "^7.5.3"
 
+expo-camera@~14.1.3:
+  version "14.1.3"
+  resolved "https://registry.yarnpkg.com/expo-camera/-/expo-camera-14.1.3.tgz#c3b36c7ed28613e7423b6c4df192549f4f9ee0dd"
+  integrity sha512-JodpVjOY8JDuSp/RkphS8Bxqaj/gwg0h0UbQB9MLr1LoxbL9brvJt7IZnmTf7+ON8jRKUx9E5o/F02pRNbmSbQ==
+  dependencies:
+    invariant "^2.2.4"
+
 expo-constants@~15.4.0, expo-constants@~15.4.6:
   version "15.4.6"
   resolved "https://registry.npmjs.org/expo-constants/-/expo-constants-15.4.6.tgz"

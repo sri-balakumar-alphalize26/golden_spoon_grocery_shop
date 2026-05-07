@@ -42,7 +42,13 @@
       "usesCleartextTraffic": true
     },
     "plugins": [
-      "./plugins/android-cleartext-traffic.js"
+      "./plugins/android-cleartext-traffic.js",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Grocery Shop to use your camera to capture ID-proof photos."
+        }
+      ]
     ],
     "owner": "mightyraju",
     "extra": {

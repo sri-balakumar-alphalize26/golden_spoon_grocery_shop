@@ -19,7 +19,18 @@ import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchCustomerDetailsOdoo, updatePartnerOdoo, createPartnerOdoo } from '@api/services/generalApi';
+import {
+  updatePartnerOdoo,
+  createPartnerOdoo,
+  updatePartnerIdProofOdoo,
+} from '@api/services/generalApi';
+import {
+  primePartnerCache,
+  getCachedPartnerDetails,
+  getCachedPartnerProof,
+  invalidatePartnerCache,
+} from '@api/services/customerCache';
+import { IdProofCards } from '@components/IdProof';
 import Toast from 'react-native-toast-message';
 
 const NAVY = COLORS.primaryThemeColor;
@@ -153,40 +164,66 @@ const CustomerInfo = ({ navigation, route }) => {
   // New contacts (no partnerId) always render in edit mode.
   const isView = mode === 'view' && !isNew;
 
-  const [loading, setLoading] = useState(!isNew);
+  // No initial loading gate — we hydrate the form from route.params
+  // (which already has name/email/phone/address from the customer-list
+  // row) so the screen renders immediately. The background fetch
+  // refines fields the summary didn't include (vat, website, etc.).
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
 
-  const [form, setForm] = useState({
-    name: details?.name || '',
-    email: details?.email || '',
-    phone: '',
-    country_code: '+968',
-    is_company: false,
-    street: '',
-    street2: '',
-    city: '',
-    zip: '',
-    company_name: '',
-    function: '',
-    website: '',
-    vat: '',
+  // Pre-fill from the route-param summary so the screen has visible
+  // values on the very first render — the network refine happens in
+  // the effect below without blocking the user.
+  const [form, setForm] = useState(() => {
+    const parsed = details?.phone
+      ? parsePhoneCountryCode(details.phone)
+      : { code: '+968', number: '' };
+    return {
+      name: details?.name || '',
+      email: details?.email || '',
+      phone: parsed.number || '',
+      country_code: parsed.code || '+968',
+      is_company: false,
+      street: '',
+      street2: '',
+      city: '',
+      zip: '',
+      company_name: '',
+      function: '',
+      website: '',
+      vat: '',
+      id_proof_front: null,
+      id_proof_back: null,
+    };
   });
+  // Track whether each side changed since load — only the changed sides
+  // are written back to Odoo on save. Avoids re-uploading the same
+  // base64 every time the user edits an unrelated field.
+  const [idProofChanged, setIdProofChanged] = useState({ front: false, back: false });
 
   useEffect(() => {
     if (!partnerId) return;
     let alive = true;
-    setLoading(true);
-    fetchCustomerDetailsOdoo(partnerId)
-      .then((rec) => {
+    // Hot path — the customer list primed the cache on row tap, so the
+    // promises are already in flight or done by the time we mount.
+    // Cold path — direct nav (e.g. post-create) with no prime: kick
+    // off the fetches now and read the same promises back.
+    if (!getCachedPartnerDetails(partnerId)) primePartnerCache(partnerId);
+    Promise.all([
+      getCachedPartnerDetails(partnerId),
+      getCachedPartnerProof(partnerId),
+    ])
+      .then(([rec, proof]) => {
         if (!alive || !rec) return;
         const parsed = rec.phone ? parsePhoneCountryCode(rec.phone) : { code: '+968', number: '' };
-        setForm({
-          name: rec.name || '',
-          email: rec.email || '',
-          phone: parsed.number || '',
-          country_code: parsed.code || '+968',
+        setForm((prev) => ({
+          ...prev,
+          name: rec.name || prev.name,
+          email: rec.email || prev.email,
+          phone: parsed.number || prev.phone,
+          country_code: parsed.code || prev.country_code,
           is_company: !!rec.is_company,
           street: rec.street || '',
           street2: rec.street2 || '',
@@ -196,16 +233,25 @@ const CustomerInfo = ({ navigation, route }) => {
           function: rec.function || '',
           website: rec.website || '',
           vat: rec.vat || '',
-        });
+          id_proof_front: proof?.id_proof_front || null,
+          id_proof_back: proof?.id_proof_back || null,
+        }));
+        setIdProofChanged({ front: false, back: false });
       })
       .catch(() => {
         Toast.show({ type: 'error', text1: 'Failed to load contact', position: 'bottom' });
-      })
-      .finally(() => alive && setLoading(false));
+      });
     return () => { alive = false; };
   }, [partnerId]);
 
   const set = (key, val) => setForm((prev) => ({ ...prev, [key]: val }));
+
+  // ID-proof picker callback — flips the matching `idProofChanged`
+  // flag so handleSave knows to write that side back.
+  const setIdProof = (side, base64) => {
+    setForm((prev) => ({ ...prev, [side === 'front' ? 'id_proof_front' : 'id_proof_back']: base64 }));
+    setIdProofChanged((prev) => ({ ...prev, [side]: true }));
+  };
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -239,6 +285,31 @@ const CustomerInfo = ({ navigation, route }) => {
           position: 'bottom',
         });
         return;
+      }
+      // Drop any stale cached version so the next open re-fetches.
+      if (partnerId) invalidatePartnerCache(partnerId);
+      // ID proof writes go through a separate call so the main partner
+      // write isn't blocked by the (possibly missing) custom binary
+      // fields. We only send the side(s) that actually changed.
+      const proofTargetId = isNew ? resp?.id || resp?.result : partnerId;
+      if (proofTargetId && (idProofChanged.front || idProofChanged.back)) {
+        const proofVals = {};
+        if (idProofChanged.front) proofVals.id_proof_front = form.id_proof_front;
+        if (idProofChanged.back) proofVals.id_proof_back = form.id_proof_back;
+        const proofResp = await updatePartnerIdProofOdoo(proofTargetId, proofVals);
+        if (proofResp?.error) {
+          Toast.show({
+            type: 'info',
+            text1: 'Contact saved',
+            text2: 'ID proof not saved — fields not configured on this Odoo',
+            position: 'bottom',
+          });
+          navigation.goBack();
+          return;
+        }
+        // Proof changed too — clear the cache for the freshly-saved
+        // partner so the next open re-fetches the new image.
+        if (proofTargetId) invalidatePartnerCache(proofTargetId);
       }
       Toast.show({
         type: 'success',
@@ -431,6 +502,18 @@ const CustomerInfo = ({ navigation, route }) => {
           </>
         ) : null}
 
+        {/* ID Proof — read-only in view mode (Replace/Remove are gated
+            behind readOnly={true}). Tap Edit to modify. */}
+        <Text style={s.sectionTitle}>ID Proof</Text>
+        <View style={{ marginBottom: 12 }}>
+          <IdProofCards
+            front={form.id_proof_front}
+            back={form.id_proof_back}
+            onChange={setIdProof}
+            readOnly
+          />
+        </View>
+
         {/* Bottom edit button */}
         <TouchableOpacity
           style={s.editBigBtn}
@@ -444,15 +527,8 @@ const CustomerInfo = ({ navigation, route }) => {
     );
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView backgroundColor="#fff">
-        <View style={s.center}>
-          <ActivityIndicator size="large" color={COLORS.primaryThemeColor} />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // No initial spinner gate — `loading` is only flipped briefly during
+  // saves now, and the form is pre-filled from route.params.details.
 
   return (
     <SafeAreaView backgroundColor="#F5F6FA">
@@ -657,6 +733,20 @@ const CustomerInfo = ({ navigation, route }) => {
                 autoCapitalize="none"
               />
             </View>
+          </View>
+
+          {/* ID Proof — editable in edit/create mode. Cards open the
+              Camera/Gallery action sheet on tap; Replace/Remove buttons
+              show on filled cards. Saved on the same Save tap below. */}
+          <Text style={s.sectionTitle}>ID Proof</Text>
+          <View style={{ marginBottom: 14 }}>
+            <IdProofCards
+              front={form.id_proof_front}
+              back={form.id_proof_back}
+              onChange={setIdProof}
+              readOnly={isView}
+              busy={saving}
+            />
           </View>
 
           {/* Save button — hidden in view mode (use the Edit header button instead) */}

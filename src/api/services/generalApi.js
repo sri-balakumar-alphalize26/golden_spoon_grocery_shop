@@ -1386,9 +1386,7 @@ export const fetchCustomers = async ({ offset, limit, searchText }) => {
 };// 🔹 Fetch customers directly from Odoo 19 via JSON-RPC (no mobile field)
 export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } = {}) => {
   try {
-    // 🔍 Domain for search (optional)
     let domain = [];
-
     if (searchText && searchText.trim() !== "") {
       const term = searchText.trim();
       domain = [
@@ -1397,8 +1395,20 @@ export const fetchCustomersOdoo = async ({ offset = 0, limit = 50, searchText } 
         ["phone", "ilike", term],
       ];
     }
-const response = await axios.post(
-  `${getOdooUrl()}/web/dataset/call_kw`,
+
+    // ID-proof binaries live on ir.attachment (not as fields on
+    // res.partner), so the list fetch doesn't request them — that's
+    // what was producing the constant `Invalid field 'id_proof_front'`
+    // warnings on every list load. Per-customer proof presence is
+    // checked separately by callers that need it (e.g. the dedicated
+    // Customer ID Proofs screen).
+    const fields = [
+      "id", "name", "email", "phone",
+      "street", "street2", "city", "zip", "country_id",
+    ];
+
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
       {
         jsonrpc: "2.0",
         method: "call",
@@ -1406,30 +1416,17 @@ const response = await axios.post(
           model: "res.partner",
           method: "search_read",
           args: [domain],
-          kwargs: {
-            fields: [
-              "id", "name", "email", "phone",
-              "street", "street2", "city", "zip", "country_id"
-            ],
-            offset,
-            limit,
-            order: "name asc",
-          },
+          kwargs: { fields, offset, limit, order: "name asc" },
         },
       },
-      {
-        headers: { "Content-Type": "application/json" },
-      }
+      { headers: { "Content-Type": "application/json" } }
     );
-
-    if (response.data.error) {
+    if (response.data && response.data.error) {
       console.log("Odoo JSON-RPC error:", response.data.error);
       throw new Error("Odoo JSON-RPC error");
     }
-
     const partners = response.data.result || [];
 
-    // 🔙 Shape result for your CustomerScreen
     const baseUrl = getOdooUrl();
     return partners.map((p) => ({
       id: p.id,
@@ -1444,10 +1441,192 @@ const response = await axios.post(
         p.zip,
         p.country_id && Array.isArray(p.country_id) ? p.country_id[1] : ""
       ].filter(Boolean).join(", "),
+      // ID-proof presence is fetched separately via ir.attachment when
+      // a caller needs it (e.g. the Customer ID Proofs screen).
     }));
   } catch (error) {
     console.error("fetchCustomersOdoo error:", error);
     throw error;
+  }
+};
+
+// ID-proof storage strategy — `ir.attachment` linked to the partner,
+// not a custom field on res.partner. This avoids needing a custom
+// Odoo module: the standard `ir.attachment` table is on every Odoo
+// install, and Odoo permissions / record rules already gate access
+// per-user. The proof "side" (front / back) is encoded in the
+// attachment's `name` so the lookup is just a search by partner id +
+// known names.
+const ID_PROOF_ATTACH_NAMES = {
+  front: 'id_proof_front',
+  back: 'id_proof_back',
+};
+
+// Find the existing id_proof attachments for a partner. Returns a
+// dict keyed by side ('front' / 'back') with the attachment id and
+// base64 datas, or null if missing.
+const _readIdProofAttachments = async (partnerId) => {
+  if (!partnerId) return { front: null, back: null };
+  const baseUrl = getOdooUrl();
+  const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+    jsonrpc: '2.0',
+    method: 'call',
+    params: {
+      model: 'ir.attachment',
+      method: 'search_read',
+      args: [[
+        ['res_model', '=', 'res.partner'],
+        ['res_id', '=', Number(partnerId)],
+        ['name', 'in', [ID_PROOF_ATTACH_NAMES.front, ID_PROOF_ATTACH_NAMES.back]],
+      ]],
+      kwargs: { fields: ['id', 'name', 'datas'], order: 'id desc' },
+    },
+  }, { headers: { 'Content-Type': 'application/json' } });
+  if (resp.data?.error) throw new Error(resp.data.error?.data?.message || 'attachment search failed');
+  const rows = resp.data?.result || [];
+  // If an old custom-module install previously wrote multiple rows per
+  // side, the most recent one wins (we ordered desc by id).
+  const out = { front: null, back: null };
+  for (const r of rows) {
+    if (r.name === ID_PROOF_ATTACH_NAMES.front && !out.front) {
+      out.front = { id: r.id, datas: r.datas || null };
+    } else if (r.name === ID_PROOF_ATTACH_NAMES.back && !out.back) {
+      out.back = { id: r.id, datas: r.datas || null };
+    }
+  }
+  return out;
+};
+
+// Read both ID-proof binaries for a single partner.
+export const fetchPartnerIdProofOdoo = async (partnerId) => {
+  if (!partnerId) return { id_proof_front: null, id_proof_back: null };
+  try {
+    const map = await _readIdProofAttachments(partnerId);
+    return {
+      id_proof_front: map.front?.datas || null,
+      id_proof_back: map.back?.datas || null,
+    };
+  } catch (e) {
+    console.warn('fetchPartnerIdProofOdoo failed:', e?.message);
+    return { id_proof_front: null, id_proof_back: null };
+  }
+};
+
+// Write one or both ID-proof binaries via ir.attachment. Pass `null`
+// (not undefined) to clear a side. Behaviour per side:
+//   undefined  → unchanged
+//   non-empty  → if an attachment with that side's name already exists,
+//                write its `datas`; otherwise create a new one.
+//   null       → unlink the existing attachment (if any).
+export const updatePartnerIdProofOdoo = async (partnerId, { id_proof_front, id_proof_back } = {}) => {
+  if (!partnerId) return { error: { message: 'partnerId is required' } };
+  if (id_proof_front === undefined && id_proof_back === undefined) {
+    return { result: partnerId };
+  }
+  const baseUrl = getOdooUrl();
+  try {
+    const existing = await _readIdProofAttachments(partnerId);
+    const ops = [];
+
+    const apply = (side, value) => {
+      if (value === undefined) return;
+      const sideName = ID_PROOF_ATTACH_NAMES[side];
+      const existingAtt = existing[side];
+      if (value === null) {
+        if (existingAtt) {
+          ops.push(axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'ir.attachment',
+              method: 'unlink',
+              args: [[existingAtt.id]],
+              kwargs: {},
+            },
+          }, { headers: { 'Content-Type': 'application/json' } }));
+        }
+        return;
+      }
+      if (existingAtt) {
+        ops.push(axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.attachment',
+            method: 'write',
+            args: [[existingAtt.id], { datas: value, mimetype: 'image/jpeg' }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } }));
+      } else {
+        ops.push(axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.attachment',
+            method: 'create',
+            args: [{
+              name: sideName,
+              datas: value,
+              mimetype: 'image/jpeg',
+              res_model: 'res.partner',
+              res_id: Number(partnerId),
+              type: 'binary',
+            }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } }));
+      }
+    };
+
+    apply('front', id_proof_front);
+    apply('back', id_proof_back);
+
+    const responses = await Promise.all(ops);
+    for (const r of responses) {
+      if (r.data?.error) return { error: r.data.error };
+    }
+    return { result: partnerId };
+  } catch (e) {
+    return { error: { message: e?.message || 'Update failed' } };
+  }
+};
+
+// Return an array of partner ids that already have at least one
+// id_proof attachment. Used by the Customer ID Proofs screen to
+// narrow the customer list to only those with proofs uploaded.
+export const fetchPartnersWithIdProofOdoo = async () => {
+  const baseUrl = getOdooUrl();
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'ir.attachment',
+        method: 'search_read',
+        args: [[
+          ['res_model', '=', 'res.partner'],
+          ['name', 'in', [ID_PROOF_ATTACH_NAMES.front, ID_PROOF_ATTACH_NAMES.back]],
+        ]],
+        kwargs: { fields: ['res_id', 'name'], limit: 5000 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return new Map();
+    const rows = resp.data?.result || [];
+    // Map<partnerId, { front: bool, back: bool }>
+    const out = new Map();
+    for (const r of rows) {
+      const pid = r.res_id;
+      if (!pid) continue;
+      const cur = out.get(pid) || { front: false, back: false };
+      if (r.name === ID_PROOF_ATTACH_NAMES.front) cur.front = true;
+      if (r.name === ID_PROOF_ATTACH_NAMES.back) cur.back = true;
+      out.set(pid, cur);
+    }
+    return out;
+  } catch (e) {
+    console.warn('fetchPartnersWithIdProofOdoo failed:', e?.message);
+    return new Map();
   }
 };
 
@@ -1754,8 +1933,9 @@ export const fetchCustomerDetailsOdoo = async (partnerId) => {
   if (!partnerId) return null;
   const baseUrl = getOdooUrl();
 
-  // Try the rich field set first; if Odoo rejects any field name, fall back to a
-  // minimal safe set so the screen always renders something.
+  // ID-proof binaries are stored as ir.attachment, not on res.partner,
+  // so we don't ask for them here. Two-step fetch keeps email/phone/etc
+  // even on stripped Odoo installs that reject one of the standard fields.
   const richFields = [
     'id', 'name', 'email', 'phone',
     'is_company', 'company_name',
@@ -1794,11 +1974,14 @@ export const fetchCustomerDetailsOdoo = async (partnerId) => {
   try {
     p = await callRead(richFields);
   } catch (err) {
-    console.warn('fetchCustomerDetailsOdoo rich fetch failed, falling back:', err?.payload || err?.message);
+    console.warn(
+      'fetchCustomerDetailsOdoo rich fetch failed, retrying with safe fields:',
+      err?.payload?.data?.message || err?.message
+    );
     try {
       p = await callRead(safeFields);
     } catch (err2) {
-      console.error('fetchCustomerDetailsOdoo safe fetch also failed:', err2?.payload || err2?.message);
+      console.error('fetchCustomerDetailsOdoo safe fetch also failed:', err2?.payload?.data?.message || err2?.message);
       throw err2;
     }
   }

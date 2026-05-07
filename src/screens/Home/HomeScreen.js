@@ -53,6 +53,11 @@ const SECTIONS = [
     accent: '#16A34A',
     items: [
       { id: 'customers', title: 'Customers', screen: 'CustomerScreen', icon: require('@assets/images/Home/section/customer.png'), bg: '#DCFCE7', accent: '#16A34A' },
+      // Tile mirrors the tools-rental "Customer ID Proofs" entry —
+      // opens a list of customers narrowed (in the screen) to those
+      // with at least one ID-proof binary on file. Tap → CustomerInfo
+      // for the full Front/Back section.
+      { id: 'customer-id-proofs', title: 'Customer ID Proofs', screen: 'CustomerIdProofs', icon: 'badge', bg: '#FEF3C7', accent: '#B45309' },
     ],
   },
   {
