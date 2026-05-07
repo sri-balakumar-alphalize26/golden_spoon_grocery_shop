@@ -66,7 +66,20 @@ const ProductsScreen = ({ navigation, route }) => {
   const { addProduct, setCurrentCustomer } = useProductStore();
 
   // ⬇️ CHANGE: hook now uses fetchProductsOdoo
-  const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsOdoo);
+  // Dedupe by template id so multi-variant products (e.g. a t-shirt with
+  // size S/M/L) render one tile, not one per variant.
+  const { data, loading, fetchData, fetchMoreData } = useDataFetching(
+    fetchProductsOdoo,
+    {
+      getDedupeKey: (item) => {
+        if (!item) return null;
+        if (Array.isArray(item.product_tmpl_id) && item.product_tmpl_id[0] != null) {
+          return item.product_tmpl_id[0];
+        }
+        return item.id;
+      },
+    }
+  );
 
   const [posCategories, setPosCategories] = useState([]);
   const [categoryCounts, setCategoryCounts] = useState({ all: 0 });

@@ -11,9 +11,11 @@ import StackNavigator from '@navigation/StackNavigator';
 import { Provider } from 'react-native-paper';
 import { useAuthStore } from '@stores/auth';
 import installNetworkInterceptor from './src/api/utils/networkInterceptor';
+import installAuthInterceptor from './src/api/utils/authInterceptor';
 import NetworkErrorModal from './src/components/NetworkError/NetworkErrorModal';
 
 installNetworkInterceptor();
+installAuthInterceptor();
 
 export default function App() {
 

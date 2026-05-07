@@ -179,6 +179,100 @@ export const validatePosOrderOdoo = async (orderId) => {
     return { error };
   }
 };
+// Read all pos.payment records attached to a single pos.order. Used by the
+// order detail screen so a split-paid order can show "Cash 500 · Card 500"
+// instead of just the aggregate "amount_paid". Returns an array shaped like
+//   [{ id, amount, method_id, method_name, journal_id, journal_name }, ...]
+// The `method_id` and `journal_id` are stripped to scalars (Odoo returns
+// many2one fields as [id, name] tuples) so the UI doesn't have to unwrap.
+export const fetchPosOrderPaymentsOdoo = async (orderId) => {
+  if (!orderId) return [];
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.payment',
+        method: 'search_read',
+        args: [[['pos_order_id', '=', Number(orderId)]]],
+        kwargs: {
+          fields: ['id', 'amount', 'payment_method_id'],
+          order: 'id asc',
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    if (response.data?.error) {
+      console.error('fetchPosOrderPaymentsOdoo error:', response.data.error);
+      return [];
+    }
+    const rows = response.data?.result || [];
+    return rows.map((p) => {
+      const m = p.payment_method_id;
+      return {
+        id: p.id,
+        amount: Number(p.amount) || 0,
+        method_id: Array.isArray(m) ? m[0] : m,
+        method_name: Array.isArray(m) ? m[1] : '',
+      };
+    });
+  } catch (e) {
+    console.error('fetchPosOrderPaymentsOdoo exception:', e);
+    return [];
+  }
+};
+
+// Read pos.payment.method records configured on the active POS register
+// (pos.config.payment_method_ids). This is the canonical Odoo way: the cashier
+// only sees methods explicitly assigned to that register, and each method
+// already carries the journal it should post to. Replaces the older
+// "lookup pos.payment.method by journal_id" approach which broke on setups
+// where the journal id was guessed wrong (e.g. journal "Point of Sale"
+// id=16 with no pos.payment.method record pointing at it).
+export const fetchPosConfigPaymentMethods = async (posConfigId) => {
+  if (!posConfigId) return [];
+  try {
+    const baseUrl = getOdooUrl();
+
+    const cfgResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.config',
+        method: 'read',
+        args: [[Number(posConfigId)], ['id', 'name', 'payment_method_ids']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (cfgResp.data?.error) {
+      console.error('fetchPosConfigPaymentMethods pos.config error:', cfgResp.data.error);
+      return [];
+    }
+    const cfg = (cfgResp.data?.result || [])[0];
+    const methodIds = Array.isArray(cfg?.payment_method_ids) ? cfg.payment_method_ids : [];
+    if (methodIds.length === 0) return [];
+
+    const methodsResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.payment.method',
+        method: 'read',
+        args: [methodIds, ['id', 'name', 'journal_id', 'is_cash_count', 'split_transactions', 'type']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (methodsResp.data?.error) {
+      console.error('fetchPosConfigPaymentMethods pos.payment.method error:', methodsResp.data.error);
+      return [];
+    }
+    return methodsResp.data?.result || [];
+  } catch (e) {
+    console.error('fetchPosConfigPaymentMethods error:', e);
+    return [];
+  }
+};
+
 // Fetch POS registers (configurations) from Odoo
 export const fetchPOSRegisters = async ({ limit = null, offset = 0 } = {}) => {
   try {
@@ -403,6 +497,7 @@ export const fetchProductsOdoo = async ({
   searchText = '',
   posCategoryId = null,
   categoryId = null,
+  posOnly = false,
 } = {}) => {
   try {
     let domain = [];
@@ -414,6 +509,9 @@ export const fetchProductsOdoo = async ({
       domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
     } else if (categoryId) {
       domain = domain.concat([['categ_id', '=', Number(categoryId)]]);
+    }
+    if (posOnly) {
+      domain = domain.concat([['available_in_pos', '=', true]]);
     }
 
     const response = await axios.post(
@@ -434,6 +532,8 @@ export const fetchProductsOdoo = async ({
               "qty_available",
               "image_128",
               "categ_id",
+              "available_in_pos",
+              "product_tmpl_id",
             ],
             offset,
             limit,

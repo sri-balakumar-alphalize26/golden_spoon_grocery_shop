@@ -1,7 +1,28 @@
 import { useState, useCallback } from 'react';
 import useLoader from './useLoader';
 
-const useDataFetching = (fetchDataCallback) => {
+const defaultGetKey = (item) => (item ? item.id : null);
+
+const dedupeBy = (items, getKey) => {
+  const seen = new Set();
+  const out = [];
+  for (const it of items || []) {
+    if (it == null) continue;
+    const k = getKey(it);
+    if (k === undefined || k === null || k === '') {
+      out.push(it);
+      continue;
+    }
+    const key = String(k);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(it);
+  }
+  return out;
+};
+
+const useDataFetching = (fetchDataCallback, options = {}) => {
+  const getDedupeKey = options.getDedupeKey || defaultGetKey;
   const [data, setData] = useState([]);
   const [loading, startLoading, stopLoading] = useLoader(false);
   const [allDataLoaded, setAllDataLoaded] = useState(false);
@@ -16,7 +37,7 @@ const useDataFetching = (fetchDataCallback) => {
       const params = { offset: 0, limit, ...newFilters };
       const fetchedData = await fetchDataCallback(params);
       const list = fetchedData || [];
-      setData(list);
+      setData(dedupeBy(list, getDedupeKey));
       setAllDataLoaded(list.length < limit);
       setOffset(0);
     } catch (error) {
@@ -38,7 +59,23 @@ const useDataFetching = (fetchDataCallback) => {
       if (list.length === 0) {
         setAllDataLoaded(true);
       } else {
-        setData((prevData) => [...prevData, ...list]);
+        setData((prevData) => {
+          const existing = new Set(
+            prevData
+              .map((p) => {
+                const k = getDedupeKey(p);
+                return k != null && k !== '' ? String(k) : null;
+              })
+              .filter(Boolean)
+          );
+          const fresh = list.filter((p) => {
+            if (p == null) return false;
+            const k = getDedupeKey(p);
+            if (k == null || k === '') return true;
+            return !existing.has(String(k));
+          });
+          return [...prevData, ...fresh];
+        });
         setOffset(nextOffset);
         if (list.length < limit) setAllDataLoaded(true);
       }

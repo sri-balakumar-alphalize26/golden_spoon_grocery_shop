@@ -1,12 +1,15 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, StatusBar, BackHandler, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
+import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import Toast from 'react-native-toast-message';
 
 const NAVY = '#2E294E';
@@ -28,6 +31,18 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const [previewHtml, setPreviewHtml] = useState('');
   const [downloading, setDownloading] = useState(false);
   const [printing, setPrinting] = useState(false);
+
+  // Itemised pos.payment records pulled from Odoo for this order. When the
+  // order was paid via the partial-payment popup this returns 2+ entries
+  // (e.g. Cash 500, Card 500); for a single-method order it returns one
+  // entry. Empty array while the request is in flight.
+  const [payments, setPayments] = useState([]);
+
+  // The Odoo `pos.order.name` (e.g. "Clothes Shop - 000004"). Fetched right
+  // after navigation so the receipt prints the per-register sequence number
+  // Odoo shows the cashier — not the cumulative database id, which would
+  // bump up by every other shop's order too.
+  const [orderName, setOrderName] = useState('');
 
   // Done = wipe the in-memory cart and reset navigation to the Home tab.
   // Used both by the explicit "Done" button and the back-arrow in the hero.
@@ -83,14 +98,41 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const cashDisplay = paidAmount > 0 ? paidAmount : grandTotal;
   const changeAmount = paidAmount > grandTotal ? (paidAmount - grandTotal) : 0;
 
-  const orderNumber = String(orderId || '000002').padStart(6, '0');
+  // Per-register sequence number for the receipt (e.g. "000004"). Falls back
+  // to the database id padded to 6 digits while the order name is still
+  // loading.
+  const orderNumber = extractOrderRef(orderName, orderId || '000002');
   const dateStr = new Date().toLocaleDateString('en-GB');
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+  // Pull every pos.payment record attached to this order (so the receipt can
+  // itemise split payments) AND the order's display name (so the printed
+  // ref matches what Odoo shows in its Orders list). Best-effort — failures
+  // just fall back to the legacy Cash + Change rendering and a padded id.
+  useEffect(() => {
+    let alive = true;
+    if (!orderId) return;
+    Promise.all([
+      fetchPosOrderPaymentsOdoo(orderId),
+      fetchPosOrderDetailOdoo(orderId),
+    ])
+      .then(([rows, orderRes]) => {
+        if (!alive) return;
+        setPayments(Array.isArray(rows) ? rows : []);
+        if (orderRes && !orderRes.error && orderRes.name) {
+          setOrderName(orderRes.name);
+        }
+      })
+      .catch(() => { /* keep defaults for fallback */ });
+    return () => { alive = false; };
+  }, [orderId]);
+
+  const isSplit = payments.length > 1;
 
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const handlePrintPreview = () => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
+      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, orderName, paidAmount, customer, payments });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -99,19 +141,54 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     }
   };
 
-  // 2. Download PDF — render to file, then open the system share sheet so the
-  // user can save it (Drive/Files/etc.) or send it elsewhere.
+  // 2. Download PDF — render to a temporary file, then prompt the cashier for
+  // a save location. On Android we open the Storage Access Framework folder
+  // picker so the file lands wherever the user chooses (Downloads, Drive,
+  // Documents, etc.). On iOS we fall back to the share sheet, whose
+  // "Save to Files" entry is the iOS-equivalent of a folder picker.
   const handleDownloadPdf = async () => {
     setDownloading(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
+      const filename = `Invoice-${orderNumber}.pdf`;
+      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, orderName, paidAmount, customer, payments });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
+
+      if (Platform.OS === 'android') {
+        const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!perm.granted) {
+          Toast.show({ type: 'info', text1: 'Save cancelled', position: 'bottom' });
+          return;
+        }
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
+          perm.directoryUri,
+          filename,
+          'application/pdf'
+        );
+        await FileSystem.writeAsStringAsync(targetUri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        Toast.show({ type: 'success', text1: 'Saved', text2: filename, position: 'bottom' });
+      } else {
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(uri, {
+            mimeType: 'application/pdf',
+            UTI: 'com.adobe.pdf',
+            dialogTitle: filename,
+          });
+        } else {
+          Toast.show({
+            type: 'error',
+            text1: 'Save failed',
+            text2: 'Sharing is not available on this device',
+            position: 'bottom',
+          });
+        }
       }
-      Toast.show({ type: 'success', text1: 'PDF ready', text2: 'Use the share sheet to save the file', position: 'bottom' });
     } catch (err) {
       console.error('[Receipt] download error', err);
       Toast.show({ type: 'error', text1: 'Download failed', text2: err?.message || 'Unable to generate PDF', position: 'bottom' });
@@ -125,7 +202,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const handlePrintReceipt = async () => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, paidAmount, customer });
+      const html = generateInvoiceHtml({ items, subtotal, tax, service, total, discount, orderId, orderName, paidAmount, customer, payments });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -299,16 +376,41 @@ const CreateInvoicePreview = ({ navigation, route }) => {
 
               <View style={s.paperRule} />
 
-              {/* Payment */}
-              <Text style={s.paperPaymentTitle}>Payment Details / تفاصيل الدفع</Text>
-              <View style={s.paperTotalsRow}>
-                <Text style={s.paperPlain}>Cash:</Text>
-                <Text style={s.paperPlainBold}>{displayNum(cashDisplay)}</Text>
-              </View>
-              <View style={s.paperTotalsRow}>
-                <Text style={s.paperPlain}>Change / الباقي:</Text>
-                <Text style={s.paperPlainBold}>{displayNum(changeAmount)}</Text>
-              </View>
+              {/* Payment — when the order has 1+ pos.payment records we
+                  list each one (so split payments show "Cash 500 / Card 500"
+                  rather than just a single Cash line). Falls back to the
+                  legacy Cash + Change layout while the fetch is in flight or
+                  if Odoo returns no records. */}
+              <Text style={s.paperPaymentTitle}>
+                {isSplit ? 'Payment Details (Split) / تفاصيل الدفع' : 'Payment Details / تفاصيل الدفع'}
+              </Text>
+              {payments.length > 0 ? (
+                <>
+                  {payments.map((p, idx) => (
+                    <View key={p.id || idx} style={s.paperTotalsRow}>
+                      <Text style={s.paperPlain}>{`${p.method_name || 'Payment'}:`}</Text>
+                      <Text style={s.paperPlainBold}>{displayNum(p.amount)}</Text>
+                    </View>
+                  ))}
+                  {changeAmount > 0 ? (
+                    <View style={s.paperTotalsRow}>
+                      <Text style={s.paperPlain}>Change / الباقي:</Text>
+                      <Text style={s.paperPlainBold}>{displayNum(changeAmount)}</Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <View style={s.paperTotalsRow}>
+                    <Text style={s.paperPlain}>Cash:</Text>
+                    <Text style={s.paperPlainBold}>{displayNum(cashDisplay)}</Text>
+                  </View>
+                  <View style={s.paperTotalsRow}>
+                    <Text style={s.paperPlain}>Change / الباقي:</Text>
+                    <Text style={s.paperPlainBold}>{displayNum(changeAmount)}</Text>
+                  </View>
+                </>
+              )}
 
               <View style={[s.paperDottedRule, { marginTop: 8 }]} />
 
@@ -410,146 +512,6 @@ const CreateInvoicePreview = ({ navigation, route }) => {
       </Modal>
     </SafeAreaView>
   );
-};
-
-// Rich HTML generator — UNCHANGED. Keeps the exact 80-mm thermal-receipt
-// layout the user already had (bilingual, dotted separators, RTL).
-const generateInvoiceHtml = ({ items = [], subtotal = 0, tax = 0, service = 0, total = 0, discount = 0, orderId = '', paidAmount = 0, customer = null } = {}) => {
-  const formatCurrencyHtml = (amount) => {
-    const num = Number(amount);
-    if (isNaN(num)) return '0';
-    return parseFloat(num.toPrecision(12)).toString();
-  };
-
-  const rows = items.map((item, idx) => {
-    const itemQty = item.qty || item.quantity || 1;
-    const itemPrice = item.price || item.unit || item.price_unit || 0;
-    const discountPercent = Number(item.discount_percent || item.discount || 0);
-    const grossTotal = itemPrice * itemQty;
-    const itemDiscount = item.discount_amount || (grossTotal * discountPercent / 100);
-    const itemTotal = item.subtotal ?? (grossTotal - itemDiscount);
-    const nameEsc = escapeHtml(item.name || 'Product');
-    return `<tr>
-      <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${formatCurrencyHtml(itemTotal)}</span></td>
-      <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${itemDiscount > 0 ? '-' + formatCurrencyHtml(itemDiscount) : '0'}</span></td>
-      <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${formatCurrencyHtml(itemPrice)}</span></td>
-      <td style="padding:6px 4px; text-align:center; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${itemQty}</span></td>
-      <td style="padding:6px 4px; vertical-align:top;">${nameEsc}<div style="font-size:10px; color:#333; margin-top:4px;">KG</div></td>
-      <td style="padding:6px 4px; vertical-align:top;">${idx + 1}.</td>
-    </tr>
-    <tr><td colspan="6" style="border-bottom:1px dotted #000; height:6px;">&nbsp;</td></tr>`;
-  }).join('');
-
-  const html = `<!doctype html>
-  <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Invoice</title>
-    <style>
-      @page { size: 80mm auto; margin: 4mm; }
-      html,body { margin:0; padding:0; }
-      .receipt { width:72mm; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; direction: rtl; }
-      .header { text-align:center; font-size:11px; }
-      .header .company { font-weight:700; font-size:13px; }
-      .hr { border-top:1px solid #999; margin:10px 0; }
-      .titleBox { border-top:2px solid #000; border-bottom:2px solid #000; padding:6px 0; margin:8px 0; text-align:center; font-weight:700; }
-      .meta { font-size:11px; margin-bottom:6px; }
-      table { width:100%; border-collapse:collapse; font-size:11px; }
-      th { font-weight:700; font-size:11px; padding:6px 4px; text-align:center; border-bottom:1px solid #000; }
-      td { font-size:11px; padding:6px 4px; }
-      .numCol { width:5%; }
-      .prodCol { width:40%; }
-      .qtyCol { width:10%; text-align:center; }
-      .unitCol { width:15%; text-align:right; }
-      .discCol { width:15%; text-align:right; }
-      .totalCol { width:15%; text-align:right; }
-      .divider-dotted { border-bottom:1px dotted #000; margin:8px 0; }
-      .totals { margin-top:6px; }
-      .totals .line { display:flex; justify-content:space-between; font-size:12px; padding:4px 0; }
-      .totals .label { font-weight:400; }
-      .totals .value { font-weight:700; }
-      .paymentTitle { font-weight:700; text-decoration:underline; margin-top:8px; padding-top:6px; }
-      .paymentRow { display:flex; justify-content:space-between; padding:4px 0; }
-      .footer { text-align:center; font-size:11px; margin-top:8px; }
-    </style>
-  </head>
-  <body>
-    <div class="receipt" style="padding:4mm 4mm;">
-      <div class="header">
-        <div class="company">Multaqa Al-Hadhara Trading L.L.C.</div>
-        <div class="meta">CR No: 1202389</div>
-        <div class="meta">Muscat, Oman</div>
-        <div class="meta">99881702, 93686812</div>
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="titleBox">INVOICE / فاتورة</div>
-
-      ${customer ? `<div style="border:1px solid #ddd; padding:6px; margin:6px 0; font-size:11px;">
-        <div style="text-align:center; font-weight:700; padding-bottom:6px;">Customer Details / تفاصيل</div>
-        <table style="width:100%; font-size:11px; direction:ltr;">
-          <tr>
-            <td style="width:70%; text-align:left;">Name / الاسم:</td>
-            <td style="text-align:right; font-weight:700;">${escapeHtml(customer?.name || customer?.display_name || customer?.partner_name || '')}</td>
-          </tr>
-          <tr>
-            <td style="text-align:left;">Phone / الهاتف:</td>
-            <td style="text-align:right; font-weight:700;">${escapeHtml(customer?.phone || customer?.mobile || customer?.phone_number || '')}</td>
-          </tr>
-        </table>
-      </div>` : ''}
-
-      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
-        <div style="text-align:left; direction:ltr;">No: ${String(orderId || '').padStart(6,'0')}</div>
-        <div style="text-align:center">Date: ${new Date().toLocaleDateString('en-GB')}</div>
-        <div style="text-align:right">Cashier: Admin</div>
-      </div>
-
-      <table>
-        <thead>
-          <tr>
-            <th class="totalCol">Total<br/><span style="font-weight:400;font-size:10px;">المجموع</span></th>
-            <th class="discCol">Disc<br/><span style="font-weight:400;font-size:10px;">خصم</span></th>
-            <th class="unitCol">Unit<br/><span style="font-weight:400;font-size:10px;">سعر</span></th>
-            <th class="qtyCol">Qty<br/><span style="font-weight:400;font-size:10px;">كمية</span></th>
-            <th class="prodCol">Product<br/><span style="font-weight:400;font-size:10px;">المنتج</span></th>
-            <th class="numCol">#</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
-
-      <div class="divider-dotted"></div>
-
-      <div class="totals">
-        <div class="line"><div class="label">Subtotal / المجموع الفرعي</div><div class="value">${formatCurrencyHtml(Number(subtotal || total))}</div></div>
-        ${discount > 0 ? `<div class="line"><div class="label">Discount / الخصم</div><div class="value" style="color:#c00;">-${formatCurrencyHtml(discount)}</div></div>` : ''}
-        <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
-        <div class="line" style="font-size:13px; font-weight:700;"><div class="label">Grand Total / الإجمالي</div><div class="value">${formatCurrencyHtml(Number(total || subtotal))}</div></div>
-      </div>
-
-      <div style="border-top:1px solid #000; margin-top:8px; padding-top:6px;"></div>
-      <div class="paymentTitle">Payment Details / تفاصيل الدفع</div>
-      <div class="paymentRow"><div>Cash:</div><div>${formatCurrencyHtml(Number(paidAmount > 0 ? paidAmount : (total || subtotal)))}</div></div>
-      <div class="paymentRow"><div>Change / الباقي:</div><div>${formatCurrencyHtml(Number((paidAmount > (total || subtotal) ? (paidAmount - (total || subtotal)) : 0)))}</div></div>
-
-      <div style="height:8px; border-bottom:1px dotted #000; margin-top:8px;"></div>
-      <div class="footer">Thank you for your purchase!<br/>شكرا لشرائك!</div>
-    </div>
-  </body>
-  </html>`;
-
-  return html;
-};
-
-const escapeHtml = (unsafe) => {
-  return String(unsafe).replace(/[&<>"']/g, function (c) {
-    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
-  });
 };
 
 const cardShadow = Platform.select({

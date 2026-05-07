@@ -8,13 +8,20 @@ import {
   Image,
   Platform,
   StatusBar,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from '@components/containers';
-import { MaterialIcons } from '@expo/vector-icons';
+import { SafeAreaView as SafeAreaViewNative } from 'react-native-safe-area-context';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { WebView } from 'react-native-webview';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
+import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
 import Toast from 'react-native-toast-message';
 
@@ -35,10 +42,25 @@ const stateBadge = (state) => {
   }
 };
 
+// Odoo returns datetimes as naive UTC strings ("2026-05-07 04:57:00") with
+// no timezone marker. Hermes and most JS engines parse that format as
+// LOCAL time, so the displayed clock would shift by the user's UTC offset
+// (e.g. IST users would see 04:57 instead of the 10:27 that Odoo's web UI
+// shows). Force-interpret the string as UTC so toLocaleString converts it
+// back to the user's local zone correctly.
+const parseOdooDate = (s) => {
+  if (!s) return null;
+  const str = String(s);
+  const iso = str.includes('T') ? str : str.replace(' ', 'T');
+  const withTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
+  const d = new Date(withTz);
+  return isNaN(d.getTime()) ? null : d;
+};
+
 const formatDate = (s) => {
   if (!s) return '—';
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return s;
+  const d = parseOdooDate(s);
+  if (!d) return s;
   return d.toLocaleString('en-US', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
@@ -47,6 +69,126 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency) || { symbol: '$', position: 'before' };
   const [loading, setLoading] = useState(true);
   const [order, setOrder] = useState(null);
+  // Each `pos.payment` attached to this order — drives the Payments card so
+  // split-paid orders surface every method + amount instead of just the
+  // aggregate `amount_paid`.
+  const [payments, setPayments] = useState([]);
+
+  // Invoice-action state — Preview / Download / Print mirror the buttons on
+  // the post-payment receipt screen, so the cashier can re-export any past
+  // order's invoice from the orders list.
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
+
+  // Map the fetched pos.order + pos.payment[] into the params expected by the
+  // shared `generateInvoiceHtml` helper. Kept inline because it depends on
+  // the screen's `order` and `payments` state.
+  const buildInvoiceParams = () => {
+    if (!order) return null;
+    const lines = Array.isArray(order.lines) ? order.lines : [];
+    const items = lines.map((l) => ({
+      id: l.id,
+      name: l.full_product_name || l.product_name || l.name || 'Product',
+      qty: Number(l.qty || l.quantity || 1),
+      price: Number(l.price_unit || l.price || 0),
+      discount_percent: Number(l.discount || 0),
+      subtotal: Number(l.price_subtotal_incl ?? l.price_subtotal ?? 0),
+    }));
+    const partner = Array.isArray(order.partner_id) ? order.partner_id : null;
+    const customer = partner ? { name: partner[1] } : null;
+    return {
+      items,
+      subtotal: Number(order.amount_total || 0) - Number(order.amount_tax || 0),
+      tax: Number(order.amount_tax || 0),
+      service: 0,
+      total: Number(order.amount_total || 0),
+      discount: 0,
+      orderId: order.id,
+      orderName: order.name || '',
+      paidAmount: Number(order.amount_paid || 0),
+      customer,
+      payments,
+    };
+  };
+
+  const handlePrintPreview = () => {
+    try {
+      const params = buildInvoiceParams();
+      if (!params) return;
+      setPreviewHtml(generateInvoiceHtml(params));
+      setPreviewVisible(true);
+    } catch (err) {
+      console.error('[OrderDetail] preview error', err);
+      Toast.show({ type: 'error', text1: 'Preview failed', text2: err?.message || 'Unable to render preview', position: 'bottom' });
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true);
+    try {
+      const params = buildInvoiceParams();
+      if (!params) throw new Error('Order not loaded');
+      const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
+      const html = generateInvoiceHtml(params);
+      const { uri } = await Print.printToFileAsync({ html });
+      if (!uri) throw new Error('Failed to generate PDF');
+
+      if (Platform.OS === 'android') {
+        const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!perm.granted) {
+          Toast.show({ type: 'info', text1: 'Save cancelled', position: 'bottom' });
+          return;
+        }
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
+          perm.directoryUri,
+          filename,
+          'application/pdf'
+        );
+        await FileSystem.writeAsStringAsync(targetUri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        Toast.show({ type: 'success', text1: 'Saved', text2: filename, position: 'bottom' });
+      } else {
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(uri, {
+            mimeType: 'application/pdf',
+            UTI: 'com.adobe.pdf',
+            dialogTitle: filename,
+          });
+        } else {
+          Toast.show({ type: 'error', text1: 'Save failed', text2: 'Sharing is not available on this device', position: 'bottom' });
+        }
+      }
+    } catch (err) {
+      console.error('[OrderDetail] download error', err);
+      Toast.show({ type: 'error', text1: 'Download failed', text2: err?.message || 'Unable to generate PDF', position: 'bottom' });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handlePrintReceipt = async () => {
+    setPrinting(true);
+    try {
+      const params = buildInvoiceParams();
+      if (!params) throw new Error('Order not loaded');
+      const html = generateInvoiceHtml(params);
+      await Print.printAsync({ html });
+    } catch (err) {
+      if (err?.message && !/cancel/i.test(err.message)) {
+        console.error('[OrderDetail] print error', err);
+        Toast.show({ type: 'error', text1: 'Print failed', text2: err?.message, position: 'bottom' });
+      }
+    } finally {
+      setPrinting(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -54,14 +196,18 @@ const OrderDetailScreen = ({ navigation, route }) => {
       setLoading(false);
       return;
     }
-    fetchPosOrderDetailOdoo(orderId)
-      .then((res) => {
+    Promise.all([
+      fetchPosOrderDetailOdoo(orderId),
+      fetchPosOrderPaymentsOdoo(orderId),
+    ])
+      .then(([orderRes, paymentRows]) => {
         if (!alive) return;
-        if (res?.error) {
+        if (orderRes?.error) {
           Toast.show({ type: 'error', text1: 'Failed to load order', position: 'bottom' });
           return;
         }
-        setOrder(res);
+        setOrder(orderRes);
+        setPayments(Array.isArray(paymentRows) ? paymentRows : []);
       })
       .catch(() => {
         Toast.show({ type: 'error', text1: 'Failed to load order', position: 'bottom' });
@@ -221,7 +367,108 @@ const OrderDetailScreen = ({ navigation, route }) => {
             <Text style={s.grandValue}>{formatCurrency(order.amount_total, currency)}</Text>
           </View>
         </View>
+
+        {/* Payments — one row per pos.payment record. For split-paid orders
+            (more than one payment) this is the only place the breakdown is
+            visible; the totals card alone just shows `amount_paid` and hides
+            which methods made it up. */}
+        {payments && payments.length > 0 ? (
+          <View style={s.totalsCard}>
+            <View style={s.paymentsHeaderRow}>
+              <Text style={s.sectionTitle}>
+                {payments.length > 1 ? 'PAYMENTS (SPLIT)' : 'PAYMENT'}
+              </Text>
+              {payments.length > 1 ? (
+                <View style={s.splitBadge}>
+                  <MaterialIcons name="call-split" size={12} color="#9A3412" />
+                  <Text style={s.splitBadgeText}>{`${payments.length} methods`}</Text>
+                </View>
+              ) : null}
+            </View>
+            {payments.map((p, idx) => (
+              <View key={p.id || idx} style={s.totalRow}>
+                <Text style={s.totalLabel} numberOfLines={1}>
+                  {p.method_name || 'Payment'}
+                </Text>
+                <Text style={s.totalValue}>{formatCurrency(p.amount, currency)}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {/* Invoice actions — Preview / Download / Print. Mirror of the chips
+            on the post-payment receipt screen so any past order can be
+            re-exported from the orders list. */}
+        <View style={s.invoiceActionRow}>
+          <TouchableOpacity
+            onPress={handlePrintPreview}
+            activeOpacity={0.85}
+            style={[s.invoiceChip, { borderColor: '#BFDBFE' }]}
+          >
+            <View style={s.invoiceChipIcon}>
+              <MaterialIcons name="preview" size={20} color="#1E88E5" />
+            </View>
+            <Text style={s.invoiceChipText}>Preview</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleDownloadPdf}
+            disabled={downloading}
+            activeOpacity={0.85}
+            style={[s.invoiceChip, { borderColor: '#FED7AA' }, downloading && { opacity: 0.6 }]}
+          >
+            <View style={s.invoiceChipIcon}>
+              {downloading ? (
+                <ActivityIndicator color="#E85D04" size="small" />
+              ) : (
+                <MaterialIcons name="file-download" size={20} color="#E85D04" />
+              )}
+            </View>
+            <Text style={s.invoiceChipText}>Download</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handlePrintReceipt}
+            disabled={printing}
+            activeOpacity={0.85}
+            style={[s.invoiceChip, { borderColor: '#E9D5FF' }, printing && { opacity: 0.6 }]}
+          >
+            <View style={s.invoiceChipIcon}>
+              {printing ? (
+                <ActivityIndicator color="#7B2D8E" size="small" />
+              ) : (
+                <MaterialCommunityIcons name="printer" size={20} color="#7B2D8E" />
+              )}
+            </View>
+            <Text style={s.invoiceChipText}>Print</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
+
+      {/* Preview modal — full-screen WebView showing the rendered receipt. */}
+      <Modal
+        visible={previewVisible}
+        animationType="slide"
+        onRequestClose={() => setPreviewVisible(false)}
+      >
+        <SafeAreaViewNative style={{ flex: 1, backgroundColor: '#fff' }} edges={['top']}>
+          <View style={s.previewHeader}>
+            <Text style={s.previewTitle}>Print Preview</Text>
+            <TouchableOpacity
+              onPress={() => setPreviewVisible(false)}
+              style={s.previewClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <MaterialIcons name="close" size={22} color="#1a1a2e" />
+            </TouchableOpacity>
+          </View>
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: previewHtml }}
+            style={{ flex: 1, backgroundColor: '#fff' }}
+          />
+        </SafeAreaViewNative>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -322,6 +569,11 @@ const s = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 14,
     padding: 14,
+    // Stack-spacing — the Totals and Payments cards both reuse this style
+    // and render back-to-back in the ScrollView; without the bottom margin
+    // they sit flush against each other and look like one bleeding card.
+    // Mirrors `linesCard.marginBottom`.
+    marginBottom: 12,
     ...Platform.select({
       ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
       android: { elevation: 2 },
@@ -333,4 +585,90 @@ const s = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#F1F2F6', marginVertical: 8 },
   grandLabel: { fontSize: 15, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
   grandValue: { fontSize: 17, color: ORANGE, fontFamily: FONT_FAMILY.urbanistBold },
+
+  // Payments card — header row with title + optional split badge
+  paymentsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  splitBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEDD5',
+    borderColor: '#FED7AA',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  splitBadgeText: {
+    fontSize: 11,
+    color: '#9A3412',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    marginLeft: 4,
+    letterSpacing: 0.3,
+  },
+
+  // Invoice action buttons (Preview / Download / Print)
+  invoiceActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  invoiceChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    ...Platform.select({
+      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 1 },
+    }),
+  },
+  invoiceChipIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
+  invoiceChipText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+
+  // Preview modal — header bar + close button
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F2F6',
+  },
+  previewTitle: {
+    fontSize: 15,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  previewClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F2F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

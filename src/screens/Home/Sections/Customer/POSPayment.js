@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ActivityIndicator, TouchableOpacity, ScrollView, StyleSheet,
-  StatusBar, Platform, Dimensions, Alert, Modal,
+  StatusBar, Platform, Dimensions, Alert, Modal, TextInput,
 } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
@@ -9,6 +9,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import {
   fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
   validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
+  fetchPosConfigPaymentMethods,
 } from '@api/services/generalApi';
 import { createPosOrderOdoo, createPosPaymentOdoo } from '@api/services/generalApi';
 import axios from 'axios';
@@ -124,6 +125,24 @@ const POSPayment = ({ navigation, route }) => {
   const { clearProducts } = useProductStore();
   const [inputAmount, setInputAmount] = useState('');
 
+  // Split (partial) payment state — popup with two slots; each slot picks
+  // ANY pos.payment.method configured on the active register (cash, card,
+  // customer-account/credit, etc.). `splitConfirmed` flips true once the
+  // cashier confirms a valid split, gating the orange Validate button.
+  const [splitModalVisible, setSplitModalVisible] = useState(false);
+  const [splitSlot1, setSplitSlot1] = useState({ methodId: null, amount: '' });
+  const [splitSlot2, setSplitSlot2] = useState({ methodId: null, amount: '' });
+  const [splitConfirmed, setSplitConfirmed] = useState(false);
+
+  // Active POS config + its configured payment methods. Resolved once on
+  // mount so the partial-payment popup can render its method chips before
+  // the user taps Validate. Also reused by handlePay so it doesn't have to
+  // re-resolve the config from the session list on each pay.
+  const [posConfigId, setPosConfigId] = useState(
+    route?.params?.registerId || route?.params?.posConfigId || null
+  );
+  const [posPaymentMethods, setPosPaymentMethods] = useState([]);
+
   // Map journals to Odoo-style payment modes (cash / card / customer account)
   const getJournalForMode = (mode) => {
     if (!journals || journals.length === 0) return null;
@@ -146,6 +165,54 @@ const POSPayment = ({ navigation, route }) => {
     console.log('Mapping result for mode', paymentMode, j);
     setSelectedJournal(j);
   }, [paymentMode, journals]);
+
+  // Resolve posConfigId once on mount: prefer route params, fall back to
+  // looking up the session's config_id. Done here (not inside handlePay) so
+  // the partial-payment popup can pre-fetch payment-method chips.
+  useEffect(() => {
+    let mounted = true;
+    if (posConfigId || !sessionId) return;
+    (async () => {
+      try {
+        const sessionList = await fetchPOSSessions({ limit: 10, offset: 0, state: '' });
+        const session = sessionList.find((s) => s.id === sessionId);
+        const cid = session?.config_id
+          ? (Array.isArray(session.config_id) ? session.config_id[0] : session.config_id)
+          : null;
+        if (mounted && cid) setPosConfigId(cid);
+      } catch (e) {
+        console.warn('Failed to resolve posConfigId from session:', e?.message || e);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [sessionId]);
+
+  // Pull pos.payment.method records configured on the active register, so
+  // the split-payment popup can render one chip per method.
+  useEffect(() => {
+    let mounted = true;
+    if (!posConfigId) return;
+    (async () => {
+      try {
+        const methods = await fetchPosConfigPaymentMethods(posConfigId);
+        if (!mounted) return;
+        setPosPaymentMethods(methods || []);
+        // Seed the two split slots with the first two methods so the cashier
+        // sees sensible defaults the first time the popup opens.
+        if (methods && methods.length > 0) {
+          setSplitSlot1((s) => (s.methodId ? s : { ...s, methodId: methods[0].id }));
+          if (methods.length > 1) {
+            setSplitSlot2((s) => (s.methodId ? s : { ...s, methodId: methods[1].id }));
+          } else {
+            setSplitSlot2((s) => (s.methodId ? s : { ...s, methodId: methods[0].id }));
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load pos.payment.method records:', e?.message || e);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [posConfigId]);
 
   useEffect(() => {
     let mounted = true;
@@ -213,20 +280,18 @@ const POSPayment = ({ navigation, route }) => {
       const partnerId = customer?.id || customer?._id || null;
       const companyId = 1;
 
-      let posConfigId = route?.params?.registerId || route?.params?.posConfigId || null;
-      if (!posConfigId && sessionId) {
+      // posConfigId is resolved on mount (see useEffect above). Re-resolve
+      // here only as a fallback in case the mount-time lookup was still in
+      // flight or failed.
+      let resolvedConfigId = posConfigId || route?.params?.registerId || route?.params?.posConfigId || null;
+      if (!resolvedConfigId && sessionId) {
         try {
           const sessionList = await fetchPOSSessions({ limit: 10, offset: 0, state: '' });
-          console.log('[POS CONFIG] Full session list:', sessionList);
           const session = sessionList.find((s) => s.id === sessionId);
-          console.log('[POS CONFIG] Session found for sessionId', sessionId, ':', session);
           if (session && session.config_id) {
-            if (Array.isArray(session.config_id)) posConfigId = session.config_id[0];
-            else posConfigId = session.config_id;
-          } else {
-            posConfigId = null;
+            resolvedConfigId = Array.isArray(session.config_id) ? session.config_id[0] : session.config_id;
           }
-          console.log('[POS CONFIG] Extracted posConfigId:', posConfigId);
+          console.log('[POS CONFIG] Fallback-resolved posConfigId:', resolvedConfigId);
         } catch (e) {
           console.warn('Failed to auto-fetch posConfigId from session:', e?.message || e);
         }
@@ -235,7 +300,7 @@ const POSPayment = ({ navigation, route }) => {
       let invoiceInfo = null;
       if (!createdOrderId) {
         console.log('[STEP 1] No orderId passed to POSPayment. Creating a new order...');
-        const posOrderPayload = { partnerId, lines, sessionId, posConfigId, companyId, orderName: '/' };
+        const posOrderPayload = { partnerId, lines, sessionId, posConfigId: resolvedConfigId, companyId, orderName: '/' };
         console.log('[STEP 1] POS Order Payload:', posOrderPayload);
         const resp = await createPosOrderOdoo(posOrderPayload);
         console.log('[STEP 1] POS Order Response:', resp);
@@ -251,20 +316,84 @@ const POSPayment = ({ navigation, route }) => {
         }
       }
 
-      if ((paymentMode === 'cash' || paymentMode === 'card') && selectedJournal) {
+      if (paymentMode === 'cash' || paymentMode === 'card' || paymentMode === 'split') {
         try {
-          const paymentMethodId = await fetchPaymentMethodId(selectedJournal.id);
-          if (!paymentMethodId) {
-            Toast.show({ type: 'error', text1: 'Payment Error', text2: 'No payment method found for selected journal', position: 'bottom' });
-            return;
-          }
+          // Resolve the payment method via the active pos.config rather than
+          // the previously hard-coded journal id. The cashier-side Odoo POS
+          // always picks payment methods from pos.config.payment_method_ids,
+          // and each method already carries the correct journal — so this
+          // works regardless of how journals are numbered in the user's DB.
+          // Reuse the methods cached at mount time when available so we don't
+          // hit the JSON-RPC endpoint twice in a row on Validate.
+          const posMethods = posPaymentMethods.length > 0
+            ? posPaymentMethods
+            : await fetchPosConfigPaymentMethods(resolvedConfigId);
+          console.log('[PAYMENT] pos.config payment methods:', posMethods);
+
+          const cashMethod = posMethods.find((m) => m.is_cash_count === true);
+          const cardMethod = posMethods.find(
+            (m) => m.is_cash_count === false && m.split_transactions !== true
+          );
+
           const payments = [];
-          if (paymentMode === 'cash') {
-            payments.push({ amount: total, paymentMethodId, journalId: selectedJournal.id, paymentMode });
-            console.log(`💵 Cash payment: Total=${total}, Received=${paidAmount}, Change=${Math.abs(remaining)}`);
-          } else if (paymentMode === 'card') {
-            payments.push({ amount: total, paymentMethodId, journalId: selectedJournal.id, paymentMode });
-            console.log(`💳 Card payment: Total=${total}`);
+
+          if (paymentMode === 'split') {
+            // Look up each slot's chosen pos.payment.method by id from the
+            // register's configured methods. The chips in the popup were
+            // sourced from the same list, so this lookup is just a sanity
+            // check — we still guard against missing ids in case the
+            // register configuration changed mid-session.
+            const slot1Method = posMethods.find((m) => m.id === splitSlot1.methodId);
+            const slot2Method = posMethods.find((m) => m.id === splitSlot2.methodId);
+            if (!slot1Method || !slot2Method) {
+              Toast.show({
+                type: 'error',
+                text1: 'Payment Error',
+                text2: 'A selected payment method is no longer available on this POS register.',
+                position: 'bottom',
+              });
+              return;
+            }
+            const slot1JournalId = Array.isArray(slot1Method.journal_id) ? slot1Method.journal_id[0] : slot1Method.journal_id;
+            const slot2JournalId = Array.isArray(slot2Method.journal_id) ? slot2Method.journal_id[0] : slot2Method.journal_id;
+            payments.push({
+              amount: parseFloat(splitSlot1.amount) || 0,
+              paymentMethodId: slot1Method.id,
+              journalId: slot1JournalId,
+              paymentMode: 'split',
+            });
+            payments.push({
+              amount: parseFloat(splitSlot2.amount) || 0,
+              paymentMethodId: slot2Method.id,
+              journalId: slot2JournalId,
+              paymentMode: 'split',
+            });
+            console.log(`🪓 Split payment: ${slot1Method.name} ${payments[0].amount} + ${slot2Method.name} ${payments[1].amount} = ${total}`);
+          } else {
+            // Single-method (cash or card) — existing flow.
+            let method = paymentMode === 'cash' ? cashMethod : cardMethod;
+            if (!method && posMethods.length > 0) {
+              method = posMethods.find((m) => m.split_transactions !== true) || posMethods[0];
+            }
+            if (!method) {
+              Toast.show({
+                type: 'error',
+                text1: 'Payment Error',
+                text2: 'No payment method is configured on this POS register. Add one in Odoo: Point of Sale → Configuration → Payment Methods.',
+                position: 'bottom',
+              });
+              return;
+            }
+            const paymentMethodId = method.id;
+            const journalId = Array.isArray(method.journal_id) ? method.journal_id[0] : method.journal_id;
+            console.log('[PAYMENT] selected method:', { paymentMethodId, journalId, name: method.name });
+            if (paymentMode === 'cash') {
+              payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
+              console.log(`💵 Cash payment: Total=${total}, Received=${paidAmount}, Change=${Math.abs(remaining)}`);
+            } else if (paymentMode === 'card') {
+              payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
+              console.log(`💳 Card payment: Total=${total}`);
+            }
           }
           payments.forEach((p, idx) => {
             const type = p.amount > 0 ? 'RECEIVED' : 'CHANGE';
@@ -351,7 +480,15 @@ const POSPayment = ({ navigation, route }) => {
 
                     try {
                       const totalPaymentAmount2 = (payments || []).reduce((s, p) => s + (p.amount || 0), 0);
-                      if (selectedJournal && selectedJournal.id && totalPaymentAmount2 >= total) {
+                      if (paymentMode === 'split') {
+                        // Skip the single-shot account.payment for split mode.
+                        // The two pos.payment records on the order already
+                        // cover the full amount, and linkInvoiceToPosOrderOdoo
+                        // (called above) lets Odoo reconcile them against the
+                        // invoice. Posting another account.payment here would
+                        // double-count the total on the invoice.
+                        console.log('[INVOICE PAYMENT] split mode — relying on pos.payment reconciliation, no extra account.payment posted');
+                      } else if (selectedJournal && selectedJournal.id && totalPaymentAmount2 >= total) {
                         try {
                           const payResp = await createAccountPaymentOdoo({ partnerId, journalId: selectedJournal.id, amount: total, invoiceId });
                           console.log('[INVOICE PAYMENT] createAccountPaymentOdoo response:', payResp);
@@ -453,11 +590,40 @@ const POSPayment = ({ navigation, route }) => {
 
   const cashInsufficient = paymentMode === 'cash' && paidAmount < total;
 
+  // Split-payment validity — both amounts > 0, sum matches the total within
+  // 0.01 tolerance, and the two slots reference different pos.payment.method
+  // records (same method twice is just a single payment, not a split).
+  const splitSlot1Amt = parseFloat(splitSlot1.amount) || 0;
+  const splitSlot2Amt = parseFloat(splitSlot2.amount) || 0;
+  const splitSum = splitSlot1Amt + splitSlot2Amt;
+  const splitValid =
+    splitSlot1.methodId != null &&
+    splitSlot2.methodId != null &&
+    splitSlot1Amt > 0 &&
+    splitSlot2Amt > 0 &&
+    Math.abs(splitSum - total) < 0.01 &&
+    splitSlot1.methodId !== splitSlot2.methodId;
+
+  // Helper: lookup a method record by id, plus pick a sensible icon for it.
+  const getSplitMethod = (id) => posPaymentMethods.find((m) => m.id === id) || null;
+  const iconForMethod = (m) => {
+    if (!m) return 'help-outline';
+    if (m.is_cash_count === true) return 'payments';
+    if (m.split_transactions === true) return 'account-balance-wallet';
+    return 'credit-card';
+  };
+
   // Tap handler for the bottom Validate button. Shows a styled popup when the
   // user hasn't entered enough cash, otherwise runs the existing payment flow.
   const onValidateTap = () => {
     if (paying) return;
-    if (cashInsufficient) {
+    if (paymentMode === 'split') {
+      if (!splitConfirmed || !splitValid) {
+        // Reopen the popup so the cashier can finish entering the split.
+        setSplitModalVisible(true);
+        return;
+      }
+    } else if (cashInsufficient) {
       setAmountModalVisible(true);
       return;
     }
@@ -551,57 +717,97 @@ const POSPayment = ({ navigation, route }) => {
                 }
               }, 100);
             })}
+            {renderModeCard('split', 'Partial\nPayment', 'call-split', () => {
+              setPaymentMode('split');
+              // Default slot 2 amount to (total - slot1) on first open so the
+              // common 50/50 case takes one less tap.
+              setSplitSlot1((s) => ({ ...s, amount: s.amount || '' }));
+              setSplitSlot2((s) => ({ ...s, amount: s.amount || '' }));
+              setSplitModalVisible(true);
+            })}
           </View>
 
-          {/* Amount input panel */}
-          <View style={styles.inputCard}>
-            <Text style={styles.inputModeLabel}>
-              {paymentMode === 'account' ? 'CHARGED TO ACCOUNT' : (paymentMode === 'card' ? 'CARD' : 'CASH')}
-            </Text>
-
-            {paymentMode === 'account' ? (
-              <Text style={styles.inputAmount}>{displayNum(total)}</Text>
-            ) : (
-              <View style={styles.inputRow}>
-                <Text style={styles.inputAmount}>
-                  {inputAmount ? displayNum(parseFloat(inputAmount)) : '0'}
+          {/* Split-payment summary — visible only after the user confirms a
+              valid split in the popup. Tapping Edit reopens the popup so the
+              cashier can adjust before tapping the orange Validate button. */}
+          {paymentMode === 'split' && splitConfirmed ? (
+            <View style={styles.splitSummaryCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.splitSummaryLabel}>SPLIT PAYMENT</Text>
+                <Text style={styles.splitSummaryValue}>
+                  {(() => {
+                    const m1 = getSplitMethod(splitSlot1.methodId);
+                    const m2 = getSplitMethod(splitSlot2.methodId);
+                    const a1 = displayNum(parseFloat(splitSlot1.amount) || 0);
+                    const a2 = displayNum(parseFloat(splitSlot2.amount) || 0);
+                    return `${m1?.name || 'Method 1'} ${a1} · ${m2?.name || 'Method 2'} ${a2}`;
+                  })()}
                 </Text>
-                {inputAmount ? (
-                  <TouchableOpacity onPress={() => setInputAmount('')} style={styles.clearBtn}>
-                    <MaterialIcons name="close" size={20} color="#dc2626" />
-                  </TouchableOpacity>
-                ) : null}
               </View>
-            )}
+              <TouchableOpacity
+                onPress={() => setSplitModalVisible(true)}
+                activeOpacity={0.85}
+                style={styles.splitEditBtn}
+              >
+                <MaterialIcons name="edit" size={14} color="#fff" />
+                <Text style={styles.splitEditText}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
-            {paymentMode !== 'account' ? (
-              <View style={styles.statusPillRow}>
-                {remaining > 0 ? (
-                  <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
-                    <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
-                    <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
-                      Remaining {displayNum(remaining)}
-                    </Text>
-                  </View>
-                ) : remaining < 0 ? (
-                  <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
-                    <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
-                    <Text style={[styles.statusPillText, { color: '#15803d' }]}>
-                      Change {displayNum(Math.abs(remaining))}
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={[styles.statusPill, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
-                    <MaterialIcons name="check-circle" size={14} color="#1d4ed8" />
-                    <Text style={[styles.statusPillText, { color: '#1d4ed8' }]}>Exact amount</Text>
-                  </View>
-                )}
-              </View>
-            ) : null}
-          </View>
+          {/* Amount input panel — hidden in split mode because the amounts
+              live inside the partial-payment popup instead. */}
+          {paymentMode !== 'split' ? (
+            <View style={styles.inputCard}>
+              <Text style={styles.inputModeLabel}>
+                {paymentMode === 'account' ? 'CHARGED TO ACCOUNT' : (paymentMode === 'card' ? 'CARD' : 'CASH')}
+              </Text>
 
-          {/* Keypad — only useful for cash/card */}
-          {paymentMode !== 'account' ? (
+              {paymentMode === 'account' ? (
+                <Text style={styles.inputAmount}>{displayNum(total)}</Text>
+              ) : (
+                <View style={styles.inputRow}>
+                  <Text style={styles.inputAmount}>
+                    {inputAmount ? displayNum(parseFloat(inputAmount)) : '0'}
+                  </Text>
+                  {inputAmount ? (
+                    <TouchableOpacity onPress={() => setInputAmount('')} style={styles.clearBtn}>
+                      <MaterialIcons name="close" size={20} color="#dc2626" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              )}
+
+              {paymentMode !== 'account' ? (
+                <View style={styles.statusPillRow}>
+                  {remaining > 0 ? (
+                    <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
+                      <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
+                      <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
+                        Remaining {displayNum(remaining)}
+                      </Text>
+                    </View>
+                  ) : remaining < 0 ? (
+                    <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
+                      <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
+                      <Text style={[styles.statusPillText, { color: '#15803d' }]}>
+                        Change {displayNum(Math.abs(remaining))}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.statusPill, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+                      <MaterialIcons name="check-circle" size={14} color="#1d4ed8" />
+                      <Text style={[styles.statusPillText, { color: '#1d4ed8' }]}>Exact amount</Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/* Keypad — only useful for cash/card. Split mode has its own
+              amount inputs inside the popup. */}
+          {paymentMode !== 'account' && paymentMode !== 'split' ? (
             <View style={styles.keypadCard}>
               {keypadRows.map((row, i) => (
                 <View key={i} style={styles.keyRow}>
@@ -706,6 +912,159 @@ const POSPayment = ({ navigation, route }) => {
             >
               <Text style={styles.alertOkText}>OK</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Split (partial) payment popup — two slots, each with a method
+          chip pair (Cash / Card) and an amount field. Confirm validates
+          that the two amounts sum to the order total. */}
+      <Modal
+        visible={splitModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setSplitModalVisible(false)}
+      >
+        <View style={styles.alertBg}>
+          <View style={styles.splitCard}>
+            <View style={styles.alertIconDisk}>
+              <MaterialIcons name="call-split" size={28} color={ORANGE} />
+            </View>
+            <Text style={styles.alertTitle}>Split Payment</Text>
+            <Text style={styles.alertText}>
+              {`Total to collect: ${displayNum(total)}`}
+            </Text>
+
+            {posPaymentMethods.length === 0 ? (
+              <Text style={[styles.alertText, { marginTop: 14 }]}>
+                No payment methods are configured on this POS register.{'\n'}
+                Add some in Odoo: Point of Sale → Configuration → Payment Methods.
+              </Text>
+            ) : posPaymentMethods.length < 2 ? (
+              <Text style={[styles.alertText, { marginTop: 14 }]}>
+                Split payment needs at least two payment methods on this register.{'\n'}
+                Currently configured: {posPaymentMethods.map((m) => m.name).join(', ')}.
+              </Text>
+            ) : (
+              [
+                { slot: splitSlot1, setSlot: setSplitSlot1, label: 'Method 1' },
+                { slot: splitSlot2, setSlot: setSplitSlot2, label: 'Method 2' },
+              ].map(({ slot, setSlot, label }, idx) => (
+                <View key={idx} style={styles.splitSlotCard}>
+                  <Text style={styles.splitSlotLabel}>{label}</Text>
+                  <View style={styles.splitChipRow}>
+                    {posPaymentMethods.map((m) => {
+                      const active = slot.methodId === m.id;
+                      return (
+                        <TouchableOpacity
+                          key={m.id}
+                          onPress={() => setSlot((s) => ({ ...s, methodId: m.id }))}
+                          activeOpacity={0.85}
+                          style={[
+                            styles.splitChip,
+                            active && styles.splitChipActive,
+                          ]}
+                        >
+                          <MaterialIcons
+                            name={iconForMethod(m)}
+                            size={16}
+                            color={active ? '#fff' : NAVY}
+                          />
+                          <Text
+                            style={[
+                              styles.splitChipText,
+                              active && styles.splitChipTextActive,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {m.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <TextInput
+                    value={slot.amount}
+                    onChangeText={(t) => setSlot((s) => ({ ...s, amount: t.replace(/[^0-9.]/g, '') }))}
+                    keyboardType="decimal-pad"
+                    placeholder="0.00"
+                    placeholderTextColor="#9ca3af"
+                    style={styles.splitAmountInput}
+                  />
+                </View>
+              ))
+            )}
+
+            {/* Live sum indicator */}
+            <View
+              style={[
+                styles.splitSumPill,
+                splitValid
+                  ? { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }
+                  : { backgroundColor: '#fee2e2', borderColor: '#fecaca' },
+              ]}
+            >
+              <MaterialIcons
+                name={splitValid ? 'check-circle' : 'error-outline'}
+                size={14}
+                color={splitValid ? '#15803d' : '#b91c1c'}
+              />
+              <Text
+                style={[
+                  styles.splitSumText,
+                  { color: splitValid ? '#15803d' : '#b91c1c' },
+                ]}
+              >
+                {`Entered ${displayNum(splitSum)} / ${displayNum(total)}`}
+              </Text>
+            </View>
+
+            <View style={styles.splitActionsRow}>
+              <TouchableOpacity
+                style={styles.customerEnterBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  // Cancel: close the popup without flipping the confirmed
+                  // flag. If nothing was confirmed yet, also bounce the user
+                  // back to cash mode so they aren't stranded with split
+                  // selected and no values.
+                  setSplitModalVisible(false);
+                  if (!splitConfirmed) setPaymentMode('cash');
+                }}
+              >
+                <Text style={styles.customerEnterText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.customerSkipBtn,
+                  !splitValid && { opacity: 0.55 },
+                ]}
+                activeOpacity={splitValid ? 0.85 : 1}
+                onPress={() => {
+                  if (!splitValid) {
+                    let msg = 'Both amounts must be greater than zero';
+                    if (splitSlot1.methodId == null || splitSlot2.methodId == null) {
+                      msg = 'Pick a payment method for each slot';
+                    } else if (splitSlot1.methodId === splitSlot2.methodId) {
+                      msg = 'Pick two different payment methods';
+                    } else if (Math.abs(splitSum - total) >= 0.01) {
+                      msg = `Amounts must add up to ${displayNum(total)}`;
+                    }
+                    Toast.show({
+                      type: 'error',
+                      text1: 'Split Payment',
+                      text2: msg,
+                      position: 'bottom',
+                    });
+                    return;
+                  }
+                  setSplitConfirmed(true);
+                  setSplitModalVisible(false);
+                }}
+              >
+                <Text style={styles.customerSkipText}>Confirm</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1109,5 +1468,139 @@ const styles = StyleSheet.create({
     color: '#fff', fontSize: 14,
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.3, marginLeft: 4,
+  },
+
+  // Split (partial) payment styles ───────────────────────────────────
+  splitSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 14,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1.5,
+    borderColor: '#FED7AA',
+  },
+  splitSummaryLabel: {
+    fontSize: 11,
+    color: '#9A3412',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+    marginBottom: 2,
+  },
+  splitSummaryValue: {
+    fontSize: 14,
+    color: '#9A3412',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  splitEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: ORANGE,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    marginLeft: 10,
+  },
+  splitEditText: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 12,
+    marginLeft: 4,
+    letterSpacing: 0.3,
+  },
+  splitCard: {
+    width: '88%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    alignItems: 'stretch',
+    borderWidth: 2,
+    borderColor: NAVY,
+    ...cardShadow,
+  },
+  splitSlotCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  splitSlotLabel: {
+    fontSize: 11,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+    marginBottom: 8,
+  },
+  splitChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  splitChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+  },
+  splitChipActive: {
+    backgroundColor: NAVY,
+    borderColor: NAVY,
+  },
+  splitChipText: {
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 13,
+    marginLeft: 6,
+    letterSpacing: 0.3,
+  },
+  splitChipTextActive: {
+    color: '#fff',
+  },
+  splitAmountInput: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    paddingHorizontal: 14,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 8,
+    fontSize: 18,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center',
+  },
+  splitSumPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  splitSumText: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    marginLeft: 6,
+    letterSpacing: 0.3,
+  },
+  splitActionsRow: {
+    flexDirection: 'row',
+    marginTop: 16,
+    gap: 10,
   },
 });

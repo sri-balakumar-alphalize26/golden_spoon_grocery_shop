@@ -83,7 +83,15 @@ const MyOrdersScreen = ({ navigation }) => {
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
-    const date = new Date(dateString);
+    // Odoo sends datetimes as naive UTC strings ("YYYY-MM-DD HH:MM:SS").
+    // Hermes parses those as local, so without an explicit Z the displayed
+    // date can roll over to the wrong day for users near midnight UTC.
+    // Force UTC parsing so toLocaleDateString shifts to the user's zone.
+    const str = String(dateString);
+    const iso = str.includes('T') ? str : str.replace(' ', 'T');
+    const withTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
+    const date = new Date(withTz);
+    if (isNaN(date.getTime())) return dateString;
     return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
