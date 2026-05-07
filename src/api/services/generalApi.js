@@ -988,8 +988,12 @@ export const fetchStockProductsOdoo = async ({ offset = 0, limit = 50, searchTex
     return response.data.result || [];
   };
 
-  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id'];
-  const safeFields = ['id', 'name', 'default_code', 'qty_available'];
+  // `product_tmpl_id` is requested so the Stock screen can dedupe variants
+  // of the same template (a t-shirt with size S/M/L should render as one
+  // row in the stock list, matching Odoo's Inventory → Stock view which
+  // groups by product, not variant).
+  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id', 'product_tmpl_id'];
+  const safeFields = ['id', 'name', 'default_code', 'qty_available', 'product_tmpl_id'];
 
   let raw = [];
   try {
@@ -1013,6 +1017,8 @@ export const fetchStockProductsOdoo = async ({ offset = 0, limit = 50, searchTex
     virtual_available: typeof p.virtual_available === 'undefined' ? null : Number(p.virtual_available),
     uom: Array.isArray(p.uom_id) ? { id: p.uom_id[0], name: p.uom_id[1] } : null,
     category: Array.isArray(p.categ_id) ? { id: p.categ_id[0], name: p.categ_id[1] } : null,
+    // Carry the template id through so the screen can dedupe variants.
+    product_tmpl_id: p.product_tmpl_id || null,
     image_url: `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`,
   }));
 };
@@ -3983,19 +3989,71 @@ export const fetchExpenseCategoriesOdoo = async () => {
   }
 };
 
+// Odoo's hr.expense.state values shifted in newer versions: legacy DBs use
+// 'reported' for submitted-but-not-approved expenses and 'done' for the
+// reimbursed/paid state, while Odoo 17+ uses 'submitted' and 'paid'. Map
+// each canonical chip key to BOTH so the same code works on either schema
+// without forcing the operator to configure a flag. Used by both the list
+// fetcher and the totals fetcher.
+const HR_EXPENSE_STATE_ALIASES = {
+  reported:  ['reported', 'submitted'],
+  submitted: ['reported', 'submitted'],
+  done:      ['done', 'paid'],
+  paid:      ['done', 'paid'],
+};
+
 // List of hr.expense rows for the current employee. Optional state filter
-// ('draft' | 'reported' | 'approved' | 'done' | 'refused') and a free-text
-// search across the description.
+// ('draft' | 'reported'/'submitted' | 'approved' | 'done'/'paid' | 'refused')
+// and a free-text search across the description.
 export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = null, offset = 0, limit = 50 } = {}) => {
-  if (!employeeId) return [];
   const baseUrl = getOdooUrl();
-  let domain = [['employee_id', '=', Number(employeeId)]];
+  // No explicit employee filter by default — let Odoo's own access rules
+  // decide what the logged-in user can see. Admins/managers see every
+  // employee's expenses (matching Odoo's "My Expenses" admin view); regular
+  // employees see only their own because of Odoo's record-rule on
+  // hr.expense. Pass `employeeId` only when the screen explicitly wants to
+  // narrow further.
+  let domain = [];
+  if (employeeId) {
+    domain = domain.concat([['employee_id', '=', Number(employeeId)]]);
+  }
   if (searchText && String(searchText).trim()) {
     const term = String(searchText).trim();
     domain = domain.concat([['name', 'ilike', term]]);
   }
-  if (state) domain = domain.concat([['state', '=', state]]);
-  try {
+  if (state) {
+    const states = HR_EXPENSE_STATE_ALIASES[state] || [state];
+    domain = domain.concat([['state', 'in', states]]);
+  }
+  // Three-step fetch:
+  //   1. richFields  — everything (works on Odoo 14–17 with sheets)
+  //   2. midFields   — drops `sheet_id` (Odoo 18+ removed it) but keeps
+  //                    duplicate_expense_ids + message_attachment_count
+  //                    so the paperclip + duplicate banner still work
+  //   3. safeFields  — bare minimum, used only when a third field is
+  //                    rejected (e.g. duplicate_expense_ids on a tiny
+  //                    custom Odoo)
+  // Without the middle step, an Odoo 19 server rejecting `sheet_id`
+  // would fall straight to safeFields and the attachment-count chip on
+  // the list would disappear.
+  const baseFields = [
+    'id', 'name', 'date', 'product_id', 'employee_id',
+    'total_amount', 'payment_mode', 'state', 'description',
+  ];
+  const richFields = [
+    ...baseFields,
+    'sheet_id',
+    'duplicate_expense_ids',
+    'message_attachment_count',
+  ];
+  const midFields = [
+    ...baseFields,
+    'duplicate_expense_ids',
+    'message_attachment_count',
+  ];
+  const safeFields = baseFields;
+
+  const callRead = async (fields) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -4003,21 +4061,49 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
         model: 'hr.expense',
         method: 'search_read',
         args: [domain],
-        kwargs: {
-          fields: [
-            'id', 'name', 'date', 'product_id', 'employee_id',
-            'total_amount', 'payment_mode', 'state', 'description',
-          ],
-          order: 'date desc, id desc',
-          offset, limit,
-        },
+        kwargs: { fields, order: 'date desc, id desc', offset, limit },
       },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data && resp.data.error) {
-      console.warn('fetchExpensesOdoo error:', resp.data.error?.data?.message);
-      return [];
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = resp.data.error;
+      throw e;
     }
-    return (resp.data.result || []).map((e) => ({
+    return resp.data.result || [];
+  };
+
+  let raw = [];
+  try {
+    raw = await callRead(richFields);
+  } catch (err) {
+    // Odoo 18+ rejects `sheet_id`. Retry with midFields, which keeps
+    // duplicate_expense_ids and message_attachment_count so the
+    // paperclip chip and duplicate banner still work.
+    console.warn(
+      'fetchExpensesOdoo rich fetch failed, retrying without sheet_id:',
+      err?.payload?.data?.message || err?.message
+    );
+    try {
+      raw = await callRead(midFields);
+    } catch (err2) {
+      // A third field is rejected too (rare — e.g. duplicate_expense_ids
+      // missing on a stripped Odoo). Drop everything beyond the base
+      // shape; the list still renders, just without paperclip + banner.
+      console.warn(
+        'fetchExpensesOdoo mid fetch failed, retrying without optional fields:',
+        err2?.payload?.data?.message || err2?.message
+      );
+      try {
+        raw = await callRead(safeFields);
+      } catch (err3) {
+        console.error('fetchExpensesOdoo safe fetch also failed:', err3?.payload?.data?.message || err3?.message);
+        return [];
+      }
+    }
+  }
+
+  try {
+    return raw.map((e) => ({
       id: e.id,
       name: e.name || '',
       date: e.date || null,
@@ -4027,6 +4113,16 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
       payment_mode: e.payment_mode || 'own_account',
       state: e.state || 'draft',
       description: e.description || '',
+      // [id, name] tuple when the expense has been submitted (creates a
+      // sheet); false otherwise. Used by the detail screen to dispatch
+      // approve/refuse/reset against the right sheet.
+      sheet_id: Array.isArray(e.sheet_id) ? e.sheet_id[0] : null,
+      // Other expenses sharing this receipt — drives the yellow
+      // "An expense with the same receipt already exists" banner.
+      duplicate_expense_ids: Array.isArray(e.duplicate_expense_ids) ? e.duplicate_expense_ids : [],
+      // Number of attached files; rendered as a paperclip + count on
+      // the list row (matches Odoo's web list view).
+      message_attachment_count: Number(e.message_attachment_count) || 0,
     }));
   } catch (e) {
     console.warn('fetchExpensesOdoo failed:', e?.message);
@@ -4034,13 +4130,95 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
   }
 };
 
+// Read a single hr.expense by id with the same shape fetchExpensesOdoo
+// returns. Used to refresh the detail screen instantly after a workflow
+// action (Approve/Refuse/Reset/Post) without paging the whole list.
+// Same defensive richFields → safeFields fallback so it survives field
+// removals across Odoo versions.
+export const fetchExpenseByIdOdoo = async (expenseId) => {
+  if (!expenseId) return null;
+  const baseUrl = getOdooUrl();
+  const richFields = [
+    'id', 'name', 'date', 'product_id', 'employee_id',
+    'total_amount', 'payment_mode', 'state', 'description',
+    'sheet_id', 'duplicate_expense_ids', 'message_attachment_count',
+  ];
+  const safeFields = [
+    'id', 'name', 'date', 'product_id', 'employee_id',
+    'total_amount', 'payment_mode', 'state', 'description',
+  ];
+  const callRead = async (fields) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.expense',
+        method: 'read',
+        args: [[Number(expenseId)], fields],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data.result || [];
+  };
+
+  let raw = [];
+  try {
+    raw = await callRead(richFields);
+  } catch (_) {
+    try {
+      raw = await callRead(safeFields);
+    } catch (_) {
+      return null;
+    }
+  }
+  const e = raw[0];
+  if (!e) return null;
+  return {
+    id: e.id,
+    name: e.name || '',
+    date: e.date || null,
+    category: Array.isArray(e.product_id) ? { id: e.product_id[0], name: e.product_id[1] } : null,
+    employee: Array.isArray(e.employee_id) ? { id: e.employee_id[0], name: e.employee_id[1] } : null,
+    total_amount: Number(e.total_amount) || 0,
+    payment_mode: e.payment_mode || 'own_account',
+    state: e.state || 'draft',
+    description: e.description || '',
+    sheet_id: Array.isArray(e.sheet_id) ? e.sheet_id[0] : null,
+    duplicate_expense_ids: Array.isArray(e.duplicate_expense_ids) ? e.duplicate_expense_ids : [],
+    message_attachment_count: Number(e.message_attachment_count) || 0,
+  };
+};
+
 // Returns { to_submit, waiting_approval, waiting_reimbursement } as numeric totals.
 export const fetchExpenseTotalsOdoo = async ({ employeeId } = {}) => {
   const empty = { to_submit: 0, waiting_approval: 0, waiting_reimbursement: 0 };
-  if (!employeeId) return empty;
   const baseUrl = getOdooUrl();
-  const sumFor = async (state) => {
-    const domain = [['employee_id', '=', Number(employeeId)], ['state', '=', state]];
+  // Same access-rule story as fetchExpensesOdoo — when no employeeId is
+  // provided, let Odoo's record rules decide what the user can sum.
+  // Accepts either a string (looked up in HR_EXPENSE_STATE_ALIASES) or
+  // an array of literal state values (bypassing the alias map). The
+  // literal form is needed for "Waiting Reimbursement" which must be
+  // ONLY 'done' (posted, awaiting payment) and NOT 'paid' (final).
+  //
+  // The optional `options.ownAccountOnly` controls whether we narrow to
+  // employee-paid (`own_account`) rows. Odoo's dashboard does this for
+  // To Submit / Waiting Reimbursement (employee-side counters) but NOT
+  // for Waiting Approval, which is a manager-side counter that includes
+  // company-card expenses too.
+  const sumFor = async (stateOrStates, options = {}) => {
+    const states = Array.isArray(stateOrStates)
+      ? stateOrStates
+      : (HR_EXPENSE_STATE_ALIASES[stateOrStates] || [stateOrStates]);
+    const domain = [['state', 'in', states]];
+    if (options.ownAccountOnly !== false) {
+      domain.push(['payment_mode', '=', 'own_account']);
+    }
+    if (employeeId) domain.unshift(['employee_id', '=', Number(employeeId)]);
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -4057,8 +4235,14 @@ export const fetchExpenseTotalsOdoo = async ({ employeeId } = {}) => {
   try {
     const [draft, reported, approved] = await Promise.all([
       sumFor('draft'),
-      sumFor('reported'),
-      sumFor('approved'),
+      // Waiting Approval is a manager-side counter: it shows every
+      // submitted expense regardless of payment_mode (employee-paid +
+      // company-card). Odoo's web dashboard sums them all here.
+      sumFor('reported', { ownAccountOnly: false }),
+      // Odoo's "Waiting Reimbursement" totals own-account expenses in
+      // state='approved' — manager approved, accountant has yet to post
+      // and pay. Match what the user sees in Odoo's web dashboard.
+      sumFor(['approved']),
     ]);
     return {
       to_submit: draft,
@@ -4122,13 +4306,41 @@ export const updateExpenseOdoo = async (expenseId, { name, date, productId, tota
   }
   if (description !== undefined) vals.description = description ? String(description).trim() : false;
 
-  try {
+  const writeOnce = async (payload) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
-      params: { model: 'hr.expense', method: 'write', args: [[expenseId], vals], kwargs: {} },
+      params: { model: 'hr.expense', method: 'write', args: [[expenseId], payload], kwargs: {} },
     }, { headers: { 'Content-Type': 'application/json' } });
-    if (resp.data && resp.data.error) return { error: resp.data.error };
+    return resp.data;
+  };
+
+  try {
+    const data = await writeOnce(vals);
+    if (data && data.error) {
+      const msg = data.error?.data?.message || data.error?.message || '';
+      // Odoo 18+ renamed `total_amount` → `total_amount_currency` in some
+      // configurations. If the write was rejected because of that field,
+      // retry once with the alternate name. Same idea for `payment_mode`
+      // which a few private modules rename to `payment_method`.
+      const retryVals = { ...vals };
+      let retryNeeded = false;
+      if (/Invalid field 'total_amount'/i.test(msg) && 'total_amount' in retryVals) {
+        retryVals.total_amount_currency = retryVals.total_amount;
+        delete retryVals.total_amount;
+        retryNeeded = true;
+      }
+      if (/Invalid field 'payment_mode'/i.test(msg) && 'payment_mode' in retryVals) {
+        delete retryVals.payment_mode;
+        retryNeeded = true;
+      }
+      if (retryNeeded) {
+        const data2 = await writeOnce(retryVals);
+        if (data2 && data2.error) return { error: data2.error };
+        return { result: expenseId };
+      }
+      return { error: data.error };
+    }
     return { result: expenseId };
   } catch (e) {
     console.error('updateExpenseOdoo error:', e?.message);
@@ -4294,3 +4506,202 @@ export const submitExpenseOdoo = async (expenseId) => {
     return { error: { message: e?.message || 'Submit failed' } };
   }
 };
+
+// Workflow-action dispatcher: tries each (model, method) candidate in
+// order and returns the first one that succeeds. Older Odoo (≤17) puts
+// the workflow methods on `hr.expense.sheet`; Odoo 18+ removed sheets
+// and put them on `hr.expense`; Odoo 19 renamed several of those again.
+// Encoding multiple candidates lets the same app code work against any
+// of those schemas without a hard-coded version flag.
+//
+// Final fallback: when every named method 404s (Odoo 19 renamed enough
+// of them that none of the names we know about work), fall back to
+// writing the target state directly via `hr.expense.write({state: …})`.
+// This skips the side-effects an action method would do (chatter
+// messages, sheet creation, journal moves), but for plain state
+// transitions it's a reasonable last resort that keeps the UI working.
+const tryExpenseAction = async ({ expenseId, sheetId, candidates, kwargs = {}, fallbackState = null }) => {
+  const baseUrl = getOdooUrl();
+  let lastErr = null;
+  for (const c of candidates) {
+    const targetId = c.model === 'hr.expense.sheet' ? sheetId : expenseId;
+    if (!targetId) continue;
+    try {
+      const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: c.model,
+          method: c.method,
+          args: [[targetId]],
+          kwargs,
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      if (resp.data && resp.data.error) {
+        lastErr = resp.data.error;
+        // "Method does not exist" / "Invalid field" — try the next candidate.
+        continue;
+      }
+      return { result: resp.data.result };
+    } catch (e) {
+      lastErr = { message: e?.message || `${c.method} failed` };
+      continue;
+    }
+  }
+
+  // All method candidates failed. Last-ditch: write state directly.
+  if (fallbackState && expenseId) {
+    try {
+      const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'hr.expense',
+          method: 'write',
+          args: [[expenseId], { state: fallbackState }],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      if (resp.data && resp.data.error) {
+        lastErr = resp.data.error;
+      } else {
+        return { result: resp.data.result };
+      }
+    } catch (e) {
+      lastErr = { message: e?.message || 'state write failed' };
+    }
+  }
+
+  console.error('All expense action candidates failed:', lastErr);
+  return { error: lastErr || { message: 'No matching workflow method on this Odoo' } };
+};
+
+export const approveExpenseSheetOdoo = (sheetId, expenseId) =>
+  tryExpenseAction({
+    expenseId,
+    sheetId,
+    candidates: [
+      { model: 'hr.expense', method: 'action_approve' },
+      { model: 'hr.expense.sheet', method: 'approve_expense_sheets' },
+      { model: 'hr.expense.sheet', method: 'action_approve_expense_sheets' },
+    ],
+    fallbackState: 'approved',
+  });
+
+export const refuseExpenseSheetOdoo = (sheetId, reason = '', expenseId) =>
+  tryExpenseAction({
+    expenseId,
+    sheetId,
+    kwargs: { reason: String(reason || '') },
+    candidates: [
+      { model: 'hr.expense', method: 'action_refuse' },
+      { model: 'hr.expense', method: 'refuse_expense' },
+      { model: 'hr.expense.sheet', method: 'refuse_sheet' },
+    ],
+    fallbackState: 'refused',
+  });
+
+export const resetExpenseSheetOdoo = (sheetId, expenseId) =>
+  tryExpenseAction({
+    expenseId,
+    sheetId,
+    candidates: [
+      { model: 'hr.expense', method: 'action_reset_to_draft' },
+      { model: 'hr.expense', method: 'action_reset_expense' },
+      { model: 'hr.expense.sheet', method: 'action_reset_expense_sheets' },
+    ],
+    fallbackState: 'draft',
+  });
+
+// List every ir.attachment row linked to an hr.expense, in upload order.
+// Returned shape: [{ id, name, mimetype, datas, url }, ...] where `datas`
+// is the base64 payload (may be missing for very large files where Odoo
+// returns just the URL) and `url` is the authenticated download endpoint
+// the WebView/PDF viewer can load when base64 isn't usable.
+export const fetchExpenseAttachmentsOdoo = async (expenseId) => {
+  if (!expenseId) return [];
+  const baseUrl = getOdooUrl();
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'ir.attachment',
+        method: 'search_read',
+        args: [[
+          ['res_model', '=', 'hr.expense'],
+          ['res_id', '=', Number(expenseId)],
+        ]],
+        kwargs: {
+          fields: ['id', 'name', 'mimetype', 'datas', 'file_size'],
+          order: 'id asc',
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      console.warn('fetchExpenseAttachmentsOdoo error:', resp.data.error?.data?.message);
+      return [];
+    }
+    const rows = resp.data?.result || [];
+    return rows.map((a) => ({
+      id: a.id,
+      name: a.name || `Attachment ${a.id}`,
+      mimetype: a.mimetype || 'application/octet-stream',
+      datas: a.datas || null,
+      url: `${baseUrl}/web/content/${a.id}?download=true`,
+      file_size: a.file_size || 0,
+    }));
+  } catch (e) {
+    console.warn('fetchExpenseAttachmentsOdoo failed:', e?.message);
+    return [];
+  }
+};
+
+// Upload a base64 image as an `ir.attachment` linked to an hr.expense
+// row. Mirrors Odoo's "Attach Receipt" button which creates an
+// ir.attachment with res_model='hr.expense' and res_id pointing at the
+// expense — and (for the first attachment) writes back to the expense's
+// `message_main_attachment_id` so it shows as the receipt thumbnail.
+export const attachReceiptToExpenseOdoo = async ({ expenseId, base64, mimetype = 'image/jpeg', filename = 'receipt.jpg' } = {}) => {
+  if (!expenseId) return { error: { message: 'expenseId is required' } };
+  if (!base64) return { error: { message: 'no file selected' } };
+  const baseUrl = getOdooUrl();
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'ir.attachment',
+        method: 'create',
+        args: [{
+          name: filename,
+          datas: base64,
+          mimetype,
+          res_model: 'hr.expense',
+          res_id: Number(expenseId),
+          type: 'binary',
+        }],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) return { error: resp.data.error };
+    return { result: resp.data.result };
+  } catch (e) {
+    console.error('attachReceiptToExpenseOdoo error:', e?.message);
+    return { error: { message: e?.message || 'Attach failed' } };
+  }
+};
+
+// Post journal entries — accountant action that flips state from approved
+// to done/posted. Different across Odoo versions, so we probe candidates.
+export const postExpenseEntriesOdoo = (sheetId, expenseId) =>
+  tryExpenseAction({
+    expenseId,
+    sheetId,
+    candidates: [
+      { model: 'hr.expense', method: 'action_post' },
+      { model: 'hr.expense.sheet', method: 'action_sheet_move_post' },
+      { model: 'hr.expense.sheet', method: 'action_sheet_move_create' },
+    ],
+    fallbackState: 'done',
+  });

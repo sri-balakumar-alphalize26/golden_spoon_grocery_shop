@@ -30,21 +30,32 @@ const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
 const MUTED = '#8896ab';
 
+// Each filter chip carries the same colour palette as the row's status
+// badge so the cashier sees Submitted/Approved/Paid/Refused chips in the
+// same colour that lights up on the rows themselves. `bg` is the active
+// fill, `border` the inactive outline, `fg` the text on the active
+// (filled) state. Inactive text uses the same `border` colour.
 const FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'draft', label: 'Draft' },
-  { key: 'reported', label: 'Submitted' },
-  { key: 'approved', label: 'Approved' },
-  { key: 'done', label: 'Paid' },
-  { key: 'refused', label: 'Refused' },
+  { key: 'all',      label: 'All',       bg: COLORS.primaryThemeColor, border: COLORS.primaryThemeColor, fg: '#fff'    },
+  { key: 'draft',    label: 'Draft',     bg: '#0EA5E9', border: '#7DD3FC', fg: '#fff' },
+  { key: 'reported', label: 'Submitted', bg: '#F59E0B', border: '#FCD34D', fg: '#1a1a2e' },
+  { key: 'approved', label: 'Approved',  bg: '#16A34A', border: '#86EFAC', fg: '#fff' },
+  { key: 'done',     label: 'Paid',      bg: '#6B7280', border: '#D1D5DB', fg: '#fff' },
+  { key: 'refused',  label: 'Refused',   bg: '#DC2626', border: '#FCA5A5', fg: '#fff' },
 ];
 
+// Newer Odoo (17+) reports `state = 'submitted'` / `'paid'` while older
+// Odoo uses `'reported'` / `'done'` for the same logical states. Include
+// both keys here so the colored pill renders correctly regardless of the
+// connected database's version.
 const STATE_BADGE = {
-  draft: { bg: '#E0F2FE', fg: '#075985', label: 'Draft' },
-  reported: { bg: '#FEF3C7', fg: '#92400E', label: 'Submitted' },
-  approved: { bg: '#DCFCE7', fg: '#166534', label: 'Approved' },
-  done: { bg: '#E5E7EB', fg: '#374151', label: 'Paid' },
-  refused: { bg: '#FEE2E2', fg: '#B91C1C', label: 'Refused' },
+  draft:     { bg: '#E0F2FE', fg: '#075985', label: 'Draft' },
+  reported:  { bg: '#FEF3C7', fg: '#92400E', label: 'Submitted' },
+  submitted: { bg: '#FEF3C7', fg: '#92400E', label: 'Submitted' },
+  approved:  { bg: '#DCFCE7', fg: '#166534', label: 'Approved' },
+  done:      { bg: '#E5E7EB', fg: '#374151', label: 'Paid' },
+  paid:      { bg: '#E5E7EB', fg: '#374151', label: 'Paid' },
+  refused:   { bg: '#FEE2E2', fg: '#B91C1C', label: 'Refused' },
 };
 
 const formatDate = (s) => {
@@ -65,7 +76,7 @@ const ExpensesScreen = ({ navigation }) => {
   const [filter, setFilter] = useState('all');
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    () => loadList(employee?.id, filter),
+    () => loadList(employee?.id),
     400
   );
 
@@ -76,13 +87,16 @@ const ExpensesScreen = ({ navigation }) => {
     fetchCurrentEmployeeIdOdoo(uid).then((emp) => setEmployee(emp));
   }, [authUser]);
 
-  const loadList = useCallback(async (employeeId, currentFilter) => {
+  // Odoo splits the dashboard view: the totals at the top compute against
+  // the logged-in user only, while the LIST shows every expense the user
+  // can read (admins see all employees they manage). Mirror that here —
+  // pass employeeId to the totals fetch but not to the list fetch.
+  const loadList = useCallback(async (employeeId) => {
     if (!employeeId) return;
     setLoading(true);
     try {
-      const stateForFilter = currentFilter === 'all' ? null : currentFilter;
       const [rows, sums] = await Promise.all([
-        fetchExpensesOdoo({ employeeId, searchText, state: stateForFilter }),
+        fetchExpensesOdoo({ searchText, state: null, limit: 500 }),
         fetchExpenseTotalsOdoo({ employeeId }),
       ]);
       setData(rows || []);
@@ -94,36 +108,66 @@ const ExpensesScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
-      if (employee?.id) loadList(employee.id, filter);
-    }, [employee?.id, filter, loadList])
+      if (employee?.id) loadList(employee.id);
+    }, [employee?.id, loadList])
   );
 
+  // Client-side filter — bucket each row's state under the canonical chip
+  // key so the chip narrows the visible list regardless of which Odoo
+  // version's state vocabulary the server returned.
+  const FILTER_GROUPS = {
+    draft: ['draft'],
+    reported: ['reported', 'submitted'],
+    approved: ['approved'],
+    done: ['done', 'paid'],
+    refused: ['refused'],
+  };
+  const visibleData = filter === 'all'
+    ? data
+    : data.filter((row) => (FILTER_GROUPS[filter] || [filter]).includes(row.state));
+
   const renderTotalsCard = () => (
+    // Each stat card is tappable — mirrors Odoo's web UI where clicking
+    // "Waiting Approval" filters the list to that bucket. Tapping the same
+    // active card again reverts to "All" so the user can clear the filter
+    // without hunting for the chip row below.
     <View style={styles.totalsCard}>
-      <View style={styles.totalCol}>
-        <Text style={styles.totalAmount}>
+      <TouchableOpacity
+        style={[styles.totalCol, filter === 'draft' && styles.totalColActive]}
+        activeOpacity={0.7}
+        onPress={() => setFilter(filter === 'draft' ? 'all' : 'draft')}
+      >
+        <Text style={[styles.totalAmount, filter === 'draft' && { color: NAVY }]}>
           {formatCurrency(totals.to_submit, currency)}
         </Text>
         <Text style={styles.totalLabel}>To Submit</Text>
-      </View>
+      </TouchableOpacity>
       <View style={styles.totalDivider}>
         <MaterialIcons name="chevron-right" size={20} color="#cbd5e1" />
       </View>
-      <View style={styles.totalCol}>
-        <Text style={styles.totalAmount}>
+      <TouchableOpacity
+        style={[styles.totalCol, filter === 'reported' && styles.totalColActive]}
+        activeOpacity={0.7}
+        onPress={() => setFilter(filter === 'reported' ? 'all' : 'reported')}
+      >
+        <Text style={[styles.totalAmount, filter === 'reported' && { color: NAVY }]}>
           {formatCurrency(totals.waiting_approval, currency)}
         </Text>
         <Text style={styles.totalLabel}>Waiting Approval</Text>
-      </View>
+      </TouchableOpacity>
       <View style={styles.totalDivider}>
         <MaterialIcons name="chevron-right" size={20} color="#cbd5e1" />
       </View>
-      <View style={styles.totalCol}>
-        <Text style={styles.totalAmount}>
+      <TouchableOpacity
+        style={[styles.totalCol, filter === 'approved' && styles.totalColActive]}
+        activeOpacity={0.7}
+        onPress={() => setFilter(filter === 'approved' ? 'all' : 'approved')}
+      >
+        <Text style={[styles.totalAmount, filter === 'approved' && { color: NAVY }]}>
           {formatCurrency(totals.waiting_reimbursement, currency)}
         </Text>
         <Text style={styles.totalLabel}>Waiting Reimbursement</Text>
-      </View>
+      </TouchableOpacity>
     </View>
   );
 
@@ -141,9 +185,19 @@ const ExpensesScreen = ({ navigation }) => {
               key={f.key}
               activeOpacity={0.85}
               onPress={() => setFilter(f.key)}
-              style={[styles.filterPill, active && { backgroundColor: NAVY, borderColor: NAVY }]}
+              style={[
+                styles.filterPill,
+                { borderColor: f.border },
+                active && { backgroundColor: f.bg, borderColor: f.bg },
+              ]}
             >
-              <Text style={[styles.filterPillText, active && { color: '#fff' }]}>{f.label}</Text>
+              <Text style={[
+                styles.filterPillText,
+                { color: f.border },
+                active && { color: f.fg },
+              ]}>
+                {f.label}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -174,6 +228,15 @@ const ExpensesScreen = ({ navigation }) => {
           <Text style={styles.rowSub} numberOfLines={1}>{paidByLabel}</Text>
         </View>
         <View style={styles.rightCol}>
+          {/* Paperclip + count when this expense has receipts attached.
+              Mirrors Odoo's list view — visible icon next to the amount
+              for any row with at least one attachment. */}
+          {item.message_attachment_count > 0 ? (
+            <View style={styles.attachChip}>
+              <MaterialIcons name="attach-file" size={15} color={NAVY} />
+              <Text style={styles.attachChipText}>{item.message_attachment_count}</Text>
+            </View>
+          ) : null}
           <Text style={styles.rowAmount}>
             {formatCurrency(item.total_amount, currency)}
           </Text>
@@ -189,17 +252,23 @@ const ExpensesScreen = ({ navigation }) => {
 
   const renderList = () => {
     if (loading && (!data || data.length === 0)) return null;
-    if ((!data || data.length === 0) && !loading) {
+    if (visibleData.length === 0 && !loading) {
+      // Tailor the empty message — "no rows at all" vs "no rows for the
+      // chosen status" — so the cashier knows whether the filter is
+      // hiding rows or there's genuinely nothing to show.
+      const message = data.length === 0
+        ? 'No expenses yet'
+        : `No ${(FILTERS.find((f) => f.key === filter)?.label || '').toLowerCase()} expenses`;
       return (
         <EmptyState
           imageSource={require('@assets/images/EmptyData/empty_data.png')}
-          message="No expenses yet"
+          message={message}
         />
       );
     }
     return (
       <FlashList
-        data={data}
+        data={visibleData}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         contentContainerStyle={{ padding: 8, paddingBottom: 80 }}
@@ -254,7 +323,10 @@ const styles = StyleSheet.create({
       android: { elevation: 2 },
     }),
   },
-  totalCol: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
+  totalCol: { flex: 1, alignItems: 'center', paddingHorizontal: 4, paddingVertical: 6, borderRadius: 8 },
+  // Active stat column — soft navy tint so the cashier can see at a glance
+  // which bucket the list is filtered to.
+  totalColActive: { backgroundColor: '#EEF2FF' },
   totalAmount: {
     fontSize: 16,
     color: NAVY,
@@ -340,6 +412,18 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   rightCol: { alignItems: 'flex-end', marginLeft: 8 },
+  // 📎 N — attachment count chip on each row (matches Odoo list view)
+  attachChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginBottom: 4,
+  },
+  attachChipText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
   rowAmount: {
     fontSize: 15,
     color: ORANGE,

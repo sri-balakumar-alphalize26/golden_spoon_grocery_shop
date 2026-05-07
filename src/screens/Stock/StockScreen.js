@@ -44,8 +44,22 @@ const stateOf = (qty) => {
   return { bg: '#DCFCE7', fg: '#166534', label: 'In Stock' };
 };
 
+// Stock list shows one row per template (matching Odoo's Inventory → Stock
+// view). product.product is per-variant — a t-shirt with size S/M/L would
+// otherwise produce three rows, all with the same template name and image.
+const productTemplateKey = (item) => {
+  if (!item) return null;
+  if (Array.isArray(item.product_tmpl_id) && item.product_tmpl_id[0] != null) {
+    return item.product_tmpl_id[0];
+  }
+  return item.id;
+};
+
 const StockScreen = ({ navigation }) => {
-  const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchStockProductsOdoo);
+  const { data, loading, fetchData, fetchMoreData } = useDataFetching(
+    fetchStockProductsOdoo,
+    { getDedupeKey: productTemplateKey }
+  );
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text, filter: filterRef.current }),
     400
