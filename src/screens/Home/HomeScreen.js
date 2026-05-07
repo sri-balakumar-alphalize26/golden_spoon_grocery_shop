@@ -79,8 +79,15 @@ const SECTIONS = [
 ];
 
 const padItems = (items) => {
-  if (items.length % 2 === 0) return items;
-  return [...items, { id: `blank-${items[0]?.id || 'x'}`, empty: true }];
+  // Pad to a multiple of 3 so each row fills out the 3-column grid.
+  const remainder = items.length % 3;
+  if (remainder === 0) return items;
+  const padCount = 3 - remainder;
+  const padded = [...items];
+  for (let i = 0; i < padCount; i++) {
+    padded.push({ id: `blank-${items[0]?.id || 'x'}-${i}`, empty: true });
+  }
+  return padded;
 };
 
 const HomeScreen = ({ navigation }) => {
@@ -166,10 +173,10 @@ const HomeScreen = ({ navigation }) => {
         <View style={[styles.iconWrapper, { backgroundColor: item.bg }]}>
           {isImageAsset
             ? <Image source={item.icon} style={styles.cardIcon} resizeMode="contain" />
-            : <MaterialIcons name={item.icon} size={32} color={item.accent} />}
+            : <MaterialIcons name={item.icon} size={24} color={item.accent} />}
         </View>
         <View style={styles.cardTextContainer}>
-          <Text numberOfLines={2} style={styles.cardTitle}>{item.title}</Text>
+          <Text numberOfLines={2} ellipsizeMode="tail" style={styles.cardTitle}>{item.title}</Text>
         </View>
       </TouchableOpacity>
     );
@@ -209,13 +216,13 @@ return (
         {/* Date & Time pill */}
         <View style={styles.greetingContainer}>
           <MaterialIcons name="calendar-today" size={18} color={COLORS.primaryThemeColor} />
-          <Text style={styles.dateText}>
+          <Text style={styles.dateText} numberOfLines={1}>
             {currentTime.toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
           </Text>
           <View style={styles.timeBadge}>
             <MaterialIcons name="access-time" size={14} color="#fff" />
-            <Text style={styles.timeText}>
-              {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+            <Text style={styles.timeText} numberOfLines={1}>
+              {currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
             </Text>
           </View>
         </View>
@@ -260,8 +267,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   logoImage: {
-    width: 260,
-    height: 96,
+    width: 420,
+    height: 156,
   },
 
   greetingContainer: {
@@ -292,6 +299,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     gap: 4,
+    flexShrink: 0,
   },
   timeText: {
     fontSize: 12,
@@ -376,14 +384,14 @@ const styles = StyleSheet.create({
   },
   sectionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 0 },
   card: {
-    width: '47%',
+    width: '30.5%',
     alignItems: 'center',
-    margin: '1.5%',
-    borderRadius: 16,
+    margin: '1.25%',
+    borderRadius: 14,
     backgroundColor: '#fff',
-    paddingVertical: 16,
-    paddingHorizontal: 6,
-    minHeight: 130,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    minHeight: 100,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.04)',
     ...Platform.select({
@@ -393,29 +401,29 @@ const styles = StyleSheet.create({
   },
   cardInvisible: { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0, borderWidth: 0 },
   iconWrapper: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 2,
   },
   cardIcon: {
-    width: 40,
-    height: 40,
+    width: 28,
+    height: 28,
   },
   cardTextContainer: {
+    alignSelf: 'stretch',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 10,
+    paddingTop: 6,
     paddingHorizontal: 2,
   },
   cardTitle: {
-    fontSize: 11.5,
+    fontSize: 10.5,
     textAlign: 'center',
     color: COLORS.primaryThemeColor,
     fontFamily: FONT_FAMILY.urbanistBold,
-    lineHeight: 15,
   },
   footer: {
     textAlign: 'center',

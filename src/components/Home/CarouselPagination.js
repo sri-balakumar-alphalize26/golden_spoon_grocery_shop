@@ -1,19 +1,45 @@
-import React, { useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { View, StyleSheet, Dimensions, Image } from 'react-native'
 import Carousel, { Pagination } from 'react-native-snap-carousel'
+import { useFocusEffect } from '@react-navigation/native'
+import { fetchAppBannersOdoo } from '@api/services/generalApi'
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window')
 
+// Bundled fallback so the carousel never renders empty — used while the
+// Odoo `app.banner` fetch is in flight, when the module isn't installed,
+// or when the admin hasn't uploaded any banners yet.
+const FALLBACK_BANNERS = [
+  { id: 'fallback-1', source: require('@assets/images/Home/Banner/Banner1.png') },
+  { id: 'fallback-2', source: require('@assets/images/Home/Banner/Banner2.png') },
+]
+
 const CarouselPagination = () => {
   const [activeSlide, setActiveSlide] = useState(0)
+  const [data, setData] = useState(FALLBACK_BANNERS)
 
-  const data = [
-    { image: require('@assets/images/Home/Banner/slideshow1.png') },
-    { image: require('@assets/images/Home/Banner/slideshow2.png') },
-    { image: require('@assets/images/Home/Banner/slideshow3.png') },
-    { image: require('@assets/images/Home/Banner/slideshow4.png') },
-    { image: require('@assets/images/Home/Banner/slideshow5.png') },
-  ]
+  // Refetch every time the Home screen comes into focus so adding /
+  // editing / deleting a banner in Odoo Web shows up next time the
+  // cashier taps back to Home — no app restart needed.
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true
+      ;(async () => {
+        const remote = await fetchAppBannersOdoo()
+        if (!alive) return
+        if (Array.isArray(remote) && remote.length > 0) {
+          setData(remote.map((b) => ({
+            id: `remote-${b.id}`,
+            source: { uri: `data:image/jpeg;base64,${b.image}` },
+          })))
+        } else {
+          // Module gone / no rows → fall back to bundled banners.
+          setData(FALLBACK_BANNERS)
+        }
+      })()
+      return () => { alive = false }
+    }, [])
+  )
 
   return (
     <View style={styles.container}>
@@ -22,7 +48,7 @@ const CarouselPagination = () => {
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Image
-              source={item.image}
+              source={item.source}
               style={styles.image}
             />
           </View>
@@ -55,8 +81,8 @@ export default CarouselPagination
 
 const styles = StyleSheet.create({
   container: {
-    marginTop: 6,
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 0,
   },
 
   carouselContent: {
@@ -64,10 +90,10 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    height: screenHeight * 0.28,
+    height: screenHeight * 0.14,
     borderRadius: 16,
     overflow: 'hidden',
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
     elevation: 3,
     shadowColor: '#000',
     shadowOffset: {
@@ -81,7 +107,7 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
-    resizeMode: 'contain',
+    resizeMode: 'cover',
   },
 
   pagination: {

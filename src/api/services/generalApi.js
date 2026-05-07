@@ -4604,6 +4604,50 @@ export const fetchCompanyCurrency = async () => {
   }
 };
 
+// Fetch active home-screen banners from the custom `app.banner` Odoo
+// module ([odoo modules/app_banner/]). Returns:
+//   [{ id, name, sequence, image }]  — image is raw base64, no `data:` prefix
+// Returns [] on any failure (module not installed, no rows, network) so
+// the carousel can fall back to bundled images without breaking.
+export const fetchAppBannersOdoo = async () => {
+  try {
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.banner',
+        method: 'search_read',
+        args: [[['active', '=', true]]],
+        kwargs: {
+          fields: ['id', 'name', 'sequence', 'image'],
+          order: 'sequence asc, id asc',
+        },
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    if (response.data?.error) {
+      const msg = response.data.error?.data?.message || response.data.error?.message || '';
+      // Module not installed → just log + return empty so the caller falls back.
+      console.warn('[FETCH BANNERS] Odoo error:', msg);
+      return [];
+    }
+    const rows = (response.data.result || [])
+      .filter((r) => !!r.image)
+      .map((r) => ({
+        id: r.id,
+        name: r.name || '',
+        sequence: r.sequence ?? 0,
+        image: r.image,
+      }));
+    console.log(`[FETCH BANNERS] ${rows.length} active banners`);
+    return rows;
+  } catch (error) {
+    console.warn('fetchAppBannersOdoo error:', error?.message || error);
+    return [];
+  }
+};
+
 // ─── hr.expense helpers ─────────────────────────────────────────────────────
 
 // Resolve the logged-in res.users to its hr.employee id. Returns null if the
