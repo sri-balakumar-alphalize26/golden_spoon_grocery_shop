@@ -1,0 +1,231 @@
+/* POS Total Discount Button Styles */
+
+.pos-total-discount-topbar {
+    position: relative;
+}
+
+/* Main discount button */
+.total-discount-main-btn {
+    background: linear-gradient(135deg, #6f42c1 0%, #0d6efd 100%) !important;
+    color: white !important;
+    border: none !important;
+
+    &.total-discount-active {
+        background: linear-gradient(135deg, #0d6efd 0%, #0dcaf0 100%) !important;
+    }
+}
+
+.total-discount-menu-btn {
+    background: linear-gradient(135deg, #6f42c1 0%, #0d6efd 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-left: 1px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Popup overlay */
+.total-discount-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: totalDiscFadeIn 0.2s ease;
+}
+
+/* Popup dialog */
+.total-discount-dialog {
+    background: white;
+    border-radius: 20px;
+    padding: 25px;
+    min-width: 320px;
+    max-width: 420px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: totalDiscPopIn 0.25s ease;
+    /* Override Bootstrap .modal-dialog pointer-events: none */
+    pointer-events: auto !important;
+
+    * {
+        pointer-events: auto;
+    }
+}
+
+.td-dialog-wide {
+    min-width: 380px;
+    max-width: 460px;
+}
+
+/* Popup title */
+.total-discount-title {
+    font-size: 22px;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 20px;
+    color: #333;
+}
+
+/* ==================== RADIO BUTTONS ==================== */
+
+.td-radio-section {
+    border: 1px solid #e9ecef;
+    border-radius: 12px;
+    padding: 12px;
+    background: #f8f9fa;
+}
+
+.td-radio-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6c757d;
+    margin-bottom: 8px;
+}
+
+.td-radio-group {
+    display: flex;
+    gap: 8px;
+}
+
+.td-radio-btn {
+    flex: 1;
+    padding: 10px 12px;
+    border: 2px solid #dee2e6;
+    border-radius: 10px;
+    background: white;
+    color: #495057;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s ease;
+
+    &:hover {
+        border-color: #6f42c1;
+        color: #6f42c1;
+    }
+
+    &.active {
+        background: #6f42c1;
+        border-color: #6f42c1;
+        color: white;
+    }
+}
+
+/* ==================== AMOUNT INPUT ==================== */
+
+.td-amount-section {
+    margin-bottom: 5px;
+}
+
+.td-amount-input {
+    border: 3px solid #6f42c1 !important;
+    border-radius: 12px !important;
+    font-size: 24px !important;
+
+    &:focus {
+        box-shadow: 0 0 0 0.2rem rgba(111, 66, 193, 0.25) !important;
+    }
+}
+
+/* ==================== PERCENTAGE GRID ==================== */
+
+.total-discount-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 15px;
+}
+
+.total-discount-variant-btn {
+    padding: 20px;
+    background: #f8f9fa;
+    color: #333;
+    border: 3px solid #e0e0e0;
+    border-radius: 12px;
+    font-weight: 700;
+    font-size: 22px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover,
+    &.active {
+        background: #6f42c1;
+        color: white;
+        border-color: #6f42c1;
+    }
+
+    &.delete-mode:hover {
+        background: #dc3545;
+        color: white;
+        border-color: #dc3545;
+    }
+}
+
+/* ==================== NOTIFICATION ==================== */
+
+.total-discount-notification {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 25px 40px;
+    border-radius: 15px;
+    font-size: 20px;
+    font-weight: 700;
+    z-index: 999999;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    animation: totalDiscNotifPop 0.3s ease;
+    pointer-events: none;
+
+    &-success {
+        background: #6f42c1;
+        color: white;
+    }
+    &-warning {
+        background: #ffc107;
+        color: #333;
+    }
+    &-info {
+        background: #0dcaf0;
+        color: white;
+    }
+    &-error {
+        background: #dc3545;
+        color: white;
+    }
+}
+
+/* ==================== ANIMATIONS ==================== */
+
+@keyframes totalDiscFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes totalDiscPopIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes totalDiscNotifPop {
+    0% {
+        transform: translate(-50%, -50%) scale(0);
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.1);
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+    }
+}

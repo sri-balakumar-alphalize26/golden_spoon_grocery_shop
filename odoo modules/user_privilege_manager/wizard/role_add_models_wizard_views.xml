@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_role_add_models_wizard_form" model="ir.ui.view">
+        <field name="name">role.add.models.wizard.form</field>
+        <field name="model">role.add.models.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Add Models to Group">
+                <group>
+                    <field name="role_id" invisible="1"/>
+                </group>
+                <group string="Default Permissions for Added Models">
+                    <group>
+                        <field name="perm_read" widget="boolean_toggle"/>
+                        <field name="perm_create" widget="boolean_toggle"/>
+                        <field name="perm_write" widget="boolean_toggle"/>
+                    </group>
+                    <group>
+                        <field name="perm_cancel" widget="boolean_toggle"/>
+                        <field name="perm_unlink" widget="boolean_toggle"/>
+                    </group>
+                </group>
+                <separator string="Select Models"/>
+                <p class="text-muted">Type to search, then click "Search more..." to open the selection dialog with checkboxes.</p>
+                <group>
+                    <field name="model_ids" widget="many2many_tags" nolabel="1"
+                           options="{'no_create': True, 'no_quick_create': True}"
+                           domain="[('transient', '=', False)]"
+                           placeholder="Search models..."/>
+                </group>
+                <footer>
+                    <button name="action_add_models" string="Add Models"
+                            type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+</odoo>

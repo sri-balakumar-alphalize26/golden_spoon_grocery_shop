@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Module category (for app recognition in Settings) -->
+    <record id="module_category_privilege_manager" model="ir.module.category">
+        <field name="name">User Privilege Manager</field>
+        <field name="description">Manage user-level CRUD privileges per model</field>
+        <field name="sequence">100</field>
+    </record>
+
+    <!-- Odoo 19: res.groups.privilege replaces category_id on res.groups -->
+    <record id="privilege_privilege_manager" model="res.groups.privilege">
+        <field name="name">User Privilege Manager</field>
+        <field name="sequence">10</field>
+        <field name="category_id" ref="module_category_privilege_manager"/>
+    </record>
+
+    <!-- User group: can view their own privileges -->
+    <record id="group_privilege_user" model="res.groups">
+        <field name="name">Privilege User</field>
+        <field name="privilege_id" ref="privilege_privilege_manager"/>
+        <field name="comment">Can view their own privilege settings.</field>
+    </record>
+
+    <!-- Manager group: full control over all privileges -->
+    <record id="group_privilege_manager" model="res.groups">
+        <field name="name">Privilege Manager</field>
+        <field name="privilege_id" ref="privilege_privilege_manager"/>
+        <field name="implied_ids" eval="[(4, ref('group_privilege_user'))]"/>
+        <field name="user_ids" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+        <field name="comment">Can create, edit, and delete privilege records for all users. Bypasses all privilege restrictions.</field>
+    </record>
+
+    <!-- Multi-company rules -->
+    <record id="rule_privilege_role_company" model="ir.rule">
+        <field name="name">Privilege Group: multi-company</field>
+        <field name="model_id" ref="model_privilege_role"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+    </record>
+
+    <!-- Group privilege lines are always visible if the parent group is accessible.
+         No separate company rule needed — the group-level rule already filters access. -->
+
+</odoo>

@@ -98,13 +98,29 @@ const OrderDetailScreen = ({ navigation, route }) => {
     }));
     const partner = Array.isArray(order.partner_id) ? order.partner_id : null;
     const customer = partner ? { name: partner[1] } : null;
+    // Raw subtotal = sum of (price_unit × qty) across every line,
+    // BEFORE any per-line discount %. amount_total is the discounted
+    // figure that Odoo persisted, so the difference is the rolled-up
+    // total discount the cashier applied (whether it came from this
+    // app's total-discount UI as a flat % on every line or from any
+    // mix of per-line discounts entered elsewhere).
+    const rawSubtotal = lines.reduce(
+      (s, l) => s + (Number(l.price_unit || l.price || 0) * Number(l.qty || l.quantity || 1)),
+      0,
+    );
+    const amountTotal = Number(order.amount_total || 0);
+    const amountTax = Number(order.amount_tax || 0);
+    const rolledDiscount = Math.max(
+      0,
+      Math.round((rawSubtotal - (amountTotal - amountTax)) * 1000) / 1000,
+    );
     return {
       items,
-      subtotal: Number(order.amount_total || 0) - Number(order.amount_tax || 0),
-      tax: Number(order.amount_tax || 0),
+      subtotal: rawSubtotal,
+      tax: amountTax,
       service: 0,
-      total: Number(order.amount_total || 0),
-      discount: 0,
+      total: amountTotal,
+      discount: rolledDiscount,
       orderId: order.id,
       orderName: order.name || '',
       paidAmount: Number(order.amount_paid || 0),

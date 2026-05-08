@@ -70,6 +70,7 @@ import { SupplierPaymentCreation, SupplierPaymentScreen } from "@screens/Home/Op
 const POSReceiptScreen = CreateInvoicePreview;
 import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymentGateway';
 import { UsersScreen, UserDetailsScreen } from '@screens/Users';
+import { BannersScreen, BannerDetailsScreen } from '@screens/AppBanners';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { StockScreen, StockDetailScreen } from '@screens/Stock';
 import { ExpensesScreen, ExpenseFormScreen, ExpenseDetailScreen } from '@screens/Expenses';
@@ -713,6 +714,17 @@ const StackNavigator = () => {
       <Stack.Screen
         name="UserDetails"
         component={UserDetailsScreen}
+        options={{ headerShown: false }}
+      />
+      {/* App Banners */}
+      <Stack.Screen
+        name="BannersScreen"
+        component={BannersScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="BannerDetails"
+        component={BannerDetailsScreen}
         options={{ headerShown: false }}
       />
       {/* Orders */}

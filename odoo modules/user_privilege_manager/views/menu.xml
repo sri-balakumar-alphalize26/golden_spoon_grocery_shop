@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Top-level menu -->
+    <menuitem id="menu_privilege_root"
+              name="Privilege Manager"
+              web_icon="user_privilege_manager,static/description/icon.png"
+              groups="user_privilege_manager.group_privilege_manager"
+              sequence="300"/>
+
+    <!-- Main: Dashboard -->
+    <menuitem id="menu_privilege_dashboard"
+              name="Dashboard"
+              parent="menu_privilege_root"
+              action="action_privilege_dashboard"
+              sequence="5"/>
+
+    <!-- Configuration submenu -->
+    <menuitem id="menu_privilege_config"
+              name="Configuration"
+              parent="menu_privilege_root"
+              sequence="10"/>
+
+    <menuitem id="menu_privilege_users_list"
+              name="Users"
+              parent="menu_privilege_config"
+              action="action_privilege_users"
+              sequence="3"/>
+
+    <menuitem id="menu_privilege_role_list"
+              name="Groups"
+              parent="menu_privilege_config"
+              action="action_privilege_role"
+              sequence="5"/>
+
+    <menuitem id="menu_module_privilege_list"
+              name="Module Privileges"
+              parent="menu_privilege_config"
+              action="action_module_privilege"
+              sequence="10"/>
+
+    <menuitem id="menu_menu_privilege_list"
+              name="Hide Menu Button"
+              parent="menu_privilege_config"
+              action="action_menu_privilege"
+              sequence="20"/>
+
+    <menuitem id="menu_module_visibility_list"
+              name="Hide Module Button"
+              parent="menu_privilege_config"
+              action="action_module_visibility"
+              sequence="25"/>
+
+    <!-- Technical (debug mode only) -->
+    <menuitem id="menu_privilege_technical"
+              name="Technical"
+              parent="menu_privilege_root"
+              groups="base.group_no_one"
+              sequence="90"/>
+
+    <menuitem id="menu_privilege_list"
+              name="User Privileges (Detail)"
+              parent="menu_privilege_technical"
+              action="action_user_privilege"
+              sequence="10"/>
+
+</odoo>

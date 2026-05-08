@@ -1,0 +1,981 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="user_privilege_manager.PrivilegeDashboard">
+        <div class="o_action" style="background:#eef1f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100%;overflow:hidden;">
+        <style>
+            .priv-layout{display:flex;height:100%;overflow:hidden;}
+            .priv-user-item{padding:10px 16px;cursor:pointer;transition:all 0.15s;border-left:3px solid transparent;}
+            .priv-user-item:hover{background:#f0f4ff;}
+            .priv-user-item.active{background:#e8edfb;border-left-color:#714b67;}
+            .priv-avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;color:#fff;flex-shrink:0;}
+            .priv-group-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:16px;color:#fff;flex-shrink:0;}
+            .priv-card{background:#fff;border-radius:10px;border:1px solid #e0e4ea;margin-bottom:14px;overflow:hidden;transition:box-shadow 0.2s;}
+            .priv-card:hover{box-shadow:0 2px 12px rgba(0,0,0,0.06);}
+            .priv-card-header{padding:12px 18px;display:flex;align-items:center;cursor:pointer;}
+            .priv-card-title{font-weight:600;font-size:14px;color:#1e293b;}
+            .priv-badge{background:#e8edfb;color:#4338ca;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:500;}
+            .priv-badge-red{background:#fee2e2;color:#dc2626;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:500;}
+            .priv-badge-green{background:#dcfce7;color:#16a34a;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:500;}
+            .priv-badge-count{background:#714b67;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:500;min-width:24px;text-align:center;}
+            .priv-toggle{display:inline-flex;align-items:center;gap:6px;padding:4px 0;cursor:pointer;user-select:none;font-size:13px;}
+            .priv-toggle-icon{font-size:20px;transition:color 0.15s;}
+            .priv-toggle-on{color:#16a34a;}
+            .priv-toggle-off{color:#cbd5e1;}
+            .priv-toggle-label-on{font-weight:500;color:#1e293b;}
+            .priv-toggle-label-off{font-weight:500;color:#94a3b8;}
+            .priv-btn{font-size:11px;padding:3px 10px;border-radius:6px;border:1px solid #6b7280;color:#6b7280;background:transparent;cursor:pointer;font-weight:500;transition:all 0.15s;}
+            .priv-btn:hover{background:#6b7280;color:#fff;}
+            .priv-btn-green{border-color:#16a34a;color:#16a34a;}
+            .priv-btn-green:hover{background:#16a34a;color:#fff;}
+            .priv-btn-red{border-color:#ef4444;color:#ef4444;}
+            .priv-btn-red:hover{background:#ef4444;color:#fff;}
+            .priv-btn-purple{border-color:#714b67;color:#714b67;}
+            .priv-btn-purple:hover{background:#714b67;color:#fff;}
+            .priv-master-row{padding:10px 18px;display:flex;gap:24px;background:#f8f9fc;border-top:1px solid #e0e4ea;border-bottom:1px solid #e0e4ea;}
+            .priv-table-row{display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid #f1f3f5;font-size:13px;}
+            .priv-table-row:last-child{border-bottom:none;}
+            .priv-table-row:hover{background:#fafbfd;}
+            .priv-table-header{display:flex;align-items:center;padding:8px 18px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e0e4ea;background:#f8f9fc;}
+            .priv-model-name{flex:1;min-width:0;}
+            .priv-perm-col{width:70px;text-align:center;flex-shrink:0;}
+            .priv-vis-col{width:90px;text-align:center;flex-shrink:0;}
+            .priv-dropdown{position:absolute;left:0;top:100%;margin-top:6px;width:360px;background:#fff;border-radius:10px;border:1px solid #e0e4ea;box-shadow:0 8px 30px rgba(0,0,0,0.12);z-index:9999;overflow:hidden;}
+            .priv-dropdown-item{padding:9px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;transition:background 0.1s;border-bottom:1px solid #f1f3f5;}
+            .priv-dropdown-item:hover{background:#f0f4ff;}
+            .priv-dropdown-item:last-child{border-bottom:none;}
+            .priv-add-btn{padding:7px 14px;border-radius:8px;border:none;background:#714b67;color:#fff;font-size:12px;font-weight:500;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:5px;}
+            .priv-add-btn:hover{background:#5a3a52;}
+            .priv-add-btn-sm{padding:5px 10px;border-radius:6px;border:1px solid #714b67;background:transparent;color:#714b67;font-size:11px;font-weight:500;cursor:pointer;transition:all 0.15s;}
+            .priv-add-btn-sm:hover{background:#714b67;color:#fff;}
+            .priv-update-btn{padding:7px 16px;border-radius:8px;border:none;background:#16a34a;color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(22,163,74,0.3);}
+            .priv-update-btn:hover{background:#15803d;box-shadow:0 4px 12px rgba(22,163,74,0.4);}
+            .priv-update-btn:disabled{background:#d1d5db;color:#9ca3af;cursor:default;box-shadow:none;opacity:0.6;}
+            .priv-discard-btn{padding:7px 14px;border-radius:8px;border:1px solid #e0e4ea;background:#fff;color:#6b7280;font-size:12px;font-weight:500;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:5px;}
+            .priv-discard-btn:hover{background:#f1f5f9;border-color:#94a3b8;}
+            .priv-fullperm-btn{padding:7px 14px;border-radius:8px;border:none;background:#714b67;color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:5px;}
+            .priv-fullperm-btn:hover{background:#5a3a52;}
+            .priv-fullperm-btn:disabled{background:#d1d5db;color:#9ca3af;cursor:default;opacity:0.6;}
+            .priv-reset-btn{padding:7px 14px;border-radius:8px;border:1px solid #dc2626;background:transparent;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:5px;}
+            .priv-reset-btn:hover{background:#dc2626;color:#fff;}
+            .priv-reset-btn:disabled{border-color:#d1d5db;color:#d1d5db;cursor:default;background:transparent;opacity:0.6;}
+            .priv-stat-card{text-align:center;padding:4px 12px;border-radius:8px;background:#f8f9fc;border:1px solid #e0e4ea;min-width:60px;}
+            .priv-stat-num{font-size:18px;font-weight:700;line-height:1.2;}
+            .priv-stat-label{font-size:9px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;}
+            @keyframes priv-pulse{0%,100%{box-shadow:0 2px 8px rgba(22,163,74,0.3);}50%{box-shadow:0 2px 16px rgba(22,163,74,0.6);}}
+            .priv-update-pulse{animation:priv-pulse 2s ease-in-out infinite;}
+            .priv-search-input{border:1px solid #e0e4ea;border-radius:8px;padding:8px 12px;font-size:13px;width:100%;outline:none;transition:border-color 0.15s;}
+            .priv-search-input:focus{border-color:#714b67;box-shadow:0 0 0 3px rgba(113,75,103,0.1);}
+            .priv-tab{flex:1;padding:10px 0;text-align:center;font-weight:600;font-size:13px;cursor:pointer;transition:all 0.15s;border-bottom:2px solid transparent;color:#94a3b8;}
+            .priv-tab:hover{color:#64748b;background:#f8f9fc;}
+            .priv-tab.active{color:#714b67;border-bottom-color:#714b67;background:#fff;}
+            .priv-section-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;margin-top:16px;display:flex;align-items:center;gap:6px;}
+            .vis-row{display:flex;align-items:center;padding:8px 18px;border-bottom:1px solid #f1f3f5;font-size:13px;}
+            .vis-row:last-child{border-bottom:none;}
+            .vis-row:hover{background:#fafbfd;}
+        </style>
+
+        <div class="priv-layout">
+
+        <!-- ═══ SIDEBAR ═══ -->
+        <div style="width:280px;min-width:280px;background:#fff;border-right:1px solid #dee2e6;display:flex;flex-direction:column;height:100%;">
+            <div style="padding:14px 16px 0 16px;">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <i class="fa fa-shield" style="color:#714b67;font-size:18px;"/>
+                    <span style="font-weight:700;font-size:15px;color:#1e293b;">Privilege Manager</span>
+                </div>
+            </div>
+            <div class="d-flex" style="border-bottom:1px solid #e0e4ea;">
+                <div t-att-class="'priv-tab '+(state.activeTab==='users'?'active':'')" t-on-click="()=>this.onSwitchTab('users')">
+                    <i class="fa fa-user me-1"/>Users
+                </div>
+                <div t-att-class="'priv-tab '+(state.activeTab==='roles'?'active':'')" t-on-click="()=>this.onSwitchTab('roles')">
+                    <i class="fa fa-users me-1"/>Groups
+                </div>
+            </div>
+
+            <!-- Users list -->
+            <t t-if="state.activeTab==='users'">
+                <div style="padding:12px 16px;">
+                    <input type="text" class="priv-search-input" placeholder="Search users..." t-on-input="onSearchUser" t-att-value="state.searchUser"/>
+                </div>
+                <div style="overflow:auto;flex:1;">
+                    <t t-foreach="filteredUsers" t-as="user" t-key="user.id">
+                        <div t-att-class="'priv-user-item d-flex align-items-center gap-3 '+(state.selectedUserId===user.id?'active':'')" t-on-click="()=>this.onSelectUser(user.id)">
+                            <div class="priv-avatar" t-att-style="'background:'+(state.selectedUserId===user.id?'#714b67':'#94a3b8')">
+                                <span t-esc="user.name?user.name[0].toUpperCase():'?'"/>
+                            </div>
+                            <div style="min-width:0;">
+                                <div style="font-weight:600;font-size:13px;color:#1e293b;" class="text-truncate" t-esc="user.name"/>
+                                <div style="font-size:11px;color:#94a3b8;" class="text-truncate" t-esc="user.login"/>
+                            </div>
+                        </div>
+                    </t>
+                    <t t-if="filteredUsers.length===0">
+                        <div style="padding:40px 20px;text-align:center;color:#94a3b8;font-size:13px;">No users found</div>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Groups list -->
+            <t t-if="state.activeTab==='roles'">
+                <div style="padding:12px 16px;">
+                    <input type="text" class="priv-search-input" placeholder="#Search groups..." t-on-input="onSearchRole" t-att-value="state.searchRole"/>
+                </div>
+                <div style="overflow:auto;flex:1;">
+                    <t t-foreach="filteredRoles" t-as="role" t-key="role.id">
+                        <div t-att-class="'priv-user-item d-flex align-items-center gap-3 '+(state.selectedRoleId===role.id?'active':'')" t-on-click="()=>this.onSelectRole(role.id)">
+                            <div class="priv-group-icon" style="background:#714b67;"><i class="fa fa-users" style="font-size:14px;"/></div>
+                            <div style="min-width:0;flex:1;">
+                                <div style="font-weight:600;font-size:13px;color:#1e293b;" class="text-truncate" t-esc="role.name"/>
+                                <div style="font-size:11px;color:#94a3b8;" class="text-truncate" t-esc="role.user_names_display"/>
+                            </div>
+                            <span class="priv-badge-count" t-esc="role.user_count||0"/>
+                        </div>
+                    </t>
+                    <t t-if="filteredRoles.length===0">
+                        <div style="padding:40px 20px;text-align:center;color:#94a3b8;font-size:13px;">No groups found</div>
+                    </t>
+                </div>
+            </t>
+        </div>
+
+        <!-- ═══ MAIN CONTENT ═══ -->
+        <div style="flex:1;overflow:auto;background:#eef1f6;height:100%;">
+
+            <!-- ══ USERS TAB ══ -->
+            <t t-if="state.activeTab==='users'">
+
+                <t t-if="!state.selectedUserId">
+                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#94a3b8;">
+                        <i class="fa fa-user" style="font-size:56px;margin-bottom:16px;opacity:0.3;"/>
+                        <div style="font-size:18px;font-weight:600;color:#64748b;margin-bottom:6px;">Select a User</div>
+                        <div style="font-size:13px;">Choose a user to manage their privileges</div>
+                    </div>
+                </t>
+
+                <t t-if="state.selectedUserId">
+                    <!-- User Header -->
+                    <div style="padding:16px 28px;background:#fff;border-bottom:1px solid #e0e4ea;overflow:visible;position:relative;z-index:100;">
+                        <!-- Row 1: User info + Stats -->
+                        <div class="d-flex align-items-center justify-content-between mb-2">
+                            <div class="d-flex align-items-center gap-3">
+                                <div class="priv-avatar" style="width:44px;height:44px;font-size:18px;background:#714b67;">
+                                    <span t-esc="state.selectedUserName?state.selectedUserName[0].toUpperCase():'?'"/>
+                                </div>
+                                <div>
+                                    <div style="font-size:17px;font-weight:700;color:#1e293b;" t-esc="state.selectedUserName"/>
+                                    <div style="font-size:11px;color:#94a3b8;" t-esc="state.selectedUserLogin"/>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#714b67;" t-esc="state.userRoles.length"/>
+                                    <div class="priv-stat-label">Groups</div>
+                                </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#4338ca;" t-esc="state.modules.length"/>
+                                    <div class="priv-stat-label">Modules</div>
+                                </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#e85d00;" t-esc="state.menuPrivileges.filter(m=>!m.is_visible).length + state.specialMenuPrivileges.filter(s=>!s.is_visible).length"/>
+                                    <div class="priv-stat-label">Hidden Menus</div>
+                                </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#dc2626;" t-esc="state.moduleVisibility.filter(m=>!m.is_visible).length"/>
+                                    <div class="priv-stat-label">Hidden Apps</div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Row 2: Action buttons -->
+                        <div class="d-flex align-items-center justify-content-between" style="padding-top:8px;border-top:1px solid #f1f3f5;overflow:visible;">
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="position-relative">
+                                    <button class="priv-add-btn" t-on-click="toggleAddModule">
+                                        <i class="fa fa-plus"/><span>Add Module</span>
+                                    </button>
+                                    <t t-if="state.showAddModule">
+                                        <div class="priv-dropdown">
+                                            <div style="padding:12px;">
+                                                <input type="text" class="priv-search-input" placeholder="Search modules..." t-on-input="onModuleSearch" t-att-value="state.moduleSearch"/>
+                                            </div>
+                                            <div style="overflow:auto;max-height:300px;">
+                                                <t t-foreach="filteredModules" t-as="mod" t-key="mod.id">
+                                                    <div class="priv-dropdown-item" t-on-click="()=>this.onPickModule(mod.id)">
+                                                        <i class="fa fa-cube" style="color:#714b67;"/>
+                                                        <div style="min-width:0;">
+                                                            <div style="font-weight:500;color:#1e293b;" class="text-truncate">
+                                                                <t t-esc="mod.shortdesc||mod.name"/>
+                                                                <t t-if="mod.menu_label and mod.menu_label !== (mod.shortdesc||mod.name)">
+                                                                    <span style="color:#7c3aed;font-weight:400;"> (<t t-esc="mod.menu_label"/>)</span>
+                                                                </t>
+                                                            </div>
+                                                            <div style="font-size:11px;color:#94a3b8;" t-esc="mod.name"/>
+                                                        </div>
+                                                    </div>
+                                                </t>
+                                                <t t-if="filteredModules.length===0">
+                                                    <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No modules available</div>
+                                                </t>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </div>
+                                <t t-if="state.isAdmin">
+                                <button class="priv-fullperm-btn" t-on-click="onFullPermission" t-att-disabled="state.updating">
+                                    <span>Full Permission</span>
+                                </button>
+                                </t>
+                                <button class="priv-reset-btn" t-on-click="onResetAllPrivileges" t-att-disabled="state.updating">
+                                    <i class="fa fa-eraser"/>
+                                    <span>Reset All</span>
+                                </button>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <button t-att-class="'priv-update-btn' + (hasPendingChanges ? ' priv-update-pulse' : '')" t-on-click="onUpdatePrivileges" t-att-disabled="!hasPendingChanges or state.updating">
+                                    <span t-esc="state.updating ? 'Saving...' : 'Update'"/>
+                                </button>
+                                <button class="priv-discard-btn" t-on-click="onDiscardChanges" t-att-disabled="!hasPendingChanges or state.updating">
+                                    <i class="fa fa-undo"/>
+                                    <span>Discard</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Loading -->
+                    <t t-if="state.loading">
+                        <div style="text-align:center;padding:60px;color:#94a3b8;">
+                            <div class="spinner-border spinner-border-sm me-2"/>Loading...
+                        </div>
+                    </t>
+
+                    <div style="padding:20px 28px;" t-if="!state.loading">
+
+                        <!-- ── Group-Based Privileges ── -->
+                        <t t-if="state.userRoles.length>0">
+                            <div class="priv-section-label" style="color:#714b67;">
+                                <i class="fa fa-users"/>Group-Based Privileges
+                            </div>
+                            <t t-foreach="state.userRoles" t-as="ur" t-key="ur.id">
+                                <div class="priv-card" style="border-left:3px solid #714b67;">
+                                    <div class="priv-card-header" t-on-click="()=>this.toggleUserRoleExpand(ur.id)">
+                                        <i t-att-class="'fa me-2 '+(isUserRoleExpanded(ur.id)?'fa-chevron-down':'fa-chevron-right')" style="font-size:10px;color:#94a3b8;width:14px;"/>
+                                        <i class="fa fa-users me-2" style="color:#714b67;font-size:12px;"/>
+                                        <span class="priv-card-title me-2" t-esc="ur.name"/>
+                                        <span class="priv-badge" t-esc="(ur.lines||[]).length+' models'"/>
+                                        <span style="margin-left:8px;font-size:11px;color:#94a3b8;font-style:italic;">from group</span>
+                                    </div>
+                                    <t t-if="isUserRoleExpanded(ur.id)">
+                                        <div class="priv-table-header">
+                                            <div class="priv-model-name">Model</div>
+                                            <div class="priv-perm-col">Read</div><div class="priv-perm-col">Create</div>
+                                            <div class="priv-perm-col">Edit</div><div class="priv-perm-col">Cancel</div><div class="priv-perm-col">Delete</div>
+                                        </div>
+                                        <t t-foreach="ur.lines||[]" t-as="line" t-key="line.id">
+                                            <div class="priv-table-row">
+                                                <div class="priv-model-name">
+                                                    <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="line.model_id[1]"/>
+                                                    <div style="font-size:11px;color:#94a3b8;" t-esc="line.model_name"/>
+                                                </div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_read?'fa-check-circle':'fa-times-circle')" t-att-style="'font-size:16px;'+(line.perm_read?'color:#16a34a;':'color:#cbd5e1;')"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_create?'fa-check-circle':'fa-times-circle')" t-att-style="'font-size:16px;'+(line.perm_create?'color:#16a34a;':'color:#cbd5e1;')"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_write?'fa-check-circle':'fa-times-circle')" t-att-style="'font-size:16px;'+(line.perm_write?'color:#16a34a;':'color:#cbd5e1;')"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_cancel?'fa-check-circle':'fa-times-circle')" t-att-style="'font-size:16px;'+(line.perm_cancel?'color:#16a34a;':'color:#cbd5e1;')"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_unlink?'fa-check-circle':'fa-times-circle')" t-att-style="'font-size:16px;'+(line.perm_unlink?'color:#16a34a;':'color:#cbd5e1;')"/></div>
+                                            </div>
+                                        </t>
+                                    </t>
+                                </div>
+                            </t>
+                        </t>
+
+                        <!-- ── Module-Based Privileges ── -->
+                        <t t-if="state.modules.length>0 and state.userRoles.length>0">
+                            <div style="background:#fff7ed;border:1.5px solid #f97316;border-radius:8px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                                <div style="display:flex;align-items:center;gap:10px;">
+                                    <i class="fa fa-exclamation-triangle" style="color:#f97316;font-size:16px;"/>
+                                    <span style="font-size:13px;color:#92400e;font-weight:600;">These module-based records are overriding your group. Click <b>Clean Up</b> to remove them and let the group take effect.</span>
+                                </div>
+                                <button style="background:#f97316;color:white;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;" t-on-click="onCleanupModulePrivileges">
+                                    <i class="fa fa-trash me-1"/>Clean Up
+                                </button>
+                            </div>
+                        </t>
+                        <div class="priv-section-label" style="color:#4338ca;">
+                            <i class="fa fa-cube"/>Module-Based Privileges
+                        </div>
+                        <t t-if="state.modules.length===0">
+                            <div class="priv-card">
+                                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+                                    <i class="fa fa-cube" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
+                                    No module privileges. Click <b>+ Add Module</b> above to assign direct module-level privileges to this user.
+                                </div>
+                            </div>
+                        </t>
+                        <t t-if="state.modules.length>0">
+                            <t t-foreach="state.modules" t-as="mp" t-key="mp.id">
+                                <div class="priv-card">
+                                    <div class="d-flex align-items-center justify-content-between" style="padding:0;">
+                                        <div class="priv-card-header flex-grow-1" t-on-click="()=>this.toggleExpand(mp.id)">
+                                            <i t-att-class="'fa me-2 '+(isExpanded(mp.id)?'fa-chevron-down':'fa-chevron-right')" style="font-size:10px;color:#94a3b8;width:14px;"/>
+                                            <span class="priv-card-title me-2" t-esc="mp.module_shortdesc||mp.module_name"/>
+                                            <span class="priv-badge" t-esc="(mp.lines||[]).length+' models'"/>
+                                        </div>
+                                        <div style="display:flex;gap:6px;padding-right:14px;">
+                                            <button class="priv-btn priv-btn-green" t-on-click="()=>this.onGrantAll(mp.id)"><i class="fa fa-check me-1"/>Grant All</button>
+                                            <button class="priv-btn" t-on-click="()=>this.onRevokeAll(mp.id)">Read Only</button>
+                                            <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveModule(mp.id)"><i class="fa fa-trash-o"/></button>
+                                        </div>
+                                    </div>
+                                    <div class="priv-master-row">
+                                        <div class="priv-toggle" t-on-click="()=>this.onMasterToggle(mp.id,'master_read',mp.master_read)">
+                                            <i t-att-class="'fa priv-toggle-icon '+(mp.master_read?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')"/>
+                                            <span t-att-class="mp.master_read?'priv-toggle-label-on':'priv-toggle-label-off'">Read</span>
+                                        </div>
+                                        <div class="priv-toggle" t-on-click="()=>this.onMasterToggle(mp.id,'master_create',mp.master_create)">
+                                            <i t-att-class="'fa priv-toggle-icon '+(mp.master_create?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')"/>
+                                            <span t-att-class="mp.master_create?'priv-toggle-label-on':'priv-toggle-label-off'">Create</span>
+                                        </div>
+                                        <div class="priv-toggle" t-on-click="()=>this.onMasterToggle(mp.id,'master_write',mp.master_write)">
+                                            <i t-att-class="'fa priv-toggle-icon '+(mp.master_write?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')"/>
+                                            <span t-att-class="mp.master_write?'priv-toggle-label-on':'priv-toggle-label-off'">Edit</span>
+                                        </div>
+                                        <div class="priv-toggle" t-on-click="()=>this.onMasterToggle(mp.id,'master_cancel',mp.master_cancel)">
+                                            <i t-att-class="'fa priv-toggle-icon '+(mp.master_cancel?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')"/>
+                                            <span t-att-class="mp.master_cancel?'priv-toggle-label-on':'priv-toggle-label-off'">Cancel</span>
+                                        </div>
+                                        <div class="priv-toggle" t-on-click="()=>this.onMasterToggle(mp.id,'master_unlink',mp.master_unlink)">
+                                            <i t-att-class="'fa priv-toggle-icon '+(mp.master_unlink?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')"/>
+                                            <span t-att-class="mp.master_unlink?'priv-toggle-label-on':'priv-toggle-label-off'">Delete</span>
+                                        </div>
+                                    </div>
+                                    <t t-if="isExpanded(mp.id)">
+                                        <div class="priv-table-header">
+                                            <div class="priv-model-name">Model</div>
+                                            <div class="priv-perm-col">Read</div><div class="priv-perm-col">Create</div>
+                                            <div class="priv-perm-col">Edit</div><div class="priv-perm-col">Cancel</div><div class="priv-perm-col">Delete</div>
+                                        </div>
+                                        <t t-foreach="mp.lines||[]" t-as="line" t-key="line.id">
+                                            <div class="priv-table-row">
+                                                <div class="priv-model-name">
+                                                    <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="line.model_id[1]"/>
+                                                    <div style="font-size:11px;color:#94a3b8;" t-esc="line.model_name"/>
+                                                </div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_read?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onLineToggle(line.id,'perm_read',line.perm_read)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_create?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onLineToggle(line.id,'perm_create',line.perm_create)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_write?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onLineToggle(line.id,'perm_write',line.perm_write)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_cancel?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onLineToggle(line.id,'perm_cancel',line.perm_cancel)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_unlink?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onLineToggle(line.id,'perm_unlink',line.perm_unlink)"/></div>
+                                            </div>
+                                        </t>
+                                    </t>
+                                </div>
+                            </t>
+                        </t>
+
+                        <!-- ══════════════════════════════════════════ -->
+                        <!-- ── HIDE MENU BUTTON — User level ──       -->
+                        <!-- ══════════════════════════════════════════ -->
+                        <div class="priv-section-label" style="color:#e85d00;">
+                            <i class="fa fa-eye-slash"/>Hide Menu Button
+                            <div class="position-relative ms-auto">
+                                <button class="priv-add-btn-sm priv-add-btn" t-on-click="toggleAddMenu">
+                                    <i class="fa fa-plus me-1"/>Add Menu
+                                </button>
+                                <t t-if="state.showAddMenu">
+                                    <div class="priv-dropdown" style="left:auto;right:0;">
+                                        <div style="padding:12px;">
+                                            <input type="text" class="priv-search-input" placeholder="Search menus..." t-on-input="onMenuSearch" t-att-value="state.menuSearch"/>
+                                        </div>
+                                        <div style="overflow:auto;max-height:300px;">
+                                            <t t-foreach="filteredMenusForAdd" t-as="menu" t-key="menu.id">
+                                                <div class="priv-dropdown-item" t-on-click="()=>this.onPickMenu(menu.id)">
+                                                    <i class="fa fa-bars" style="color:#e85d00;"/>
+                                                    <div style="min-width:0;">
+                                                        <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="menu.complete_name||menu.name"/>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                            <t t-if="filteredMenusForAdd.length===0">
+                                                <div style="padding:16px;text-align:center;font-size:12px;">
+                                                    <div style="color:#64748b;font-weight:600;">No menus found</div>
+                                                    <div style="color:#94a3b8;margin-top:6px;line-height:1.6;">
+                                                        Try searching by exact name.<br/>
+                                                        Leave empty to see all menus.<br/>
+                                                        <span style="color:#7c3aed;">Tip: "Apps" menu is a root menu —<br/>try leaving the search blank and scroll.</span>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+
+                        <div class="priv-card">
+                            <t t-if="state.menuPrivileges.length===0 and state.specialMenuPrivileges.length===0">
+                                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+                                    <i class="fa fa-eye" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
+                                    No menu restrictions. Add a module above to see its menus here, or click <b>Add Menu</b> to hide a specific menu.
+                                </div>
+                            </t>
+                            <!-- Special menus (Apps, Discuss, etc.) -->
+                            <t t-if="state.specialMenuPrivileges.length>0">
+                                <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('specialMenus')">
+                                    <i t-att-class="'fa me-1 '+(isSectionCollapsed('specialMenus')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                    <i class="fa fa-star-o me-1"/>Special Menus
+                                    <span style="background:#ede9fe;color:#7c3aed;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:500;margin-left:8px;" t-esc="state.specialMenuPrivileges.length"/>
+                                </div>
+                                <t t-if="!isSectionCollapsed('specialMenus')">
+                                <div class="priv-table-header">
+                                    <div class="priv-model-name">Special Menu</div>
+                                    <div class="priv-vis-col">Visible</div>
+                                    <div style="width:50px;"/>
+                                </div>
+                                <t t-foreach="state.specialMenuPrivileges" t-as="sp" t-key="sp.id">
+                                    <div class="vis-row">
+                                        <div class="priv-model-name">
+                                            <div style="font-weight:500;color:#7c3aed;" class="text-truncate">
+                                                <i class="fa fa-star-o" style="margin-right:4px;"/>
+                                                <t t-esc="sp.menu_key.charAt(0).toUpperCase() + sp.menu_key.slice(1)"/>
+                                                <span style="font-size:11px;color:#94a3b8;margin-left:6px;">(client menu)</span>
+                                            </div>
+                                        </div>
+                                        <div class="priv-vis-col">
+                                            <div class="priv-toggle" t-on-click="()=>this.onSpecialMenuVisToggle(sp.id,sp.is_visible)" style="justify-content:center;">
+                                                <i t-att-class="'fa priv-toggle-icon '+(sp.is_visible?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:22px;"/>
+                                            </div>
+                                        </div>
+                                        <div style="width:50px;text-align:center;">
+                                            <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveSpecialMenuPriv(sp.id)"><i class="fa fa-trash-o"/></button>
+                                        </div>
+                                    </div>
+                                </t>
+                                </t>
+                            </t>
+                            <t t-if="state.menuPrivileges.length>0">
+                                <!-- Hidden menus (manually added or toggled off) — shown at top prominently -->
+                                <t t-set="hiddenMenus" t-value="state.menuPrivileges.filter(m=>!m.is_visible)"/>
+                                <t t-set="moduleMenus" t-value="state.menuPrivileges.filter(m=>m.is_visible and m.source_module_id)"/>
+                                <t t-set="manualMenus" t-value="state.menuPrivileges.filter(m=>m.is_visible and !m.source_module_id)"/>
+
+                                <!-- Hidden menus section -->
+                                <t t-if="hiddenMenus.length > 0">
+                                    <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;margin-top:4px;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('hiddenMenus')">
+                                        <i t-att-class="'fa me-1 '+(isSectionCollapsed('hiddenMenus')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                        <i class="fa fa-eye-slash me-1"/>Hidden Menus
+                                        <span class="priv-badge-red ms-2" t-esc="hiddenMenus.length"/>
+                                    </div>
+                                    <t t-if="!isSectionCollapsed('hiddenMenus')">
+                                    <div class="priv-table-header">
+                                        <div class="priv-model-name">Menu Path</div>
+                                        <div class="priv-vis-col">Visible</div>
+                                        <div style="width:50px;"/>
+                                    </div>
+                                    <t t-foreach="hiddenMenus" t-as="mp" t-key="mp.id">
+                                        <div class="vis-row" style="background:#fff5f5;border-left:3px solid #dc2626;">
+                                            <div class="priv-model-name">
+                                                <div style="font-weight:500;color:#dc2626;text-decoration:line-through;" class="text-truncate" t-esc="mp.menu_full_name||mp.menu_id[1]"/>
+                                            </div>
+                                            <div class="priv-vis-col">
+                                                <div class="priv-toggle" t-on-click="()=>this.onMenuVisToggle(mp.id,mp.is_visible)" style="justify-content:center;">
+                                                    <i class="fa priv-toggle-icon fa-toggle-off priv-toggle-off" style="font-size:22px;"/>
+                                                </div>
+                                            </div>
+                                            <div style="width:50px;text-align:center;">
+                                                <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveMenuPriv(mp.id)"><i class="fa fa-trash-o"/></button>
+                                            </div>
+                                        </div>
+                                    </t>
+                                    </t>
+                                </t>
+
+                                <!-- Module menus — grouped, with toggle to hide specific ones -->
+                                <t t-if="moduleMenus.length > 0">
+                                    <div style="font-size:11px;font-weight:700;color:#4338ca;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;margin-top:4px;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('moduleMenus')">
+                                        <i t-att-class="'fa me-1 '+(isSectionCollapsed('moduleMenus')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                        <i class="fa fa-cube me-1"/>Module Menus
+                                        <span class="priv-badge ms-2" t-esc="moduleMenus.length"/>
+                                    </div>
+                                    <t t-if="!isSectionCollapsed('moduleMenus')">
+                                    <div class="priv-table-header">
+                                        <div class="priv-model-name">Menu Path</div>
+                                        <div class="priv-vis-col">Visible</div>
+                                        <div style="width:50px;"/>
+                                    </div>
+                                    <t t-foreach="moduleMenus" t-as="mp" t-key="mp.id">
+                                        <div class="vis-row">
+                                            <div class="priv-model-name">
+                                                <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="mp.menu_full_name||mp.menu_id[1]"/>
+                                                <div style="font-size:10px;color:#94a3b8;" t-esc="mp.source_module_id ? mp.source_module_id[1] : ''"/>
+                                            </div>
+                                            <div class="priv-vis-col">
+                                                <div class="priv-toggle" t-on-click="()=>this.onMenuVisToggle(mp.id,mp.is_visible)" style="justify-content:center;">
+                                                    <i class="fa priv-toggle-icon fa-toggle-on priv-toggle-on" style="font-size:22px;"/>
+                                                </div>
+                                            </div>
+                                            <div style="width:50px;text-align:center;">
+                                                <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveMenuPriv(mp.id)"><i class="fa fa-trash-o"/></button>
+                                            </div>
+                                        </div>
+                                    </t>
+                                    </t>
+                                </t>
+
+                                <!-- Manually added visible menus -->
+                                <t t-if="manualMenus.length > 0">
+                                    <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;margin-top:4px;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('manualMenus')">
+                                        <i t-att-class="'fa me-1 '+(isSectionCollapsed('manualMenus')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                        <i class="fa fa-hand-paper-o me-1"/>Manual Menus
+                                        <span class="priv-badge-green ms-2" t-esc="manualMenus.length"/>
+                                    </div>
+                                    <t t-if="!isSectionCollapsed('manualMenus')">
+                                    <div class="priv-table-header" t-att-style="moduleMenus.length>0 ? 'margin-top:8px;' : ''">
+                                        <div class="priv-model-name">Menu Path</div>
+                                        <div class="priv-vis-col">Visible</div>
+                                        <div style="width:50px;"/>
+                                    </div>
+                                    <t t-foreach="manualMenus" t-as="mp" t-key="mp.id">
+                                        <div class="vis-row">
+                                            <div class="priv-model-name">
+                                                <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="mp.menu_full_name||mp.menu_id[1]"/>
+                                            </div>
+                                            <div class="priv-vis-col">
+                                                <div class="priv-toggle" t-on-click="()=>this.onMenuVisToggle(mp.id,mp.is_visible)" style="justify-content:center;">
+                                                    <i class="fa priv-toggle-icon fa-toggle-on priv-toggle-on" style="font-size:22px;"/>
+                                                </div>
+                                            </div>
+                                            <div style="width:50px;text-align:center;">
+                                                <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveMenuPriv(mp.id)"><i class="fa fa-trash-o"/></button>
+                                            </div>
+                                        </div>
+                                    </t>
+                                    </t>
+                                </t>
+                            </t>
+                        </div>
+
+                        <!-- ══════════════════════════════════════════ -->
+                        <!-- ── HIDE MODULE BUTTON — User level ──     -->
+                        <!-- ══════════════════════════════════════════ -->
+                        <div class="priv-section-label" style="color:#dc2626;">
+                            <i class="fa fa-th"/>Hide Module Button (App Icon)
+                            <div class="position-relative ms-auto">
+                                <button class="priv-add-btn-sm priv-add-btn" t-on-click="toggleAddModuleVis">
+                                    <i class="fa fa-plus me-1"/>Add App
+                                </button>
+                                <t t-if="state.showAddModuleVis">
+                                    <div class="priv-dropdown" style="left:auto;right:0;">
+                                        <div style="padding:12px;">
+                                            <input type="text" class="priv-search-input" placeholder="Search apps..." t-on-input="onModuleVisSearch" t-att-value="state.moduleVisSearch"/>
+                                        </div>
+                                        <div style="overflow:auto;max-height:300px;">
+                                            <t t-foreach="filteredModulesForVisAdd" t-as="mod" t-key="mod.id">
+                                                <div class="priv-dropdown-item" t-on-click="()=>this.onPickModuleVis(mod.id)">
+                                                    <i class="fa fa-th" style="color:#dc2626;"/>
+                                                    <div style="min-width:0;">
+                                                        <div style="font-weight:500;color:#1e293b;" class="text-truncate">
+                                                            <t t-esc="mod.shortdesc||mod.name"/>
+                                                            <t t-if="mod.menu_label and mod.menu_label !== (mod.shortdesc||mod.name)">
+                                                                <span style="color:#7c3aed;font-weight:400;"> (<t t-esc="mod.menu_label"/>)</span>
+                                                            </t>
+                                                        </div>
+                                                        <div style="font-size:11px;color:#94a3b8;" t-esc="mod.name"/>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                            <t t-if="filteredModulesForVisAdd.length===0">
+                                                <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No apps available</div>
+                                            </t>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+
+                        <div class="priv-card">
+                            <t t-if="state.moduleVisibility.length===0">
+                                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+                                    <i class="fa fa-th" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
+                                    All app icons visible. Click <b>Add App</b> to hide specific app icons for this user.
+                                </div>
+                            </t>
+                            <t t-if="state.moduleVisibility.length>0">
+                                <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('moduleVis')">
+                                    <i t-att-class="'fa me-1 '+(isSectionCollapsed('moduleVis')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                    <i class="fa fa-th me-1"/>App Icons
+                                    <span class="priv-badge-red ms-2" t-esc="state.moduleVisibility.length"/>
+                                </div>
+                                <t t-if="!isSectionCollapsed('moduleVis')">
+                                <div class="priv-table-header">
+                                    <div class="priv-model-name">Application</div>
+                                    <div class="priv-vis-col">App Visible</div>
+                                    <div style="width:50px;"/>
+                                </div>
+                                <t t-foreach="state.moduleVisibility" t-as="mv" t-key="mv.id">
+                                    <div class="vis-row">
+                                        <div class="priv-model-name">
+                                            <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="mv.module_shortdesc||mv.module_id[1]"/>
+                                        </div>
+                                        <div class="priv-vis-col">
+                                            <div class="priv-toggle" t-on-click="()=>this.onModuleVisToggle(mv.id,mv.is_visible)" style="justify-content:center;">
+                                                <i t-att-class="'fa priv-toggle-icon '+(mv.is_visible?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:22px;"/>
+                                            </div>
+                                        </div>
+                                        <div style="width:50px;text-align:center;">
+                                            <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveModuleVis(mv.id)"><i class="fa fa-trash-o"/></button>
+                                        </div>
+                                    </div>
+                                </t>
+                                </t>
+                            </t>
+                        </div>
+
+                    </div><!-- /padding -->
+                </t>
+            </t><!-- /users tab -->
+
+            <!-- ══ GROUPS TAB ══ -->
+            <t t-if="state.activeTab==='roles'">
+                <t t-if="!state.selectedRoleId">
+                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#94a3b8;">
+                        <i class="fa fa-users" style="font-size:56px;margin-bottom:16px;opacity:0.3;"/>
+                        <div style="font-size:18px;font-weight:600;color:#64748b;margin-bottom:6px;">Select a Group</div>
+                        <div style="font-size:13px;">Choose a group from the sidebar</div>
+                    </div>
+                </t>
+
+                <t t-if="state.selectedRoleId">
+                    <!-- Group Header -->
+                    <div style="padding:16px 28px;background:#fff;border-bottom:1px solid #e0e4ea;">
+                        <!-- Row 1: Group info + Stats -->
+                        <div class="d-flex align-items-center justify-content-between mb-2">
+                            <div class="d-flex align-items-center gap-3">
+                                <div class="priv-group-icon" style="width:44px;height:44px;font-size:18px;background:#714b67;border-radius:12px;">
+                                    <i class="fa fa-users"/>
+                                </div>
+                                <div>
+                                    <div style="font-size:17px;font-weight:700;color:#1e293b;" t-esc="state.selectedRoleName"/>
+                                    <div style="font-size:11px;color:#94a3b8;">Group Privileges</div>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#714b67;" t-esc="totalRoleModuleCount"/>
+                                    <div class="priv-stat-label">Modules</div>
+                                </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#4338ca;" t-esc="totalRoleModels"/>
+                                    <div class="priv-stat-label">Models</div>
+                                </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#e85d00;" t-esc="state.roleMenuVisibility.filter(m=>!m.is_visible).length"/>
+                                    <div class="priv-stat-label">Hidden Menus</div>
+                                </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#dc2626;" t-esc="state.roleModuleVisibility.filter(m=>!m.is_visible).length"/>
+                                    <div class="priv-stat-label">Hidden Apps</div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Row 2: Action buttons -->
+                        <div class="d-flex align-items-center justify-content-between" style="padding-top:8px;border-top:1px solid #f1f3f5;overflow:visible;">
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="position-relative">
+                                    <button class="priv-add-btn" t-on-click="toggleAddRoleModulePriv">
+                                        <i class="fa fa-plus"/><span>Add Module</span>
+                                    </button>
+                                    <t t-if="state.showAddRoleModulePriv">
+                                        <div class="priv-dropdown">
+                                            <div style="padding:12px;">
+                                                <input type="text" class="priv-search-input" placeholder="Search modules..." t-on-input="onRoleModulePrivSearch" t-att-value="state.roleModulePrivSearch"/>
+                                            </div>
+                                            <div style="overflow:auto;max-height:300px;">
+                                                <t t-foreach="filteredModulesForRolePrivAdd" t-as="mod" t-key="mod.id">
+                                                    <div class="priv-dropdown-item" t-on-click="()=>this.onPickRoleModulePriv(mod.id)">
+                                                        <i class="fa fa-cube" style="color:#714b67;"/>
+                                                        <div style="min-width:0;">
+                                                            <div style="font-weight:500;color:#1e293b;" class="text-truncate">
+                                                                <t t-esc="mod.shortdesc||mod.name"/>
+                                                                <t t-if="mod.menu_label and mod.menu_label !== (mod.shortdesc||mod.name)">
+                                                                    <span style="color:#7c3aed;font-weight:400;"> (<t t-esc="mod.menu_label"/>)</span>
+                                                                </t>
+                                                            </div>
+                                                            <div style="font-size:11px;color:#94a3b8;" t-esc="mod.name"/>
+                                                        </div>
+                                                    </div>
+                                                </t>
+                                                <t t-if="filteredModulesForRolePrivAdd.length===0">
+                                                    <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No modules available</div>
+                                                </t>
+                                            </div>
+                                        </div>
+                                    </t>
+                                </div>
+                                <button class="priv-btn priv-btn-green" t-on-click="onRoleGrantAll"><i class="fa fa-check me-1"/>Grant All</button>
+                                <button class="priv-btn" t-on-click="onRoleRevokeAll">Read Only</button>
+                                <button class="priv-reset-btn" t-on-click="onResetRolePrivileges" t-att-disabled="state.updating or (state.roleMenuVisibility.length === 0 and state.roleModuleVisibility.length === 0)">
+                                    <i class="fa fa-eraser"/>
+                                    <span>Reset All</span>
+                                </button>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <button t-att-class="'priv-update-btn' + (hasPendingChanges ? ' priv-update-pulse' : '')" t-on-click="onUpdatePrivileges" t-att-disabled="!hasPendingChanges or state.updating">
+                                    <span t-esc="state.updating ? 'Saving...' : 'Update'"/>
+                                </button>
+                                <button class="priv-discard-btn" t-on-click="onDiscardChanges" t-att-disabled="!hasPendingChanges or state.updating">
+                                    <i class="fa fa-undo"/>
+                                    <span>Discard</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <t t-if="state.roleLoading">
+                        <div style="text-align:center;padding:60px;color:#94a3b8;">
+                            <div class="spinner-border spinner-border-sm me-2"/>Loading...
+                        </div>
+                    </t>
+
+                    <div style="padding:20px 28px;" t-if="!state.roleLoading">
+
+                        <!-- Group Module-Based Privileges -->
+                        <div class="priv-section-label" style="color:#4338ca;">
+                            <i class="fa fa-cube"/>Module-Based Privileges
+                        </div>
+                        <t t-if="state.roleModulePrivileges.length===0">
+                            <div class="priv-card">
+                                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+                                    <i class="fa fa-cube" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
+                                    No module privileges. Click <b>+ Add Module</b> above to assign module-level privileges to this group.
+                                </div>
+                            </div>
+                        </t>
+                        <t t-if="state.roleModulePrivileges.length>0">
+                            <t t-foreach="state.roleModulePrivileges" t-as="rmod" t-key="rmod.module_id">
+                                <div class="priv-card">
+                                    <div class="d-flex align-items-center justify-content-between" style="padding:0;">
+                                        <div class="priv-card-header flex-grow-1" t-on-click="()=>this.toggleRoleModuleExpand(rmod.module_id)">
+                                            <i t-att-class="'fa me-2 '+(isRoleModuleExpanded(rmod.module_id)?'fa-chevron-down':'fa-chevron-right')" style="font-size:10px;color:#94a3b8;width:14px;"/>
+                                            <span class="priv-card-title me-2" t-esc="rmod.module_name"/>
+                                            <span class="priv-badge" t-esc="rmod.lines.length+' models'"/>
+                                        </div>
+                                        <div style="display:flex;gap:6px;padding-right:14px;">
+                                            <button class="priv-btn priv-btn-green" t-on-click="()=>this.onRoleModuleGrantAll(rmod.module_id)"><i class="fa fa-check me-1"/>Grant All</button>
+                                            <button class="priv-btn" t-on-click="()=>this.onRoleModuleRevokeAll(rmod.module_id)">Read Only</button>
+                                            <t t-if="rmod.module_id > 0">
+                                                <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveRoleModulePriv(rmod.module_id)"><i class="fa fa-trash-o"/></button>
+                                            </t>
+                                        </div>
+                                    </div>
+                                    <t t-if="isRoleModuleExpanded(rmod.module_id)">
+                                        <div class="priv-table-header">
+                                            <div class="priv-model-name">Model</div>
+                                            <div class="priv-perm-col">Read</div><div class="priv-perm-col">Create</div>
+                                            <div class="priv-perm-col">Edit</div><div class="priv-perm-col">Cancel</div><div class="priv-perm-col">Delete</div>
+                                        </div>
+                                        <t t-foreach="rmod.lines" t-as="line" t-key="line.id">
+                                            <div class="priv-table-row">
+                                                <div class="priv-model-name">
+                                                    <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="line.model_id[1]"/>
+                                                    <div style="font-size:11px;color:#94a3b8;" t-esc="line.model_name"/>
+                                                </div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_read?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onRoleLineToggle(line.id,'perm_read',line.perm_read)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_create?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onRoleLineToggle(line.id,'perm_create',line.perm_create)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_write?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onRoleLineToggle(line.id,'perm_write',line.perm_write)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_cancel?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onRoleLineToggle(line.id,'perm_cancel',line.perm_cancel)"/></div>
+                                                <div class="priv-perm-col"><i t-att-class="'fa '+(line.perm_unlink?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:18px;cursor:pointer;" t-on-click="()=>this.onRoleLineToggle(line.id,'perm_unlink',line.perm_unlink)"/></div>
+                                            </div>
+                                        </t>
+                                    </t>
+                                </div>
+                            </t>
+                        </t>
+
+                        <!-- ══════════════════════════════════════════ -->
+                        <!-- ── GROUP: HIDE MENU BUTTON ──             -->
+                        <!-- ══════════════════════════════════════════ -->
+                        <div class="priv-section-label" style="color:#e85d00;">
+                            <i class="fa fa-eye-slash"/>Hide Menu Button (Group)
+                            <div class="position-relative ms-auto">
+                                <button class="priv-add-btn-sm priv-add-btn" t-on-click="toggleAddRoleMenu">
+                                    <i class="fa fa-plus me-1"/>Add Menu
+                                </button>
+                                <t t-if="state.showAddRoleMenu">
+                                    <div class="priv-dropdown" style="left:auto;right:0;">
+                                        <div style="padding:12px;">
+                                            <input type="text" class="priv-search-input" placeholder="Search menus..." t-on-input="onRoleMenuSearch" t-att-value="state.roleMenuSearch"/>
+                                        </div>
+                                        <div style="overflow:auto;max-height:300px;">
+                                            <t t-foreach="filteredMenusForRoleAdd" t-as="menu" t-key="menu.id">
+                                                <div class="priv-dropdown-item" t-on-click="()=>this.onPickRoleMenu(menu.id)">
+                                                    <i class="fa fa-bars" style="color:#e85d00;"/>
+                                                    <div style="min-width:0;">
+                                                        <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="menu.complete_name||menu.name"/>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                            <t t-if="filteredMenusForRoleAdd.length===0">
+                                                <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No menus found</div>
+                                            </t>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+                        <div class="priv-card">
+                            <t t-if="state.roleMenuVisibility.length===0">
+                                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+                                    <i class="fa fa-eye" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
+                                    No menu restrictions for this group. Click <b>Add Menu</b> to hide menus for all group members.
+                                </div>
+                            </t>
+                            <t t-if="state.roleMenuVisibility.length>0">
+                                <!-- Hidden menus section (red, shown first) -->
+                                <t t-set="hiddenRoleMenus" t-value="state.roleMenuVisibility.filter(m=>!m.is_visible)"/>
+                                <t t-if="hiddenRoleMenus.length > 0">
+                                    <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('roleHiddenMenus')">
+                                        <i t-att-class="'fa me-1 '+(isSectionCollapsed('roleHiddenMenus')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                        <i class="fa fa-eye-slash me-1"/>Hidden Menus
+                                        <span class="priv-badge-red ms-2" t-esc="hiddenRoleMenus.length"/>
+                                    </div>
+                                    <t t-if="!isSectionCollapsed('roleHiddenMenus')">
+                                    <div class="priv-table-header">
+                                        <div class="priv-model-name">Menu Path</div>
+                                        <div class="priv-vis-col">Visible</div>
+                                        <div style="width:50px;"/>
+                                    </div>
+                                    <t t-foreach="hiddenRoleMenus" t-as="rm" t-key="rm.id">
+                                        <div class="vis-row">
+                                            <div class="priv-model-name">
+                                                <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="rm.menu_full_name||rm.menu_id[1]"/>
+                                            </div>
+                                            <div class="priv-vis-col">
+                                                <div class="priv-toggle" t-on-click="()=>this.onRoleMenuVisToggle(rm.id,rm.is_visible)" style="justify-content:center;">
+                                                    <i t-att-class="'fa priv-toggle-icon '+(rm.is_visible?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:22px;"/>
+                                                </div>
+                                            </div>
+                                            <div style="width:50px;text-align:center;">
+                                                <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveRoleMenu(rm.id)"><i class="fa fa-trash-o"/></button>
+                                            </div>
+                                        </div>
+                                    </t>
+                                    </t>
+                                </t>
+                                <!-- All menus section (toggle on/off) -->
+                                <div style="font-size:11px;font-weight:700;color:#e85d00;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('roleMenus')">
+                                    <i t-att-class="'fa me-1 '+(isSectionCollapsed('roleMenus')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                    <i class="fa fa-bars me-1"/>All Menus
+                                    <span class="priv-badge ms-2" t-esc="state.roleMenuVisibility.length"/>
+                                </div>
+                                <t t-if="!isSectionCollapsed('roleMenus')">
+                                <div class="priv-table-header">
+                                    <div class="priv-model-name">Menu Path</div>
+                                    <div class="priv-vis-col">Visible</div>
+                                    <div style="width:50px;"/>
+                                </div>
+                                <t t-foreach="state.roleMenuVisibility" t-as="rm" t-key="rm.id">
+                                    <div class="vis-row">
+                                        <div class="priv-model-name">
+                                            <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="rm.menu_full_name||rm.menu_id[1]"/>
+                                        </div>
+                                        <div class="priv-vis-col">
+                                            <div class="priv-toggle" t-on-click="()=>this.onRoleMenuVisToggle(rm.id,rm.is_visible)" style="justify-content:center;">
+                                                <i t-att-class="'fa priv-toggle-icon '+(rm.is_visible?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:22px;"/>
+                                            </div>
+                                        </div>
+                                        <div style="width:50px;text-align:center;">
+                                            <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveRoleMenu(rm.id)"><i class="fa fa-trash-o"/></button>
+                                        </div>
+                                    </div>
+                                </t>
+                                </t>
+                            </t>
+                        </div>
+
+                        <!-- ══════════════════════════════════════════ -->
+                        <!-- ── GROUP: HIDE MODULE BUTTON ──           -->
+                        <!-- ══════════════════════════════════════════ -->
+                        <div class="priv-section-label" style="color:#dc2626;">
+                            <i class="fa fa-th"/>Hide Module Button / App Icon (Group)
+                            <div class="position-relative ms-auto">
+                                <button class="priv-add-btn-sm priv-add-btn" t-on-click="toggleAddRoleModule">
+                                    <i class="fa fa-plus me-1"/>Add App
+                                </button>
+                                <t t-if="state.showAddRoleModule">
+                                    <div class="priv-dropdown" style="left:auto;right:0;">
+                                        <div style="padding:12px;">
+                                            <input type="text" class="priv-search-input" placeholder="Search apps..." t-on-input="onRoleModuleSearch" t-att-value="state.roleModuleSearch"/>
+                                        </div>
+                                        <div style="overflow:auto;max-height:300px;">
+                                            <t t-foreach="filteredModulesForRoleVisAdd" t-as="mod" t-key="mod.id">
+                                                <div class="priv-dropdown-item" t-on-click="()=>this.onPickRoleModule(mod.id)">
+                                                    <i class="fa fa-th" style="color:#dc2626;"/>
+                                                    <div style="min-width:0;">
+                                                        <div style="font-weight:500;color:#1e293b;" class="text-truncate">
+                                                            <t t-esc="mod.shortdesc||mod.name"/>
+                                                            <t t-if="mod.menu_label and mod.menu_label !== (mod.shortdesc||mod.name)">
+                                                                <span style="color:#7c3aed;font-weight:400;"> (<t t-esc="mod.menu_label"/>)</span>
+                                                            </t>
+                                                        </div>
+                                                        <div style="font-size:11px;color:#94a3b8;" t-esc="mod.name"/>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                            <t t-if="filteredModulesForRoleVisAdd.length===0">
+                                                <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No apps available</div>
+                                            </t>
+                                        </div>
+                                    </div>
+                                </t>
+                            </div>
+                        </div>
+                        <div class="priv-card">
+                            <t t-if="state.roleModuleVisibility.length===0">
+                                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
+                                    <i class="fa fa-th" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
+                                    All apps visible for this group. Click <b>Add App</b> to hide app icons for all group members.
+                                </div>
+                            </t>
+                            <t t-if="state.roleModuleVisibility.length>0">
+                                <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;padding:8px 0 4px 0;cursor:pointer;display:flex;align-items:center;" t-on-click="()=>this.toggleSection('roleModuleVis')">
+                                    <i t-att-class="'fa me-1 '+(isSectionCollapsed('roleModuleVis')?'fa-chevron-right':'fa-chevron-down')" style="font-size:10px;width:14px;"/>
+                                    <i class="fa fa-th me-1"/>App Icons
+                                    <span class="priv-badge-red ms-2" t-esc="state.roleModuleVisibility.length"/>
+                                </div>
+                                <t t-if="!isSectionCollapsed('roleModuleVis')">
+                                <div class="priv-table-header">
+                                    <div class="priv-model-name">Application</div>
+                                    <div class="priv-vis-col">App Visible</div>
+                                    <div style="width:50px;"/>
+                                </div>
+                                <t t-foreach="state.roleModuleVisibility" t-as="rmod" t-key="rmod.id">
+                                    <div class="vis-row">
+                                        <div class="priv-model-name">
+                                            <div style="font-weight:500;color:#1e293b;" class="text-truncate" t-esc="rmod.module_shortdesc||rmod.module_id[1]"/>
+                                        </div>
+                                        <div class="priv-vis-col">
+                                            <div class="priv-toggle" t-on-click="()=>this.onRoleModuleVisToggle(rmod.id,rmod.is_visible)" style="justify-content:center;">
+                                                <i t-att-class="'fa priv-toggle-icon '+(rmod.is_visible?'fa-toggle-on priv-toggle-on':'fa-toggle-off priv-toggle-off')" style="font-size:22px;"/>
+                                            </div>
+                                        </div>
+                                        <div style="width:50px;text-align:center;">
+                                            <button class="priv-btn priv-btn-red" t-on-click="()=>this.onRemoveRoleModule(rmod.id)"><i class="fa fa-trash-o"/></button>
+                                        </div>
+                                    </div>
+                                </t>
+                                </t>
+                            </t>
+                        </div>
+
+                    </div><!-- /padding -->
+                </t>
+            </t><!-- /groups tab -->
+
+        </div><!-- /main content -->
+        </div><!-- /priv-layout -->
+        </div>
+    </t>
+
+</templates>

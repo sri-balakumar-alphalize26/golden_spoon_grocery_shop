@@ -18,22 +18,25 @@ const CarouselPagination = () => {
   const [activeSlide, setActiveSlide] = useState(0)
   const [data, setData] = useState(FALLBACK_BANNERS)
 
-  // Refetch every time the Home screen comes into focus so adding /
-  // editing / deleting a banner in Odoo Web shows up next time the
-  // cashier taps back to Home — no app restart needed.
+  // Refetch every time the Home screen comes into focus so banners
+  // added/edited/deleted (in the in-app admin tile OR in Odoo Web)
+  // show up next time the cashier taps back to Home.
   useFocusEffect(
     useCallback(() => {
       let alive = true
       ;(async () => {
+        console.log('[AppBanner] carousel focus refresh, fetching…')
         const remote = await fetchAppBannersOdoo()
         if (!alive) return
         if (Array.isArray(remote) && remote.length > 0) {
+          console.log(`[AppBanner] carousel got ${remote.length} rows, switching from fallback`)
           setData(remote.map((b) => ({
             id: `remote-${b.id}`,
             source: { uri: `data:image/jpeg;base64,${b.image}` },
           })))
         } else {
-          // Module gone / no rows → fall back to bundled banners.
+          // No active rows / Odoo unreachable → fall back to bundled images.
+          console.log('[AppBanner] carousel got 0 rows, using bundled fallback')
           setData(FALLBACK_BANNERS)
         }
       })()

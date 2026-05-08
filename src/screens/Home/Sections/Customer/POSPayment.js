@@ -163,6 +163,19 @@ const POSPayment = ({ navigation, route }) => {
   }, [customer?.id, customer?._id]);
   const [selectedJournal, setSelectedJournal] = useState(null);
   const [paying, setPaying] = useState(false);
+
+  // Discount popup state. Two segmented toggles — Type (Total / Items)
+  // and Format (Percentage / Amount) — drive the same underlying
+  // "computedDiscountAmount" so every downstream calc reads one number.
+  // discountType is currently visual-only (both modes ship the same
+  // uniform per-line % to Odoo); the toggle is wired so a future
+  // per-item-picking flow can drop in without state changes here.
+  const [discountModalVisible, setDiscountModalVisible] = useState(false);
+  const [discountType, setDiscountType] = useState('total');          // 'total' | 'items'
+  const [discountFormat, setDiscountFormat] = useState('percentage'); // 'percentage' | 'amount'
+  const [discountPercent, setDiscountPercent] = useState(0);          // 0-100, when format='percentage'
+  const [discountAmountValue, setDiscountAmountValue] = useState(0);  // OMR, when format='amount'
+  const [customDiscountInput, setCustomDiscountInput] = useState('');
   const { clearProducts } = useProductStore();
   const [inputAmount, setInputAmount] = useState('');
 
@@ -274,9 +287,30 @@ const POSPayment = ({ navigation, route }) => {
     console.log('POSPayment params:', route?.params);
   }, []);
 
+  // Subtotal = naive sum of price × qty across cart. The `total`
+  // (after discount) is what every downstream calculation reads.
+  const subtotal = (products || []).reduce((s, p) => s + ((p.price || 0) * (p.quantity || p.qty || 0)), 0);
+  // Only apply the local discount when we're creating a fresh order.
+  // If `totalAmount` arrives from a prior screen it's already the
+  // authoritative number — don't double-apply.
+  const totalIsExternal = totalAmount !== undefined && totalAmount !== null;
+  // Resolve the discount amount from whichever format is active.
+  // Amount mode is clamped to subtotal so the cashier can't push the
+  // total negative.
+  const computedDiscountAmount = totalIsExternal
+    ? 0
+    : discountFormat === 'amount'
+      ? Math.min(subtotal, Math.round(Number(discountAmountValue || 0) * 1000) / 1000)
+      : Math.round((subtotal * discountPercent / 100) * 1000) / 1000;
+  // Effective per-line % we ship to Odoo regardless of which UI format
+  // the cashier used. Always derived from the resolved amount so % and
+  // amount paths converge.
+  const effectiveDiscountPercent = subtotal > 0
+    ? Math.round((computedDiscountAmount / subtotal) * 1000000) / 10000  // 4-decimal precision
+    : 0;
   const computeTotal = () => {
-    if (totalAmount !== undefined && totalAmount !== null) return totalAmount;
-    return (products || []).reduce((s, p) => s + ((p.price || 0) * (p.quantity || p.qty || 0)), 0);
+    if (totalIsExternal) return totalAmount;
+    return Math.max(0, subtotal - computedDiscountAmount);
   };
   const paidAmount = parseFloat(inputAmount) || 0;
   const total = computeTotal();
@@ -317,6 +351,11 @@ const POSPayment = ({ navigation, route }) => {
         qty: p.quantity,
         price: p.price,
         name: p.name || p.product_name || '',
+        // Always ship as a flat per-line percentage — Odoo's
+        // pos.order.line.discount is a percent. effectiveDiscountPercent
+        // is derived from the resolved amount, so percentage and
+        // amount input modes converge to the same payload here.
+        discount: effectiveDiscountPercent || 0,
       }));
       const partnerId = customer?.id || customer?._id || null;
       const companyId = 1;
@@ -341,7 +380,12 @@ const POSPayment = ({ navigation, route }) => {
       let invoiceInfo = null;
       if (!createdOrderId) {
         console.log('[STEP 1] No orderId passed to POSPayment. Creating a new order...');
-        const posOrderPayload = { partnerId, lines, sessionId, posConfigId: resolvedConfigId, companyId, orderName: '/' };
+        const posOrderPayload = {
+          partnerId, lines, sessionId, posConfigId: resolvedConfigId, companyId, orderName: '/',
+          // Override the helper's naïve sum so Odoo's pos.order.amount_total
+          // reflects the discount rather than the raw subtotal.
+          amount_total: total,
+        };
         console.log('[STEP 1] POS Order Payload:', posOrderPayload);
         const resp = await createPosOrderOdoo(posOrderPayload);
         console.log('[STEP 1] POS Order Response:', resp);
@@ -570,7 +614,13 @@ const POSPayment = ({ navigation, route }) => {
         customer,
         amount: paidAmount,
         totalAmount: total,
-        discount: discountAmount,
+        // Prefer the locally computed discount; fall back to the
+        // route-level value if this screen was opened mid-flow. Ship
+        // the effective percent (derived) so the receipt can label
+        // the discount line consistently regardless of format.
+        discount: computedDiscountAmount || discountAmount,
+        discountPercent: effectiveDiscountPercent,
+        subtotal,
         invoiceChecked,
         invoice: invoiceInfo,
         sessionId,
@@ -700,6 +750,20 @@ const POSPayment = ({ navigation, route }) => {
 
         <Text style={styles.totalLabel}>TOTAL</Text>
         <Text style={styles.totalValue}>{displayNum(total)}</Text>
+        {computedDiscountAmount > 0 && !totalIsExternal ? (
+          <View style={styles.totalBreakdown}>
+            <View style={styles.totalBreakdownRow}>
+              <Text style={styles.totalBreakdownLabel}>Subtotal</Text>
+              <Text style={styles.totalBreakdownValue}>{displayNum(subtotal)}</Text>
+            </View>
+            <View style={styles.totalBreakdownRow}>
+              <Text style={[styles.totalBreakdownLabel, styles.totalBreakdownDiscount]}>
+                Discount {discountFormat === 'amount' ? '(amount)' : `(${discountPercent}%)`}
+              </Text>
+              <Text style={[styles.totalBreakdownValue, styles.totalBreakdownDiscount]}>−{displayNum(computedDiscountAmount)}</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.surface}>
@@ -946,6 +1010,44 @@ const POSPayment = ({ navigation, route }) => {
 
         {/* Validate footer — solid orange, always tappable; popup if cash short */}
         <View style={styles.footer}>
+          {!totalIsExternal ? (
+            <TouchableOpacity
+              style={[styles.discountChip, computedDiscountAmount > 0 && styles.discountChipActive]}
+              onPress={() => {
+                // Pre-fill the custom-input box with whichever value
+                // matches the current format so the cashier can tweak it.
+                setCustomDiscountInput(
+                  discountFormat === 'amount'
+                    ? (discountAmountValue ? String(discountAmountValue) : '')
+                    : (discountPercent ? String(discountPercent) : ''),
+                );
+                setDiscountModalVisible(true);
+              }}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons
+                name="percent"
+                size={16}
+                color={computedDiscountAmount > 0 ? '#fff' : NAVY}
+              />
+              <Text
+                style={[
+                  styles.discountChipText,
+                  computedDiscountAmount > 0 && styles.discountChipTextActive,
+                ]}
+                numberOfLines={1}
+              >
+                {computedDiscountAmount <= 0
+                  ? 'Apply discount'
+                  : discountFormat === 'amount'
+                    ? `−${displayNum(computedDiscountAmount)} off`
+                    : `${discountPercent}% off  −${displayNum(computedDiscountAmount)}`}
+              </Text>
+              {computedDiscountAmount > 0 ? (
+                <MaterialIcons name="edit" size={14} color="#fff" />
+              ) : null}
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity
             onPress={onValidateTap}
             activeOpacity={0.85}
@@ -1236,6 +1338,181 @@ const POSPayment = ({ navigation, route }) => {
           </View>
         </View>
       </RNModal>
+
+      {/* Total-discount popup — preset percentages + custom input + remove */}
+      <Modal
+        visible={discountModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDiscountModalVisible(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setDiscountModalVisible(false)}
+          style={styles.discountOverlay}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={styles.discountCard}>
+            <View style={styles.discountHeader}>
+              <View style={styles.discountTitleRow}>
+                <MaterialIcons name="percent" size={22} color={NAVY} />
+                <Text style={styles.discountTitle}>Select Discount</Text>
+              </View>
+              <TouchableOpacity onPress={() => setDiscountModalVisible(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <MaterialIcons name="close" size={22} color={NAVY} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.discountSubtitle}>Subtotal {displayNum(subtotal)}</Text>
+
+            {/* DISCOUNT TYPE — Total / Items */}
+            <View style={styles.discountSegmentWrap}>
+              <Text style={styles.discountSegmentLabel}>DISCOUNT TYPE</Text>
+              <View style={styles.discountSegmentRow}>
+                <TouchableOpacity
+                  style={[styles.discountSegmentBtn, discountType === 'total' && styles.discountSegmentBtnActive]}
+                  onPress={() => setDiscountType('total')}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="shopping-cart" size={16} color={discountType === 'total' ? '#fff' : NAVY} />
+                  <Text style={[styles.discountSegmentText, discountType === 'total' && styles.discountSegmentTextActive]}>
+                    Total Discount
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.discountSegmentBtn, discountType === 'items' && styles.discountSegmentBtnActive]}
+                  onPress={() => setDiscountType('items')}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="format-list-bulleted" size={16} color={discountType === 'items' ? '#fff' : NAVY} />
+                  <Text style={[styles.discountSegmentText, discountType === 'items' && styles.discountSegmentTextActive]}>
+                    Items Discount
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* DISCOUNT FORMAT — Percentage / Amount */}
+            <View style={styles.discountSegmentWrap}>
+              <Text style={styles.discountSegmentLabel}>DISCOUNT FORMAT</Text>
+              <View style={styles.discountSegmentRow}>
+                <TouchableOpacity
+                  style={[styles.discountSegmentBtn, discountFormat === 'percentage' && styles.discountSegmentBtnActive]}
+                  onPress={() => {
+                    setDiscountFormat('percentage');
+                    setCustomDiscountInput('');
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="percent" size={16} color={discountFormat === 'percentage' ? '#fff' : NAVY} />
+                  <Text style={[styles.discountSegmentText, discountFormat === 'percentage' && styles.discountSegmentTextActive]}>
+                    Percentage
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.discountSegmentBtn, discountFormat === 'amount' && styles.discountSegmentBtnActive]}
+                  onPress={() => {
+                    setDiscountFormat('amount');
+                    setCustomDiscountInput('');
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <MaterialCommunityIcons name="cash" size={16} color={discountFormat === 'amount' ? '#fff' : NAVY} />
+                  <Text style={[styles.discountSegmentText, discountFormat === 'amount' && styles.discountSegmentTextActive]}>
+                    Amount
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Preset grid — values switch with format */}
+            <View style={styles.discountGrid}>
+              {(discountFormat === 'amount' ? [1, 2, 5, 10, 20] : [10, 20, 30, 40, 50]).map((val) => {
+                const active = discountFormat === 'amount'
+                  ? Number(discountAmountValue) === val
+                  : Number(discountPercent) === val;
+                return (
+                  <TouchableOpacity
+                    key={`disc-${discountFormat}-${val}`}
+                    style={[styles.discountOption, active && styles.discountOptionActive]}
+                    onPress={() => {
+                      if (discountFormat === 'amount') {
+                        setDiscountAmountValue(val);
+                        setDiscountPercent(0);
+                      } else {
+                        setDiscountPercent(val);
+                        setDiscountAmountValue(0);
+                      }
+                      setCustomDiscountInput('');
+                      setDiscountModalVisible(false);
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.discountOptionText, active && styles.discountOptionTextActive]}>
+                      {discountFormat === 'amount' ? displayNum(val) : `${val}%`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Custom input row */}
+            <View style={styles.discountCustomRow}>
+              <TextInput
+                style={styles.discountCustomInput}
+                placeholder={discountFormat === 'amount' ? 'Custom amount' : 'Custom %'}
+                placeholderTextColor="#9CA3AF"
+                keyboardType={discountFormat === 'amount' ? 'decimal-pad' : 'number-pad'}
+                value={customDiscountInput}
+                onChangeText={(t) => setCustomDiscountInput(t.replace(/[^0-9.]/g, ''))}
+                maxLength={8}
+              />
+              <TouchableOpacity
+                style={styles.discountApplyBtn}
+                onPress={() => {
+                  const raw = parseFloat(customDiscountInput) || 0;
+                  if (discountFormat === 'amount') {
+                    const val = Math.max(0, Math.round(raw * 1000) / 1000);
+                    setDiscountAmountValue(val);
+                    setDiscountPercent(0);
+                  } else {
+                    const val = Math.max(0, Math.min(100, raw));
+                    setDiscountPercent(val);
+                    setDiscountAmountValue(0);
+                  }
+                  setDiscountModalVisible(false);
+                }}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.discountApplyText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Remove — only when something is applied */}
+            {computedDiscountAmount > 0 ? (
+              <TouchableOpacity
+                style={styles.discountRemoveBtn}
+                onPress={() => {
+                  setDiscountPercent(0);
+                  setDiscountAmountValue(0);
+                  setCustomDiscountInput('');
+                  setDiscountModalVisible(false);
+                }}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons name="close" size={16} color="#DC2626" />
+                <Text style={styles.discountRemoveText}>Remove discount</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.discountCancelBtn}
+              onPress={() => setDiscountModalVisible(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.discountCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1783,5 +2060,236 @@ letterSpacing: 0.4,
     flexDirection: 'row',
     marginTop: 16,
     gap: 10,
+  },
+  // Subtotal / Discount mini-rows shown under the hero TOTAL when a
+  // discount is active. Compact, white-on-navy text against the hero.
+  totalBreakdown: {
+    marginTop: 8,
+    alignSelf: 'center',
+    minWidth: '60%',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  totalBreakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
+  totalBreakdownLabel: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  totalBreakdownValue: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  totalBreakdownDiscount: {
+    color: '#fde68a',
+  },
+  // Discount chip in the footer above the Validate button.
+  discountChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1.2,
+    borderColor: NAVY,
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    alignSelf: 'stretch',
+  },
+  discountChipActive: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
+  discountChipText: {
+    color: NAVY,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.4,
+  },
+  discountChipTextActive: {
+    color: '#fff',
+  },
+  // Discount popup — backdrop + centered card, mirrors the LogoutModal
+  // / IdProof popup pattern used elsewhere on this screen.
+  discountOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  discountCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: NAVY,
+    padding: 18,
+    width: '100%',
+    maxWidth: 420,
+  },
+  discountHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  discountTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  discountTitle: {
+    fontSize: 18,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.4,
+  },
+  discountSubtitle: {
+    fontSize: 12,
+    color: '#6b7a90',
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginBottom: 14,
+  },
+  // Segmented-control wrapper — soft grey card with the section label
+  // above and the two flex:1 buttons inside.
+  discountSegmentWrap: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+  },
+  discountSegmentLabel: {
+    fontSize: 10,
+    color: '#6b7a90',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    marginLeft: 2,
+  },
+  discountSegmentRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  discountSegmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1.2,
+    borderColor: NAVY,
+    backgroundColor: '#fff',
+  },
+  discountSegmentBtnActive: {
+    backgroundColor: NAVY,
+    borderColor: NAVY,
+  },
+  discountSegmentText: {
+    color: NAVY,
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  discountSegmentTextActive: {
+    color: '#fff',
+  },
+  discountGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+    justifyContent: 'flex-start',
+  },
+  discountOption: {
+    width: '23%',
+    paddingVertical: 14,
+    backgroundColor: '#f6f8fa',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#eef0f5',
+    alignItems: 'center',
+  },
+  discountOptionActive: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
+  discountOptionText: {
+    fontSize: 16,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  discountOptionTextActive: {
+    color: '#fff',
+  },
+  discountCustomRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  discountCustomInput: {
+    flex: 1,
+    borderWidth: 1.2,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  discountApplyBtn: {
+    backgroundColor: NAVY,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  discountApplyText: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 13,
+    letterSpacing: 0.4,
+  },
+  discountRemoveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1.2,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEE2E2',
+    marginBottom: 8,
+  },
+  discountRemoveText: {
+    color: '#DC2626',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 13,
+    letterSpacing: 0.3,
+  },
+  discountCancelBtn: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderRadius: 10,
+    backgroundColor: '#f3f4f6',
+  },
+  discountCancelText: {
+    color: '#374151',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    fontSize: 13,
   },
 });

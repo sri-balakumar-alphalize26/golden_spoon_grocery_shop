@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Add Company column to base res.users list view -->
+    <record id="view_res_users_list_privilege" model="ir.ui.view">
+        <field name="name">res.users.list.privilege</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_tree"/>
+        <field name="arch" type="xml">
+            <field name="role" position="after">
+                <field name="company_id" optional="show"/>
+            </field>
+        </field>
+    </record>
+
+    <!-- Add Privileges tab to User form -->
+    <record id="view_users_form_privilege" model="ir.ui.view">
+        <field name="name">res.users.form.privilege</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='page_security']" position="after">
+                <page string="Privileges" name="page_privileges"
+                      groups="user_privilege_manager.group_privilege_manager">
+                    <div class="oe_button_box mb-3" name="privilege_button_box">
+                        <button name="action_view_privileges"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-shield">
+                            <field name="privilege_count" widget="statinfo" string="Privileges"/>
+                        </button>
+                        <button name="action_view_module_privileges"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-cubes">
+                            <field name="module_privilege_count" widget="statinfo" string="Module Privs"/>
+                        </button>
+                        <button name="action_view_menu_privileges"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-bars">
+                            <field name="menu_privilege_count" widget="statinfo" string="Menu Privs"/>
+                        </button>
+                        <button name="action_view_roles"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-users">
+                            <field name="role_count" widget="statinfo" string="Groups"/>
+                        </button>
+                        <button name="action_view_module_visibility"
+                                type="object"
+                                class="oe_stat_button"
+                                icon="fa-th">
+                            <field name="module_visibility_count" widget="statinfo" string="App Visibility"/>
+                        </button>
+                    </div>
+                    <div class="alert alert-info" role="alert">
+                        <strong>Hide Menu Button:</strong> Use the <b>Menu Privs</b> button to hide specific menus for this user.<br/>
+                        <strong>Hide Module Button:</strong> Use the <b>App Visibility</b> button to hide entire app icons for this user.<br/>
+                        <strong>Groups:</strong> Use <b>Groups</b> to apply menu/module/model restrictions to groups of users.
+                    </div>
+                    <field name="privilege_ids" nolabel="1"
+                           context="{'default_user_id': id}">
+                        <list editable="bottom">
+                            <field name="model_id"/>
+                            <field name="model_name" optional="hide"/>
+                            <field name="perm_read" widget="boolean_toggle"/>
+                            <field name="perm_create" widget="boolean_toggle"/>
+                            <field name="perm_write" widget="boolean_toggle"/>
+                            <field name="perm_cancel" widget="boolean_toggle"/>
+                            <field name="perm_unlink" widget="boolean_toggle"/>
+                        </list>
+                    </field>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Action: Users list for Privilege Manager -->
+    <record id="action_privilege_users" model="ir.actions.act_window">
+        <field name="name">Users</field>
+        <field name="res_model">res.users</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('share', '=', False)]</field>
+        <field name="context">{'no_create': False}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create a new user
+            </p>
+            <p>
+                Manage users and their access privileges from here.
+                You can create new users, assign them to privilege groups,
+                and control their permissions.
+            </p>
+        </field>
+    </record>
+
+</odoo>

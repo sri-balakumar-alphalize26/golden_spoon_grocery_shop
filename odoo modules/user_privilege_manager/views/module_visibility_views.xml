@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==================== MODULE VISIBILITY LIST ==================== -->
+    <record id="view_module_visibility_list" model="ir.ui.view">
+        <field name="name">module.visibility.list</field>
+        <field name="model">module.visibility</field>
+        <field name="arch" type="xml">
+            <list string="Module (App) Visibility"
+                  editable="bottom"
+                  decoration-danger="not is_visible"
+                  decoration-success="is_visible">
+                <field name="user_id"/>
+                <field name="module_id"/>
+                <field name="module_shortdesc" optional="show"/>
+                <field name="module_name" optional="hide"/>
+                <field name="is_visible" widget="boolean_toggle" string="App Visible"/>
+                <field name="company_id" optional="hide" groups="base.group_multi_company"/>
+                <field name="active" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ==================== MODULE VISIBILITY FORM ==================== -->
+    <record id="view_module_visibility_form" model="ir.ui.view">
+        <field name="name">module.visibility.form</field>
+        <field name="model">module.visibility</field>
+        <field name="arch" type="xml">
+            <form string="Module (App) Visibility">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="display_name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="Target">
+                            <field name="user_id"/>
+                            <field name="module_id" options="{'no_create': True}"/>
+                            <field name="module_shortdesc" readonly="1" string="App Label"/>
+                            <field name="module_name" readonly="1"/>
+                            <field name="company_id" groups="base.group_multi_company"
+                                   options="{'no_create': True}"/>
+                            <field name="active"/>
+                        </group>
+                        <group string="Visibility Control">
+                            <div class="alert alert-info" role="alert">
+                                <strong>Hide Module Button:</strong><br/>
+                                Uncheck <b>App Visible</b> to completely hide this
+                                application's icon from the user's home menu.
+                                This also hides all menus belonging to this module
+                                unless individually overridden.
+                            </div>
+                            <field name="is_visible" widget="boolean_toggle" string="App Visible"/>
+                        </group>
+                    </group>
+                    <group string="Notes">
+                        <field name="notes" nolabel="1"
+                               placeholder="Add notes about this visibility configuration..."/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ==================== MODULE VISIBILITY SEARCH ==================== -->
+    <record id="view_module_visibility_search" model="ir.ui.view">
+        <field name="name">module.visibility.search</field>
+        <field name="model">module.visibility</field>
+        <field name="arch" type="xml">
+            <search string="Search Module Visibility">
+                <field name="user_id"/>
+                <field name="module_id"/>
+                <field name="module_name"/>
+                <separator/>
+                <filter name="filter_visible" string="Visible"
+                        domain="[('is_visible', '=', True)]"/>
+                <filter name="filter_hidden" string="Hidden (App Blocked)"
+                        domain="[('is_visible', '=', False)]"/>
+                <separator/>
+                <filter name="filter_active" string="Active"
+                        domain="[('active', '=', True)]"/>
+                <filter name="filter_archived" string="Archived"
+                        domain="[('active', '=', False)]"/>
+                <separator/>
+                <filter name="group_user" string="User"
+                        context="{'group_by': 'user_id'}"/>
+                <filter name="group_module" string="Module"
+                        context="{'group_by': 'module_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- ==================== MODULE VISIBILITY ACTION ==================== -->
+    <record id="action_module_visibility" model="ir.actions.act_window">
+        <field name="name">Module (App) Visibility</field>
+        <field name="res_model">module.visibility</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_module_visibility_search"/>
+        <field name="context">{'search_default_filter_active': 1, 'search_default_group_user': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Hide Module (App) Buttons per User
+            </p>
+            <p>
+                Add a record for a <b>User</b> and <b>Module</b>, then uncheck
+                <b>App Visible</b> to completely hide that application from the
+                user's home menu. This is the <b>Hide Module Button</b> feature.<br/><br/>
+                Use <b>Roles</b> to apply module visibility rules to multiple users at once.
+                User-level records always override role-level settings.
+            </p>
+        </field>
+    </record>
+
+    <!-- ==================== Bulk Button in Module Visibility list ==================== -->
+    <record id="view_module_visibility_list_bulk_button" model="ir.ui.view">
+        <field name="name">module.visibility.list.bulk.button</field>
+        <field name="model">module.visibility</field>
+        <field name="inherit_id" ref="view_module_visibility_list"/>
+        <field name="arch" type="xml">
+            <xpath expr="//list" position="inside">
+                <header>
+                    <button name="%(action_module_visibility_bulk_wizard)d"
+                            string="Bulk Set App Visibility" type="action"
+                            class="btn-primary" icon="fa-eye-slash"/>
+                </header>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

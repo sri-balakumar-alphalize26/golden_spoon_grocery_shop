@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==================== TREE VIEW ==================== -->
+    <record id="view_module_privilege_list" model="ir.ui.view">
+        <field name="name">module.privilege.list</field>
+        <field name="model">module.privilege</field>
+        <field name="arch" type="xml">
+            <list string="Module Privileges"
+                  decoration-danger="not master_create and not master_write and not master_unlink"
+                  decoration-success="master_create and master_write and master_unlink">
+                <field name="user_id"/>
+                <field name="module_id"/>
+                <field name="module_shortdesc" optional="hide"/>
+                <field name="master_read" widget="boolean_toggle" string="Read"/>
+                <field name="master_create" widget="boolean_toggle" string="Create"/>
+                <field name="master_write" widget="boolean_toggle" string="Edit"/>
+                <field name="master_cancel" widget="boolean_toggle" string="Cancel"/>
+                <field name="master_unlink" widget="boolean_toggle" string="Delete"/>
+                <field name="company_id" optional="hide" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ==================== FORM VIEW ==================== -->
+    <record id="view_module_privilege_form" model="ir.ui.view">
+        <field name="name">module.privilege.form</field>
+        <field name="model">module.privilege</field>
+        <field name="arch" type="xml">
+            <form string="Module Privilege">
+                <header>
+                    <button name="action_load_models"
+                            string="Load Models"
+                            type="object"
+                            class="btn-primary"
+                            icon="fa-refresh"/>
+                    <button name="action_apply_privileges"
+                            string="Apply to System"
+                            type="object"
+                            class="btn-success"
+                            icon="fa-check"
+                            confirm="This will apply all privilege settings. Continue?"/>
+                    <button name="action_sync_all_to_user_privileges"
+                            string="Sync All Users"
+                            type="object"
+                            class="btn-info"
+                            icon="fa-refresh"
+                            confirm="Re-sync ALL module privileges for ALL users. Continue?"/>
+                    <button name="action_grant_all_lines"
+                            string="Grant All"
+                            type="object"
+                            class="btn-success"
+                            icon="fa-check-circle"/>
+                    <button name="action_revoke_all_lines"
+                            string="Revoke All"
+                            type="object"
+                            class="btn-warning"
+                            icon="fa-ban"/>
+                    <button name="action_readonly_all_lines"
+                            string="Read Only"
+                            type="object"
+                            class="btn-secondary"
+                            icon="fa-eye"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="display_name" readonly="1"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Configuration">
+                            <field name="user_id"/>
+                            <field name="module_id"/>
+                            <field name="module_name" readonly="1"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active"/>
+                        </group>
+                        <!-- MODULE-LEVEL MASTER CONTROLS -->
+                        <group string="Full Module Control">
+                            <field name="master_read" widget="boolean_toggle" string="Read"/>
+                            <field name="master_create" widget="boolean_toggle" string="Create"/>
+                            <field name="master_write" widget="boolean_toggle" string="Edit"/>
+                            <field name="master_cancel" widget="boolean_toggle" string="Cancel"/>
+                            <field name="master_unlink" widget="boolean_toggle" string="Delete"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Fine-tune by Model" name="page_lines">
+                            <div class="alert alert-info" role="alert">
+                                <strong>Tip:</strong> Use the toggles above for full module control.
+                                Use the list below only if you need different permissions per model.
+                                Click <b>"Apply to System"</b> after making changes.
+                            </div>
+                            <field name="line_ids" nolabel="1">
+                                <list editable="bottom">
+                                    <field name="model_id"/>
+                                    <field name="model_name" optional="show"/>
+                                    <field name="perm_read" widget="boolean_toggle"/>
+                                    <field name="perm_create" widget="boolean_toggle"/>
+                                    <field name="perm_write" widget="boolean_toggle"/>
+                                    <field name="perm_cancel" widget="boolean_toggle"/>
+                                    <field name="perm_unlink" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Notes" name="page_notes">
+                            <field name="notes" nolabel="1"
+                                   placeholder="Add notes about this module privilege configuration..."/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ==================== SEARCH VIEW ==================== -->
+    <record id="view_module_privilege_search" model="ir.ui.view">
+        <field name="name">module.privilege.search</field>
+        <field name="model">module.privilege</field>
+        <field name="arch" type="xml">
+            <search string="Search Module Privileges">
+                <field name="user_id"/>
+                <field name="module_id"/>
+                <field name="module_name"/>
+                <separator/>
+                <filter name="filter_active" string="Active" domain="[('active', '=', True)]"/>
+                <filter name="filter_archived" string="Archived" domain="[('active', '=', False)]"/>
+                <separator/>
+                <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+                <filter name="group_module" string="Module" context="{'group_by': 'module_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- ==================== ACTION ==================== -->
+    <record id="action_module_privilege" model="ir.actions.act_window">
+        <field name="name">Module Privileges</field>
+        <field name="res_model">module.privilege</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_module_privilege_search"/>
+        <field name="context">{'search_default_filter_active': 1, 'search_default_group_user': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Set up module-level privileges for users
+            </p>
+            <p>
+                Select a <b>User</b> and <b>Module</b>, then use the
+                master toggles to control Read/Create/Edit/Cancel/Delete
+                for the entire module at once.
+                <br/>
+                Fine-tune individual models if needed.
+            </p>
+        </field>
+    </record>
+
+</odoo>

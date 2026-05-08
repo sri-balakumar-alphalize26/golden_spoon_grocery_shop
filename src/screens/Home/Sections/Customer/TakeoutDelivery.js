@@ -36,6 +36,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [addAmount, setAddAmount] = useState('');
   const [customer, setCustomer] = useState(null);
   const [lineDiscountInput, setLineDiscountInput] = useState('');
+  // Mockup-style discount popup toggles. Default to "items" (the
+  // cashier opened it by tapping a specific row) + "amount" (matches
+  // the existing OMR-input UX). Reset to defaults on every close so
+  // the next open starts clean.
+  const [lineDiscountType, setLineDiscountType] = useState('items');       // 'total' | 'items'
+  const [lineDiscountFormat, setLineDiscountFormat] = useState('amount');  // 'percentage' | 'amount'
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
@@ -749,59 +755,169 @@ const TakeoutDelivery = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
-      {/* Per-line Discount Modal */}
-      <Modal visible={lineDiscountModalVisible} animationType="slide" transparent={true} onRequestClose={() => { setLineDiscountModalVisible(false); setSelectedLine(null); setLineDiscountInput(''); }}>
+      {/* Per-line / Total Discount modal — mockup design with Type +
+          Format segments and a format-aware preset grid. Items mode
+          targets the row the cashier tapped; Total mode distributes
+          the chosen amount across every cart line proportionally. */}
+      <Modal visible={lineDiscountModalVisible} animationType="slide" transparent={true} onRequestClose={() => {
+        setLineDiscountModalVisible(false); setSelectedLine(null); setLineDiscountInput('');
+        setLineDiscountType('items'); setLineDiscountFormat('amount');
+      }}>
         <View style={{ flex:1, backgroundColor:'rgba(0,0,0,0.4)', justifyContent:'center', alignItems:'center' }}>
-          <View style={{ width: '85%', backgroundColor:'#fff', borderRadius:12, padding:20, alignItems:'center' }}>
-            <Text style={{ fontWeight:'800', fontSize:18, marginBottom:10 }}>Apply Discount</Text>
-            <Text style={{ fontSize:16, fontWeight:'700', marginBottom:4 }}>{selectedLine ? selectedLine.name : ''}</Text>
-            <Text style={{ fontSize:14, color:'#666', marginBottom:16 }}>
-              Price: {displayNum((selectedLine?.unit || 0) * (selectedLine?.qty || 1))}
-            </Text>
+          <View style={{ width:'88%', maxWidth:440, backgroundColor:'#fff', borderRadius:14, padding:18 }}>
 
-            <Text style={{ color:'#333', marginBottom:8, fontWeight:'600' }}>Enter discount amount</Text>
-            <View style={{ flexDirection:'row', alignItems:'center', borderWidth:2, borderColor:'#f59e0b', borderRadius:10, paddingHorizontal:12, paddingVertical:8, marginBottom:16, width:'100%' }}>
-              <TextInput
-                placeholder="0.00"
-                value={lineDiscountInput}
-                onChangeText={(t) => setLineDiscountInput(t.replace(/[^0-9.]/g, ''))}
-                keyboardType="numeric"
-                style={{ flex:1, fontSize:24, textAlign:'center', padding:8, fontWeight:'700' }}
-              />
-              <Text style={{ fontSize:18, fontWeight:'800', color:'#666', marginLeft:8 }}>OMR</Text>
+            {/* Title row */}
+            <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+              <View style={{ flexDirection:'row', alignItems:'center', gap:6 }}>
+                <MaterialIcons name="percent" size={20} color="#1a1a2e" />
+                <Text style={{ fontWeight:'800', fontSize:18, color:'#1a1a2e', marginLeft:6 }}>Select Discount</Text>
+              </View>
+              <TouchableOpacity onPress={() => {
+                setLineDiscountModalVisible(false); setSelectedLine(null); setLineDiscountInput('');
+                setLineDiscountType('items'); setLineDiscountFormat('amount');
+              }} hitSlop={{ top:8, bottom:8, left:8, right:8 }}>
+                <MaterialIcons name="close" size={22} color="#1a1a2e" />
+              </TouchableOpacity>
+            </View>
+            {/* Subtitle adapts to mode */}
+            {lineDiscountType === 'items' ? (
+              <>
+                <Text style={{ fontSize:15, fontWeight:'700', color:'#1a1a2e' }}>
+                  {selectedLine ? selectedLine.name : ''}
+                </Text>
+                <Text style={{ fontSize:12, color:'#6b7a90', marginBottom:14 }}>
+                  Price: {displayNum((selectedLine?.unit || 0) * (selectedLine?.qty || 1))}
+                </Text>
+              </>
+            ) : (
+              <Text style={{ fontSize:13, color:'#6b7a90', marginBottom:14 }}>
+                Cart subtotal: {displayNum(items.reduce((s, it) => s + ((it.price || it.unit || 0) * (it.qty || 1)), 0))}
+              </Text>
+            )}
+
+            {/* DISCOUNT TYPE segmented control */}
+            <View style={{ backgroundColor:'#F3F4F6', borderRadius:10, padding:10, marginBottom:10 }}>
+              <Text style={{ fontSize:10, color:'#6b7a90', fontWeight:'800', letterSpacing:0.8, marginBottom:8 }}>DISCOUNT TYPE</Text>
+              <View style={{ flexDirection:'row', gap:6 }}>
+                <TouchableOpacity
+                  onPress={() => { setLineDiscountType('total'); setLineDiscountInput(''); }}
+                  style={{ flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:4, paddingVertical:10, borderRadius:8, borderWidth:1.2, borderColor:'#1a1a2e', backgroundColor: lineDiscountType === 'total' ? '#1a1a2e' : '#fff' }}>
+                  <MaterialIcons name="shopping-cart" size={15} color={lineDiscountType === 'total' ? '#fff' : '#1a1a2e'} />
+                  <Text style={{ color: lineDiscountType === 'total' ? '#fff' : '#1a1a2e', fontWeight:'700', fontSize:12 }}>Total Discount</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { setLineDiscountType('items'); setLineDiscountInput(''); }}
+                  style={{ flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:4, paddingVertical:10, borderRadius:8, borderWidth:1.2, borderColor:'#1a1a2e', backgroundColor: lineDiscountType === 'items' ? '#1a1a2e' : '#fff' }}>
+                  <MaterialIcons name="format-list-bulleted" size={15} color={lineDiscountType === 'items' ? '#fff' : '#1a1a2e'} />
+                  <Text style={{ color: lineDiscountType === 'items' ? '#fff' : '#1a1a2e', fontWeight:'700', fontSize:12 }}>Items Discount</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <View style={{ flexDirection:'row', width:'100%', justifyContent:'space-between' }}>
+            {/* DISCOUNT FORMAT segmented control */}
+            <View style={{ backgroundColor:'#F3F4F6', borderRadius:10, padding:10, marginBottom:12 }}>
+              <Text style={{ fontSize:10, color:'#6b7a90', fontWeight:'800', letterSpacing:0.8, marginBottom:8 }}>DISCOUNT FORMAT</Text>
+              <View style={{ flexDirection:'row', gap:6 }}>
+                <TouchableOpacity
+                  onPress={() => { setLineDiscountFormat('percentage'); setLineDiscountInput(''); }}
+                  style={{ flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:4, paddingVertical:10, borderRadius:8, borderWidth:1.2, borderColor:'#1a1a2e', backgroundColor: lineDiscountFormat === 'percentage' ? '#1a1a2e' : '#fff' }}>
+                  <MaterialIcons name="percent" size={15} color={lineDiscountFormat === 'percentage' ? '#fff' : '#1a1a2e'} />
+                  <Text style={{ color: lineDiscountFormat === 'percentage' ? '#fff' : '#1a1a2e', fontWeight:'700', fontSize:12 }}>Percentage</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { setLineDiscountFormat('amount'); setLineDiscountInput(''); }}
+                  style={{ flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:4, paddingVertical:10, borderRadius:8, borderWidth:1.2, borderColor:'#1a1a2e', backgroundColor: lineDiscountFormat === 'amount' ? '#1a1a2e' : '#fff' }}>
+                  <MaterialCommunityIcons name="cash" size={15} color={lineDiscountFormat === 'amount' ? '#fff' : '#1a1a2e'} />
+                  <Text style={{ color: lineDiscountFormat === 'amount' ? '#fff' : '#1a1a2e', fontWeight:'700', fontSize:12 }}>Amount</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Preset grid — values switch with format */}
+            <View style={{ flexDirection:'row', flexWrap:'wrap', gap:8, marginBottom:12 }}>
+              {(lineDiscountFormat === 'amount' ? [1, 2, 5, 10, 20] : [10, 20, 30, 40, 50]).map((val) => {
+                const active = String(lineDiscountInput) === String(val);
+                return (
+                  <TouchableOpacity
+                    key={`linedisc-${lineDiscountFormat}-${val}`}
+                    onPress={() => setLineDiscountInput(String(val))}
+                    style={{ width:'30%', paddingVertical:14, alignItems:'center', borderRadius:12, borderWidth:1.5, borderColor: active ? '#16a34a' : '#eef0f5', backgroundColor: active ? '#16a34a' : '#f6f8fa' }}>
+                    <Text style={{ fontWeight:'800', fontSize:16, color: active ? '#fff' : '#1a1a2e' }}>
+                      {lineDiscountFormat === 'amount' ? displayNum(val) : `${val}%`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Custom input row */}
+            <View style={{ flexDirection:'row', alignItems:'center', borderWidth:2, borderColor:'#f59e0b', borderRadius:10, paddingHorizontal:12, paddingVertical:6, marginBottom:14 }}>
+              <TextInput
+                placeholder={lineDiscountFormat === 'amount' ? '0.00' : '0'}
+                value={lineDiscountInput}
+                onChangeText={(t) => setLineDiscountInput(t.replace(/[^0-9.]/g, ''))}
+                keyboardType={lineDiscountFormat === 'amount' ? 'decimal-pad' : 'number-pad'}
+                style={{ flex:1, fontSize:22, textAlign:'center', padding:6, fontWeight:'700' }}
+              />
+              <Text style={{ fontSize:16, fontWeight:'800', color:'#666', marginLeft:8 }}>
+                {lineDiscountFormat === 'amount' ? 'OMR' : '%'}
+              </Text>
+            </View>
+
+            {/* Footer Clear / Cancel / Apply */}
+            <View style={{ flexDirection:'row', width:'100%', gap:8 }}>
               <TouchableOpacity
                 onPress={() => {
-                  if (selectedLine) {
-                    setProductDiscount(selectedLine.rawItem?.id ?? selectedLine.id, 0);
+                  if (lineDiscountType === 'items') {
+                    if (selectedLine) setProductDiscount(selectedLine.rawItem?.id ?? selectedLine.id, 0);
+                  } else {
+                    cart.forEach((it) => {
+                      const id = it.rawItem?.id ?? it.id;
+                      setProductDiscount(id, 0);
+                    });
                   }
-                  setLineDiscountModalVisible(false);
-                  setSelectedLine(null);
-                  setLineDiscountInput('');
+                  setLineDiscountModalVisible(false); setSelectedLine(null); setLineDiscountInput('');
+                  setLineDiscountType('items'); setLineDiscountFormat('amount');
                 }}
-                style={{ flex:1, paddingVertical:12, borderRadius:8, backgroundColor:'#fee2e2', marginRight:8, alignItems:'center' }}>
+                style={{ flex:1, paddingVertical:12, borderRadius:8, backgroundColor:'#fee2e2', alignItems:'center' }}>
                 <Text style={{ color:'#dc2626', fontWeight:'700' }}>Clear</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => {
-                  setLineDiscountModalVisible(false);
-                  setSelectedLine(null);
-                  setLineDiscountInput('');
+                  setLineDiscountModalVisible(false); setSelectedLine(null); setLineDiscountInput('');
+                  setLineDiscountType('items'); setLineDiscountFormat('amount');
                 }}
-                style={{ flex:1, paddingVertical:12, borderRadius:8, backgroundColor:'#f3f4f6', marginRight:8, alignItems:'center' }}>
+                style={{ flex:1, paddingVertical:12, borderRadius:8, backgroundColor:'#f3f4f6', alignItems:'center' }}>
                 <Text style={{ color:'#6b7280', fontWeight:'700' }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => {
-                  if (!selectedLine) return;
-                  const discountAmt = parseFloat(lineDiscountInput) || 0;
-                  // Pass fixed discount amount directly (stays same when qty changes)
-                  setProductDiscount(selectedLine.rawItem?.id ?? selectedLine.id, discountAmt);
-                  setLineDiscountModalVisible(false);
-                  setSelectedLine(null);
-                  setLineDiscountInput('');
+                  const raw = parseFloat(lineDiscountInput) || 0;
+                  if (lineDiscountType === 'items') {
+                    if (!selectedLine) return;
+                    const lineGross = (selectedLine.unit || 0) * (selectedLine.qty || 1);
+                    const amount = lineDiscountFormat === 'percentage'
+                      ? Math.round((lineGross * raw / 100) * 1000) / 1000
+                      : Math.round(raw * 1000) / 1000;
+                    setProductDiscount(selectedLine.rawItem?.id ?? selectedLine.id, amount);
+                  } else {
+                    // Total mode: distribute the discount proportionally
+                    // across every cart line by its gross.
+                    const grossList = cart.map((it) => (Number(it.price || it.price_unit || 0) * Number(it.quantity || it.qty || 1)));
+                    const totalGross = grossList.reduce((s, v) => s + v, 0);
+                    if (totalGross > 0) {
+                      const targetTotalDiscount = lineDiscountFormat === 'percentage'
+                        ? Math.round((totalGross * raw / 100) * 1000) / 1000
+                        : Math.min(totalGross, Math.round(raw * 1000) / 1000);
+                      cart.forEach((it, idx) => {
+                        const share = (grossList[idx] / totalGross) * targetTotalDiscount;
+                        const id = it.rawItem?.id ?? it.id;
+                        setProductDiscount(id, Math.round(share * 1000) / 1000);
+                      });
+                    }
+                  }
+                  setLineDiscountModalVisible(false); setSelectedLine(null); setLineDiscountInput('');
+                  setLineDiscountType('items'); setLineDiscountFormat('amount');
                 }}
                 style={{ flex:1, paddingVertical:12, borderRadius:8, backgroundColor:'#f59e0b', alignItems:'center' }}>
                 <Text style={{ color:'#fff', fontWeight:'700' }}>Apply</Text>

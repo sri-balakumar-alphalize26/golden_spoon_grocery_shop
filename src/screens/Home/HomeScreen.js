@@ -74,6 +74,7 @@ const SECTIONS = [
     accent: '#9C27B0',
     items: [
       { id: 'users', title: 'Users', screen: 'UsersScreen', icon: require('@assets/images/Home/section/userbtnhome.png'), bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
+      { id: 'banners', title: 'App Banners', screen: 'BannersScreen', icon: 'image', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
     ],
   },
 ];

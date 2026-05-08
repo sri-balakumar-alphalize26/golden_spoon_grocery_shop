@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==================== TREE VIEW ==================== -->
+    <record id="view_user_privilege_list" model="ir.ui.view">
+        <field name="name">user.privilege.list</field>
+        <field name="model">user.privilege</field>
+        <field name="arch" type="xml">
+            <list string="User Privileges" editable="bottom"
+                  decoration-danger="not perm_create and not perm_write and not perm_unlink"
+                  decoration-warning="not perm_create or not perm_write or not perm_unlink"
+                  decoration-success="perm_create and perm_write and perm_unlink">
+                <field name="user_id"/>
+                <field name="source_module_id" optional="show" string="Module"/>
+                <field name="model_id"/>
+                <field name="model_name" optional="hide"/>
+                <field name="perm_read" widget="boolean_toggle"/>
+                <field name="perm_create" widget="boolean_toggle"/>
+                <field name="perm_write" widget="boolean_toggle"/>
+                <field name="perm_cancel" widget="boolean_toggle"/>
+                <field name="perm_unlink" widget="boolean_toggle"/>
+                <field name="company_id" optional="hide" groups="base.group_multi_company"/>
+                <field name="active" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ==================== FORM VIEW ==================== -->
+    <record id="view_user_privilege_form" model="ir.ui.view">
+        <field name="name">user.privilege.form</field>
+        <field name="model">user.privilege</field>
+        <field name="arch" type="xml">
+            <form string="User Privilege">
+                <header>
+                    <button name="action_grant_all"
+                            string="Grant All"
+                            type="object"
+                            class="btn-success"
+                            icon="fa-check-circle"/>
+                    <button name="action_revoke_all"
+                            string="Revoke All"
+                            type="object"
+                            class="btn-warning"
+                            icon="fa-ban"/>
+                    <button name="action_readonly"
+                            string="Read Only"
+                            type="object"
+                            class="btn-secondary"
+                            icon="fa-eye"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="display_name" readonly="1"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Target">
+                            <field name="user_id"/>
+                            <field name="source_module_id" string="Module"/>
+                            <field name="model_id"/>
+                            <field name="model_name" readonly="1"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group string="Permissions">
+                            <field name="perm_read" widget="boolean_toggle"/>
+                            <field name="perm_create" widget="boolean_toggle"/>
+                            <field name="perm_write" widget="boolean_toggle"/>
+                            <field name="perm_cancel" widget="boolean_toggle"/>
+                            <field name="perm_unlink" widget="boolean_toggle"/>
+                        </group>
+                    </group>
+                    <group string="Notes">
+                        <field name="notes" nolabel="1" placeholder="Add notes about this privilege configuration..."/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ==================== SEARCH VIEW ==================== -->
+    <record id="view_user_privilege_search" model="ir.ui.view">
+        <field name="name">user.privilege.search</field>
+        <field name="model">user.privilege</field>
+        <field name="arch" type="xml">
+            <search string="Search Privileges">
+                <field name="user_id"/>
+                <field name="source_module_id" string="Module"/>
+                <field name="model_id"/>
+                <field name="model_name"/>
+                <separator/>
+                <filter name="filter_active" string="Active" domain="[('active', '=', True)]"/>
+                <filter name="filter_archived" string="Archived" domain="[('active', '=', False)]"/>
+                <separator/>
+                <filter name="filter_no_create" string="No Create" domain="[('perm_create', '=', False)]"/>
+                <filter name="filter_no_write" string="No Edit" domain="[('perm_write', '=', False)]"/>
+                <filter name="filter_no_delete" string="No Delete" domain="[('perm_unlink', '=', False)]"/>
+                <filter name="filter_no_cancel" string="No Cancel" domain="[('perm_cancel', '=', False)]"/>
+                <filter name="filter_readonly" string="Read Only"
+                        domain="[('perm_create', '=', False), ('perm_write', '=', False), ('perm_unlink', '=', False)]"/>
+                <separator/>
+                <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+                <filter name="group_module" string="Module" context="{'group_by': 'source_module_id'}"/>
+                <filter name="group_model" string="Model" context="{'group_by': 'model_id'}"/>
+                <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- ==================== KANBAN VIEW ==================== -->
+    <record id="view_user_privilege_kanban" model="ir.ui.view">
+        <field name="name">user.privilege.kanban</field>
+        <field name="model">user.privilege</field>
+        <field name="arch" type="xml">
+            <kanban class="o_kanban_mobile">
+                <templates>
+                    <t t-name="card" class="flex-row">
+                        <div class="mb-2">
+                            <strong><field name="user_id"/></strong>
+                        </div>
+                        <div class="mb-1 text-muted small">
+                            <field name="source_module_name"/>
+                        </div>
+                        <div class="mb-2 text-muted">
+                            <field name="model_id"/>
+                        </div>
+                        <div class="d-flex flex-wrap gap-1">
+                            <span t-if="record.perm_read.raw_value" class="badge text-bg-success">Read</span>
+                            <span t-if="!record.perm_read.raw_value" class="badge text-bg-danger">Read</span>
+                            <span t-if="record.perm_create.raw_value" class="badge text-bg-success">Create</span>
+                            <span t-if="!record.perm_create.raw_value" class="badge text-bg-danger">Create</span>
+                            <span t-if="record.perm_write.raw_value" class="badge text-bg-success">Edit</span>
+                            <span t-if="!record.perm_write.raw_value" class="badge text-bg-danger">Edit</span>
+                            <span t-if="record.perm_cancel.raw_value" class="badge text-bg-success">Cancel</span>
+                            <span t-if="!record.perm_cancel.raw_value" class="badge text-bg-danger">Cancel</span>
+                            <span t-if="record.perm_unlink.raw_value" class="badge text-bg-success">Delete</span>
+                            <span t-if="!record.perm_unlink.raw_value" class="badge text-bg-danger">Delete</span>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <!-- ==================== PIVOT VIEW ==================== -->
+    <record id="view_user_privilege_pivot" model="ir.ui.view">
+        <field name="name">user.privilege.pivot</field>
+        <field name="model">user.privilege</field>
+        <field name="arch" type="xml">
+            <pivot string="Privileges Overview">
+                <field name="user_id" type="row"/>
+                <field name="source_module_id" type="row"/>
+                <field name="model_id" type="col"/>
+            </pivot>
+        </field>
+    </record>
+
+    <!-- ==================== ACTION (default group by User then Module) ==================== -->
+    <record id="action_user_privilege" model="ir.actions.act_window">
+        <field name="name">User Privileges</field>
+        <field name="res_model">user.privilege</field>
+        <field name="view_mode">list,form,kanban,pivot</field>
+        <field name="search_view_id" ref="view_user_privilege_search"/>
+        <field name="context">{'search_default_filter_active': 1, 'search_default_group_user': 1, 'search_default_group_module': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Define user-level access privileges
+            </p>
+            <p>
+                Create privilege records to control which users can Create, Read,
+                Edit, Cancel, or Delete records on specific models.
+                <br/>
+                Use <b>Module Privileges</b> to manage permissions by module with master toggles.
+            </p>
+        </field>
+    </record>
+
+    <!-- ==================== Create Button (header in list view) ==================== -->
+    <record id="view_user_privilege_list_bulk_button" model="ir.ui.view">
+        <field name="name">user.privilege.list.bulk.button</field>
+        <field name="model">user.privilege</field>
+        <field name="inherit_id" ref="view_user_privilege_list"/>
+        <field name="arch" type="xml">
+            <xpath expr="//list" position="inside">
+                <header>
+                    <button name="%(action_privilege_bulk_create_wizard)d"
+                            string="Create Privileges" type="action"
+                            class="btn-primary" icon="fa-plus"/>
+                </header>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

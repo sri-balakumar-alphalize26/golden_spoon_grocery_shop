@@ -48,6 +48,10 @@ export const getOdooDb = () => runtimeDb || "";
       if (db) runtimeDb = db;
     }
   } catch (_) {}
+  // Show the resolved URL + DB once at cold start so failures like
+  // `ERR_NETWORK` can be matched against the host the app is hitting
+  // (catches the bare-IP-becomes-https typo at login).
+  console.log(`[ODOO] runtime baseUrl=${runtimeBaseUrl || '<empty>'}, db=${runtimeDb || '<empty>'}`);
 })();
 
 // Back-compat exports — these used to be hardcoded constants. Now they resolve

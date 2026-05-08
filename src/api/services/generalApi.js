@@ -4604,13 +4604,33 @@ export const fetchCompanyCurrency = async () => {
   }
 };
 
-// Fetch active home-screen banners from the custom `app.banner` Odoo
-// module ([odoo modules/app_banner/]). Returns:
+// Banner CRUD against the custom `app.banner` Odoo module
+// ([odoo modules/app_banner/]). Mirrors the working pattern from
+// employee_attendance — every call has an explicit axios timeout so a
+// stalled Odoo doesn't leave the Save button hanging on "Saving…"
+// forever, and every call logs entry / success / error with an
+// [AppBanner] prefix so failures are obvious in the JS console.
+
+// One central error log so all six helpers surface failures the same way.
+// `url` is appended so a Network Error explicitly tells you which host the
+// request was aimed at — catches the http/https typo at login.
+const _logBannerError = (op, error) => {
+  const odooMsg = error?.response?.data?.error?.data?.message;
+  const status = error?.response?.status;
+  console.error(`[AppBanner] ${op} error:`, error?.message || error, {
+    code: error?.code,
+    status,
+    odooMessage: odooMsg,
+    url: getOdooUrl(),
+  });
+};
+
+// Fetch active home-screen banners. Returns:
 //   [{ id, name, sequence, image }]  — image is raw base64, no `data:` prefix
-// Returns [] on any failure (module not installed, no rows, network) so
-// the carousel can fall back to bundled images without breaking.
+// Returns [] on any failure so the carousel falls back to bundled images.
 export const fetchAppBannersOdoo = async () => {
   try {
+    console.log(`[AppBanner] fetchActive calling, url=${getOdooUrl()}`);
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -4624,12 +4644,13 @@ export const fetchAppBannersOdoo = async () => {
         },
       },
       id: new Date().getTime(),
-    }, { headers: { 'Content-Type': 'application/json' } });
-
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
     if (response.data?.error) {
       const msg = response.data.error?.data?.message || response.data.error?.message || '';
-      // Module not installed → just log + return empty so the caller falls back.
-      console.warn('[FETCH BANNERS] Odoo error:', msg);
+      console.warn('[AppBanner] fetchActive Odoo error:', msg);
       return [];
     }
     const rows = (response.data.result || [])
@@ -4640,11 +4661,194 @@ export const fetchAppBannersOdoo = async () => {
         sequence: r.sequence ?? 0,
         image: r.image,
       }));
-    console.log(`[FETCH BANNERS] ${rows.length} active banners`);
+    console.log(`[AppBanner] fetchActive ok, rows=${rows.length}`);
     return rows;
   } catch (error) {
-    console.warn('fetchAppBannersOdoo error:', error?.message || error);
+    _logBannerError('fetchActive', error);
     return [];
+  }
+};
+
+// Admin-list variant: returns ALL banners (active + inactive), keeps
+// rows even if no image yet so the admin can see and fix incomplete
+// records.
+export const fetchAllAppBannersOdoo = async () => {
+  try {
+    console.log(`[AppBanner] fetchAll calling, url=${getOdooUrl()}`);
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.banner',
+        method: 'search_read',
+        args: [[]],
+        kwargs: {
+          fields: ['id', 'name', 'sequence', 'active', 'image'],
+          order: 'sequence asc, id asc',
+        },
+      },
+      id: new Date().getTime(),
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+    if (response.data?.error) {
+      console.warn('[AppBanner] fetchAll Odoo error:', response.data.error);
+      return { error: response.data.error };
+    }
+    const rows = (response.data.result || []).map((r) => ({
+      id: r.id,
+      name: r.name || '',
+      sequence: r.sequence ?? 0,
+      active: !!r.active,
+      image: r.image || null,
+    }));
+    console.log(`[AppBanner] fetchAll ok, rows=${rows.length}`);
+    return rows;
+  } catch (error) {
+    _logBannerError('fetchAll', error);
+    throw error;
+  }
+};
+
+// Single-banner read used by the edit form to pre-fill state.
+export const fetchAppBannerByIdOdoo = async (bannerId) => {
+  try {
+    const id = Number(bannerId);
+    if (!id) return null;
+    console.log(`[AppBanner] readById calling, id=${id}, url=${getOdooUrl()}`);
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.banner',
+        method: 'read',
+        args: [[id]],
+        kwargs: { fields: ['id', 'name', 'sequence', 'active', 'image', 'image_filename'] },
+      },
+      id: new Date().getTime(),
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+    if (response.data?.error) {
+      console.error('[AppBanner] readById Odoo error:', response.data.error);
+      return null;
+    }
+    const row = response.data.result?.[0] || null;
+    const imgKB = row?.image ? Math.round(row.image.length / 1024) : 0;
+    console.log(`[AppBanner] readById ok, id=${id}, imageKB=${imgKB}, name="${row?.name || ''}"`);
+    return row;
+  } catch (error) {
+    _logBannerError('readById', error);
+    return null;
+  }
+};
+
+export const createAppBannerOdoo = async ({
+  name = '', image, image_filename = '', sequence = 10, active = true,
+} = {}) => {
+  try {
+    if (!image) throw new Error('image is required');
+    const vals = { name, image, image_filename, sequence: Number(sequence) || 10, active: !!active };
+    const imgKB = Math.round(image.length / 1024);
+    console.log(`[AppBanner] create calling, name="${name}", sequence=${vals.sequence}, active=${vals.active}, imageKB=${imgKB}, url=${getOdooUrl()}`);
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.banner',
+        method: 'create',
+        args: [vals],
+        kwargs: {},
+      },
+      id: new Date().getTime(),
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+    if (response.data?.error) {
+      console.error('[AppBanner] create Odoo error:', response.data.error);
+      return { error: response.data.error };
+    }
+    console.log(`[AppBanner] create ok, id=${response.data.result}`);
+    return { result: response.data.result };
+  } catch (error) {
+    _logBannerError('create', error);
+    return { error };
+  }
+};
+
+// Partial update — only the fields actually passed get written, so the
+// admin can toggle `active` without re-uploading the image.
+export const updateAppBannerOdoo = async ({
+  id, name, image, image_filename, sequence, active,
+} = {}) => {
+  try {
+    const bid = Number(id);
+    if (!bid) throw new Error('id is required');
+    const vals = {};
+    if (name !== undefined) vals.name = name;
+    if (image !== undefined) vals.image = image;
+    if (image_filename !== undefined) vals.image_filename = image_filename;
+    if (sequence !== undefined) vals.sequence = Number(sequence) || 10;
+    if (active !== undefined) vals.active = !!active;
+    const imgKB = image !== undefined ? Math.round((image || '').length / 1024) : null;
+    console.log(`[AppBanner] update calling, id=${bid}, keys=[${Object.keys(vals).join(',')}], imageKB=${imgKB ?? 'unchanged'}, url=${getOdooUrl()}`);
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.banner',
+        method: 'write',
+        args: [[bid], vals],
+        kwargs: {},
+      },
+      id: new Date().getTime(),
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+    if (response.data?.error) {
+      console.error('[AppBanner] update Odoo error:', response.data.error);
+      return { error: response.data.error };
+    }
+    console.log(`[AppBanner] update ok, id=${bid}, result=${!!response.data.result}`);
+    return { result: !!response.data.result };
+  } catch (error) {
+    _logBannerError('update', error);
+    return { error };
+  }
+};
+
+export const deleteAppBannerOdoo = async (bannerId) => {
+  try {
+    const id = Number(bannerId);
+    if (!id) throw new Error('id is required');
+    console.log(`[AppBanner] delete calling, id=${id}, url=${getOdooUrl()}`);
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.banner',
+        method: 'unlink',
+        args: [[id]],
+        kwargs: {},
+      },
+      id: new Date().getTime(),
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+    if (response.data?.error) {
+      console.error('[AppBanner] delete Odoo error:', response.data.error);
+      return { error: response.data.error };
+    }
+    console.log(`[AppBanner] delete ok, id=${id}`);
+    return { result: !!response.data.result };
+  } catch (error) {
+    _logBannerError('delete', error);
+    return { error };
   }
 };
 

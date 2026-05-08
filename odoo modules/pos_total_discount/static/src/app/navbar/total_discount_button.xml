@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <!-- TotalDiscountButton component template -->
+    <t t-name="pos_total_discount.TotalDiscountButton">
+        <div t-if="isVisible" class="pos-total-discount-topbar d-inline-flex align-items-center gap-2 ms-3">
+            <!-- Discount + Menu button group -->
+            <div class="btn-group">
+                <button class="btn btn-lg lh-lg fw-bold total-discount-main-btn"
+                    t-att-class="{'total-discount-active': currentDiscount > 0}"
+                    t-on-click="openDiscountPopup">
+                    <i class="fa fa-percent me-1"/>
+                    <t t-if="currentDiscount > 0"><t t-esc="currentDiscount"/>% Off</t>
+                    <t t-else="">Discount</t>
+                </button>
+                <button class="btn btn-lg lh-lg fw-bold total-discount-menu-btn"
+                    t-on-click="openManagePopup">
+                    <i class="fa fa-ellipsis-v"/>
+                </button>
+            </div>
+            <!-- Clear button -->
+            <button class="btn btn-outline-danger btn-lg lh-lg fw-bold"
+                t-on-click="openClearPopup">
+                <i class="fa fa-times me-1"/>Clear
+            </button>
+        </div>
+
+        <!-- ==================== MAIN DISCOUNT POPUP ==================== -->
+        <t t-if="state.popup === 'discount'">
+            <div class="total-discount-overlay" t-on-click="closePopup">
+                <div class="total-discount-dialog modal-dialog td-dialog-wide" t-on-click.stop="() => {}">
+                    <div class="total-discount-title">
+                        <i class="fa fa-percent me-2"/>Select Discount
+                    </div>
+
+                    <!-- Row 1: Discount Type radio -->
+                    <div class="td-radio-section mb-3">
+                        <div class="td-radio-label">Discount Type</div>
+                        <div class="td-radio-group">
+                            <button type="button" t-attf-class="td-radio-btn #{state.discountType === 'total' ? 'active' : ''}"
+                                t-on-click="(ev) => this.setDiscountType('total', ev)">
+                                <i class="fa fa-shopping-cart me-1"/>Total Discount
+                            </button>
+                            <button type="button" t-attf-class="td-radio-btn #{state.discountType === 'items' ? 'active' : ''}"
+                                t-on-click="(ev) => this.setDiscountType('items', ev)">
+                                <i class="fa fa-list me-1"/>Items Discount
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Row 2: Discount Format radio -->
+                    <div class="td-radio-section mb-3">
+                        <div class="td-radio-label">Discount Format</div>
+                        <div class="td-radio-group">
+                            <button type="button" t-attf-class="td-radio-btn #{state.discountFormat === 'percentage' ? 'active' : ''}"
+                                t-on-click="(ev) => this.setDiscountFormat('percentage', ev)">
+                                <i class="fa fa-percent me-1"/>Percentage
+                            </button>
+                            <button type="button" t-attf-class="td-radio-btn #{state.discountFormat === 'amount' ? 'active' : ''}"
+                                t-on-click="(ev) => this.setDiscountFormat('amount', ev)">
+                                <i class="fa fa-money me-1"/>Amount
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Percentage mode: show preset grid -->
+                    <t t-if="state.discountFormat === 'percentage'">
+                        <div class="total-discount-grid">
+                            <t t-foreach="state.variants" t-as="percent" t-key="percent">
+                                <button t-attf-class="total-discount-variant-btn #{currentDiscount === percent ? 'active' : ''}"
+                                    t-on-click="() => this.applyPercentageDiscount(percent)">
+                                    <t t-esc="percent"/>%
+                                </button>
+                            </t>
+                        </div>
+                    </t>
+
+                    <!-- Amount mode: show input + apply button -->
+                    <t t-if="state.discountFormat === 'amount'">
+                        <div class="td-amount-section">
+                            <div class="d-flex align-items-center gap-2 mb-3">
+                                <input type="number" class="form-control form-control-lg text-center fw-bold fs-4 td-amount-input"
+                                    t-model="state.amountValue" min="0" step="0.01"
+                                    placeholder="Enter amount..."/>
+                            </div>
+                            <button class="btn btn-primary w-100 py-3 fw-bold fs-5"
+                                t-on-click="applyAmountDiscount">
+                                <i class="fa fa-check me-2"/>Apply Discount
+                            </button>
+                        </div>
+                    </t>
+
+                    <button class="btn btn-light w-100 py-3 fw-semibold mt-2" t-on-click="closePopup">Cancel</button>
+                </div>
+            </div>
+        </t>
+
+        <!-- ==================== MANAGE POPUP ==================== -->
+        <t t-if="state.popup === 'manage'">
+            <div class="total-discount-overlay" t-on-click="closePopup">
+                <div class="total-discount-dialog modal-dialog" t-on-click.stop="() => {}">
+                    <div class="total-discount-title">
+                        <i class="fa fa-cog me-2"/>Manage Presets
+                    </div>
+                    <button class="btn btn-outline-success w-100 py-3 mb-2 fw-semibold fs-5"
+                        t-on-click="openAddPopup">
+                        <i class="fa fa-plus me-2"/>Add Variant
+                    </button>
+                    <button class="btn btn-outline-primary w-100 py-3 mb-2 fw-semibold fs-5"
+                        t-on-click="openEditPopup">
+                        <i class="fa fa-pencil me-2"/>Edit Variants
+                    </button>
+                    <button class="btn btn-outline-danger w-100 py-3 mb-3 fw-semibold fs-5"
+                        t-on-click="openDeletePopup">
+                        <i class="fa fa-trash me-2"/>Delete Variant
+                    </button>
+                    <button class="btn btn-light w-100 py-3 fw-semibold" t-on-click="closePopup">Cancel</button>
+                </div>
+            </div>
+        </t>
+
+        <!-- ==================== ADD VARIANT POPUP ==================== -->
+        <t t-if="state.popup === 'add'">
+            <div class="total-discount-overlay" t-on-click="closePopup">
+                <div class="total-discount-dialog modal-dialog" t-on-click.stop="() => {}">
+                    <div class="total-discount-title">
+                        <i class="fa fa-plus me-2"/>Add New Preset
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <input type="number" class="form-control form-control-lg text-center fw-bold fs-3"
+                            t-model="state.addValue" min="1" max="100" placeholder="15"/>
+                        <span class="fs-3 fw-bold text-primary">%</span>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary flex-fill py-3 fw-bold fs-5" t-on-click="addVariant">
+                            <i class="fa fa-check me-1"/>Add
+                        </button>
+                        <button class="btn btn-light flex-fill py-3 fw-bold fs-5" t-on-click="closePopup">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </t>
+
+        <!-- ==================== EDIT VARIANTS POPUP ==================== -->
+        <t t-if="state.popup === 'edit'">
+            <div class="total-discount-overlay" t-on-click="closePopup">
+                <div class="total-discount-dialog modal-dialog" t-on-click.stop="() => {}">
+                    <div class="total-discount-title">
+                        <i class="fa fa-pencil me-2"/>Edit Presets
+                    </div>
+                    <div class="mb-3">
+                        <t t-foreach="state.editValues" t-as="val" t-key="val_index">
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <input type="number" class="form-control form-control-lg text-center fw-semibold fs-5"
+                                    t-att-value="val" min="1" max="100"
+                                    t-on-change="(ev) => this.onEditValueChange(val_index, ev)"/>
+                                <span class="fw-bold text-muted fs-5">%</span>
+                            </div>
+                        </t>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary flex-fill py-3 fw-bold fs-5" t-on-click="saveEditedVariants">
+                            <i class="fa fa-check me-1"/>Save
+                        </button>
+                        <button class="btn btn-light flex-fill py-3 fw-bold fs-5" t-on-click="closePopup">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </t>
+
+        <!-- ==================== DELETE VARIANT POPUP ==================== -->
+        <t t-if="state.popup === 'delete'">
+            <div class="total-discount-overlay" t-on-click="closePopup">
+                <div class="total-discount-dialog modal-dialog" t-on-click.stop="() => {}">
+                    <div class="total-discount-title">
+                        <i class="fa fa-trash me-2"/>Delete Preset
+                    </div>
+                    <p class="text-muted text-center mb-3">Tap to delete</p>
+                    <div class="total-discount-grid">
+                        <t t-foreach="state.variants" t-as="percent" t-key="percent">
+                            <button class="total-discount-variant-btn delete-mode"
+                                t-on-click="() => this.deleteVariant(percent)">
+                                <t t-esc="percent"/>%
+                            </button>
+                        </t>
+                    </div>
+                    <button class="btn btn-light w-100 py-3 fw-semibold" t-on-click="closePopup">Cancel</button>
+                </div>
+            </div>
+        </t>
+
+        <!-- ==================== CLEAR CHOICE POPUP ==================== -->
+        <t t-if="state.popup === 'clearChoice'">
+            <div class="total-discount-overlay" t-on-click="closePopup">
+                <div class="total-discount-dialog modal-dialog" t-on-click.stop="() => {}">
+                    <div class="total-discount-title">
+                        <i class="fa fa-times me-2"/>Clear Discount
+                    </div>
+                    <button class="btn btn-outline-primary w-100 py-3 mb-2 fw-semibold fs-5"
+                        t-on-click="clearSelectedLineDiscount">
+                        <i class="fa fa-hand-pointer-o me-2"/>Clear Selected Line Discount
+                    </button>
+                    <button class="btn btn-outline-warning w-100 py-3 mb-2 fw-semibold fs-5"
+                        t-on-click="clearAllLineDiscounts">
+                        <i class="fa fa-list me-2"/>Clear All Line Discounts
+                    </button>
+                    <button class="btn btn-outline-danger w-100 py-3 mb-3 fw-semibold fs-5"
+                        t-on-click="clearTotalDiscountOnly">
+                        <i class="fa fa-shopping-cart me-2"/>Clear Total Discount Only
+                    </button>
+                    <button class="btn btn-light w-100 py-3 fw-semibold" t-on-click="closePopup">Cancel</button>
+                </div>
+            </div>
+        </t>
+
+        <!-- ==================== NOTIFICATION ==================== -->
+        <t t-if="state.notification">
+            <div t-attf-class="total-discount-notification total-discount-notification-#{state.notificationType}">
+                <t t-esc="state.notification"/>
+            </div>
+        </t>
+    </t>
+
+    <!-- Extend Navbar to inject TotalDiscountButton after OrderTabs -->
+    <t t-name="pos_total_discount.Navbar" t-inherit="point_of_sale.Navbar" t-inherit-mode="extension">
+        <xpath expr="//OrderTabs" position="after">
+            <TotalDiscountButton/>
+        </xpath>
+    </t>
+
+</templates>

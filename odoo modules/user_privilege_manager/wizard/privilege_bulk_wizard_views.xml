@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ==================== Bulk User Privilege Wizard ==================== -->
+    <record id="view_privilege_bulk_create_wizard_form" model="ir.ui.view">
+        <field name="name">privilege.bulk.create.wizard.form</field>
+        <field name="model">privilege.bulk.create.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Create User Privileges">
+                <group>
+                    <group string="Target">
+                        <field name="model_id" options="{'no_create': True}"/>
+                        <field name="company_id" groups="base.group_multi_company"
+                               options="{'no_create': True}"/>
+                    </group>
+                    <group string="Permissions">
+                        <field name="perm_read" widget="boolean_toggle"/>
+                        <field name="perm_create" widget="boolean_toggle"/>
+                        <field name="perm_write" widget="boolean_toggle"/>
+                        <field name="perm_cancel" widget="boolean_toggle"/>
+                        <field name="perm_unlink" widget="boolean_toggle"/>
+                    </group>
+                </group>
+                <separator string="Select Users"/>
+                <field name="user_ids" widget="many2many_checkboxes"/>
+                <footer>
+                    <button name="action_create_privileges" string="Create Privileges"
+                            type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_privilege_bulk_create_wizard" model="ir.actions.act_window">
+        <field name="name">Create User Privileges</field>
+        <field name="res_model">privilege.bulk.create.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <!-- ==================== Bulk Menu Privilege Wizard ==================== -->
+    <record id="view_menu_privilege_bulk_wizard_form" model="ir.ui.view">
+        <field name="name">menu.privilege.bulk.wizard.form</field>
+        <field name="model">menu.privilege.bulk.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Set Menu Visibility">
+                <group>
+                    <group string="Settings">
+                        <field name="is_visible" widget="boolean_toggle"/>
+                        <field name="company_id" groups="base.group_multi_company"
+                               options="{'no_create': True}"/>
+                    </group>
+                </group>
+                <separator string="Select Users"/>
+                <field name="user_ids" widget="many2many_checkboxes"/>
+                <separator string="Select Menus"/>
+                <field name="menu_ids" widget="many2many_checkboxes"/>
+                <footer>
+                    <button name="action_create_menu_privileges" string="Apply"
+                            type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_menu_privilege_bulk_wizard" model="ir.actions.act_window">
+        <field name="name">Set Menu Visibility</field>
+        <field name="res_model">menu.privilege.bulk.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <!-- ==================== Bulk Module Visibility Wizard ==================== -->
+    <record id="view_module_visibility_bulk_wizard_form" model="ir.ui.view">
+        <field name="name">module.visibility.bulk.wizard.form</field>
+        <field name="model">module.visibility.bulk.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Bulk Hide/Show App Icons">
+                <group>
+                    <group string="Settings">
+                        <field name="is_visible" widget="boolean_toggle" string="App Visible"/>
+                        <field name="company_id" groups="base.group_multi_company"
+                               options="{'no_create': True}"/>
+                    </group>
+                </group>
+                <separator string="Select Users"/>
+                <field name="user_ids" widget="many2many_checkboxes"/>
+                <separator string="Select Modules (Apps)"/>
+                <field name="module_ids" widget="many2many_checkboxes"/>
+                <footer>
+                    <button name="action_apply" string="Apply"
+                            type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_module_visibility_bulk_wizard" model="ir.actions.act_window">
+        <field name="name">Bulk Module Visibility</field>
+        <field name="res_model">module.visibility.bulk.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+</odoo>
