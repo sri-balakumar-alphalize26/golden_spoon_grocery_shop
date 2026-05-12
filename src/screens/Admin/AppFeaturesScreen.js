@@ -8,12 +8,14 @@
 //   • hint line
 //   • grouped feature list with collapsible sub-sections
 //
-// Toggles persist immediately (no Save button). The user picker is a centered
-// RNModal popup matching the in-app convention (LogoutModal etc.).
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+// Toggles are buffered locally. A Save button appears in the top-right of
+// the header whenever there are unsaved changes; tapping it commits them
+// all in one batch. The user picker is a centered RNModal popup matching
+// the in-app convention (LogoutModal etc.).
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, StyleSheet, TouchableOpacity, Switch, FlatList, TextInput,
-  RefreshControl, ActivityIndicator,
+  RefreshControl, ActivityIndicator, Alert,
 } from 'react-native';
 import RNModal from 'react-native-modal';
 import Text from '@components/Text';
@@ -79,7 +81,11 @@ const AppFeaturesScreen = ({ navigation }) => {
   const [stats, setStats] = useState(ZERO_STATS);
   const [loadingHidden, setLoadingHidden] = useState(false);
 
-  const [savingIds, setSavingIds] = useState(new Set());
+  // Snapshot of `hiddenIds` as it was when modules were last fetched. Lets
+  // us detect "toggled back to original" and accurately drive the Save (N)
+  // counter — we only consider feature_ids whose current state diverges.
+  const originalHiddenIdsRef = useRef(new Set());
+  const [saving, setSaving] = useState(false);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [users, setUsers] = useState([]);
@@ -113,6 +119,8 @@ const AppFeaturesScreen = ({ navigation }) => {
   }, [isAdmin]);
 
   // Per-user data: both hides and stats in parallel, single in-flight flag.
+  // Also snapshots the loaded hidden-set so the Save (N) counter can
+  // distinguish buffered changes from the server state.
   const loadUserData = useCallback(async (uid) => {
     setLoadingHidden(true);
     try {
@@ -120,7 +128,13 @@ const AppFeaturesScreen = ({ navigation }) => {
         fetchHiddenAppFeaturesAdmin(uid),
         fetchPrivilegeStatsForUser(uid),
       ]);
-      setHiddenIds(new Set(hideRows.map((r) => Array.isArray(r.feature_id) ? r.feature_id[0] : r.feature_id)));
+      const ids = new Set(
+        hideRows.map((r) => Array.isArray(r.feature_id) ? r.feature_id[0] : r.feature_id),
+      );
+      setHiddenIds(ids);
+      // Fresh-loaded server state becomes the new "original" — buffered
+      // changes from before this load are implicitly discarded.
+      originalHiddenIdsRef.current = new Set(ids);
       setStats(statsResult);
     } finally {
       setLoadingHidden(false);
@@ -130,11 +144,27 @@ const AppFeaturesScreen = ({ navigation }) => {
   useEffect(() => {
     if (!selectedUser) {
       setHiddenIds(new Set());
+      originalHiddenIdsRef.current = new Set();
       setStats(ZERO_STATS);
       return;
     }
     loadUserData(selectedUser.id);
   }, [selectedUser, loadUserData]);
+
+  // Buffered-changes derivation: feature ids whose current hidden state
+  // diverges from the originally-loaded snapshot.
+  const pendingFeatureIds = useMemo(() => {
+    const orig = originalHiddenIdsRef.current;
+    const pending = new Set();
+    // Look at every id present in either set so we catch both "newly hidden"
+    // and "newly un-hidden" cases.
+    const union = new Set([...orig, ...hiddenIds]);
+    for (const id of union) {
+      if (orig.has(id) !== hiddenIds.has(id)) pending.add(id);
+    }
+    return pending;
+  }, [hiddenIds]);
+  const pendingCount = pendingFeatureIds.size;
 
   // ── User picker modal ─────────────────────────────────────────────
   const fetchUsers = useCallback(async (text) => {
@@ -162,8 +192,10 @@ const AppFeaturesScreen = ({ navigation }) => {
     setPickerOpen(false);
   };
 
-  // ── Toggle a feature for the current selectedUser ─────────────────
-  const handleToggle = useCallback(async (feature, nextHidden) => {
+  // ── Buffered toggle ───────────────────────────────────────────────
+  // Flip the local hiddenIds; the Save button picks this up via
+  // pendingFeatureIds. No RPC fires here.
+  const handleToggle = useCallback((feature, nextHidden) => {
     if (!selectedUser) return;
     const fid = feature.id;
     setHiddenIds((prev) => {
@@ -171,37 +203,83 @@ const AppFeaturesScreen = ({ navigation }) => {
       if (nextHidden) next.add(fid); else next.delete(fid);
       return next;
     });
-    setSavingIds((prev) => new Set(prev).add(fid));
+  }, [selectedUser]);
+
+  // ── Save / Discard ────────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!selectedUser || pendingCount === 0 || saving) return;
+    setSaving(true);
+    const tasks = [];
+    for (const fid of pendingFeatureIds) {
+      const nextHidden = hiddenIds.has(fid);
+      tasks.push(setAppFeatureHiddenForUser(selectedUser.id, fid, nextHidden));
+    }
     try {
-      await setAppFeatureHiddenForUser(selectedUser.id, fid, nextHidden);
-      // Re-pull stats so the HIDDEN APPS / etc tiles reflect any side effects.
-      try {
-        const fresh = await fetchPrivilegeStatsForUser(selectedUser.id);
-        setStats(fresh);
-      } catch (_) {}
+      const results = await Promise.allSettled(tasks);
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length > 0) {
+        Toast.show({
+          type: 'error',
+          text1: 'Some changes failed',
+          text2: `${failed.length} of ${results.length} writes failed. Try again.`,
+        });
+      } else {
+        Toast.show({ type: 'success', text1: 'Saved' });
+      }
+      // Re-pull authoritative server state — refreshes stats and resets the
+      // originals snapshot, which clears pendingFeatureIds.
+      await loadUserData(selectedUser.id);
+      // If the admin is editing their own user, refresh the gating cache so
+      // changes apply in the current session without a re-login.
       const currentUid = authUser?.uid || authUser?.id;
       if (currentUid && Number(currentUid) === Number(selectedUser.id)) {
         try { await useAuthStore.getState().refreshHiddenFeatures(currentUid); } catch (_) {}
       }
-    } catch (err) {
-      setHiddenIds((prev) => {
-        const next = new Set(prev);
-        if (nextHidden) next.delete(fid); else next.add(fid);
-        return next;
-      });
-      Toast.show({
-        type: 'error',
-        text1: 'Save failed',
-        text2: err?.message || 'Could not update visibility',
-      });
     } finally {
-      setSavingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(fid);
-        return next;
-      });
+      setSaving(false);
     }
-  }, [selectedUser, authUser]);
+  }, [selectedUser, pendingCount, pendingFeatureIds, hiddenIds, saving, loadUserData, authUser]);
+
+  const handleDiscard = useCallback(() => {
+    if (pendingCount === 0) return;
+    Alert.alert(
+      'Discard unsaved changes?',
+      `You have ${pendingCount} feature${pendingCount === 1 ? '' : 's'} with unsaved visibility changes.`,
+      [
+        { text: 'Keep editing', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            if (selectedUser) loadUserData(selectedUser.id);
+          },
+        },
+      ],
+    );
+  }, [pendingCount, selectedUser, loadUserData]);
+
+  // Intercept Back press when there are pending changes — standard React
+  // Navigation pattern so an admin doesn't silently lose work.
+  useEffect(() => {
+    if (pendingCount === 0) return undefined;
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      if (saving) return; // let the save complete naturally
+      e.preventDefault();
+      Alert.alert(
+        'Discard unsaved changes?',
+        `You have ${pendingCount} feature${pendingCount === 1 ? '' : 's'} with unsaved visibility changes.`,
+        [
+          { text: 'Keep editing', style: 'cancel' },
+          {
+            text: 'Discard & leave',
+            style: 'destructive',
+            onPress: () => navigation.dispatch(e.data.action),
+          },
+        ],
+      );
+    });
+    return unsubscribe;
+  }, [navigation, pendingCount, saving]);
 
   // ── Build the grouped flat list for FlatList ──────────────────────
   // Output items: { kind: 'header', groupKey, groupLabel, total, hiddenCount }
@@ -277,18 +355,24 @@ const AppFeaturesScreen = ({ navigation }) => {
     }
     const feature = item;
     const isHidden = hiddenIds.has(feature.id);
-    const isSaving = savingIds.has(feature.id);
+    const isDirty = pendingFeatureIds.has(feature.id);
+    // When a row has unsaved changes, swap the green/red state border for an
+    // amber dirty border so the admin sees at a glance what they've touched.
     const accent = isHidden ? HIDDEN_ACCENT : VISIBLE_ACCENT;
+    const borderColor = isDirty ? '#f59e0b' : accent;
     const pillBg = isHidden ? HIDDEN_BG : VISIBLE_BG;
     const subline = [feature.feature_key, feature.description]
       .filter(Boolean)
       .join('  ·  ');
     return (
-      <View style={[styles.featureCard, { borderLeftColor: accent }]}>
+      <View style={[styles.featureCard, { borderLeftColor: borderColor }, isDirty && styles.featureCardDirty]}>
         <View style={styles.featureCardLeft}>
           <View style={[styles.statusDot, { backgroundColor: accent }]} />
           <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={styles.featureName} numberOfLines={1}>{feature.name}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.featureName} numberOfLines={1}>{feature.name}</Text>
+              {isDirty ? <View style={styles.dirtyDot} /> : null}
+            </View>
             {subline ? (
               <Text style={styles.featureSubline} numberOfLines={2}>{subline}</Text>
             ) : null}
@@ -302,7 +386,7 @@ const AppFeaturesScreen = ({ navigation }) => {
           </View>
           <Switch
             value={isHidden}
-            disabled={isSaving}
+            disabled={saving}
             onValueChange={(v) => handleToggle(feature, v)}
             trackColor={{ false: '#cbd5e1', true: '#fca5a5' }}
             thumbColor={isHidden ? HIDDEN_ACCENT : '#f8fafc'}
@@ -334,7 +418,26 @@ const AppFeaturesScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView backgroundColor={NAVY}>
-      <NavigationHeader title="App Features" onBackPress={() => navigation.goBack()} />
+      <NavigationHeader
+        title="App Features"
+        onBackPress={() => navigation.goBack()}
+        saveLabel={pendingCount > 0 ? (saving ? 'Saving…' : `Save (${pendingCount})`) : undefined}
+        onSavePress={handleSave}
+      />
+      {pendingCount > 0 ? (
+        <TouchableOpacity
+          style={styles.pendingBar}
+          onPress={handleDiscard}
+          activeOpacity={0.8}
+          disabled={saving}
+        >
+          <Icon name="info-outline" size={16} color="#92400e" />
+          <Text style={styles.pendingBarText}>
+            {pendingCount} feature{pendingCount === 1 ? '' : 's'} with unsaved changes
+          </Text>
+          <Text style={styles.pendingBarDiscard}>Discard</Text>
+        </TouchableOpacity>
+      ) : null}
       <RoundedContainer>
 
         {/* ── Selected-user card / picker entry point ── */}
@@ -582,6 +685,17 @@ const styles = StyleSheet.create({
   },
   groupBadgeText: { fontSize: 10, color: '#475569', fontFamily: FONT_FAMILY.semiBold },
 
+  // ── Pending-changes banner (under header while pendingCount > 0) ──
+  pendingBar: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#fde68a',
+    gap: 8,
+  },
+  pendingBarText: { flex: 1, fontSize: 12, color: '#92400e', fontFamily: FONT_FAMILY.semiBold },
+  pendingBarDiscard: { fontSize: 12, color: '#b91c1c', fontFamily: FONT_FAMILY.semiBold, textDecorationLine: 'underline' },
+
   // ── Feature row ───────────────────────────────────────────────────
   featureCard: {
     flexDirection: 'row', alignItems: 'center',
@@ -592,6 +706,10 @@ const styles = StyleSheet.create({
     elevation: 2,
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
   },
+  featureCardDirty: {
+    backgroundColor: '#fffbeb',
+  },
+  dirtyDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#f59e0b' },
   featureCardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   featureCardRight: { alignItems: 'center', marginLeft: 12, gap: 6 },
   statusDot: { width: 10, height: 10, borderRadius: 5 },

@@ -71,7 +71,7 @@ const POSReceiptScreen = CreateInvoicePreview;
 import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymentGateway';
 import { UsersScreen, UserDetailsScreen } from '@screens/Users';
 import { BannersScreen, BannerDetailsScreen } from '@screens/AppBanners';
-import { AppFeaturesScreen } from '@screens/Admin';
+import { AppFeaturesScreen, ModulePrivilegesScreen } from '@screens/Admin';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { StockScreen, StockDetailScreen } from '@screens/Stock';
 import { ExpensesScreen, ExpenseFormScreen, ExpenseDetailScreen } from '@screens/Expenses';
@@ -732,6 +732,12 @@ const StackNavigator = () => {
       <Stack.Screen
         name="AppFeaturesScreen"
         component={AppFeaturesScreen}
+        options={{ headerShown: false }}
+      />
+      {/* Module Privileges (CRUD-per-module admin) */}
+      <Stack.Screen
+        name="ModulePrivilegesScreen"
+        component={ModulePrivilegesScreen}
         options={{ headerShown: false }}
       />
       {/* Orders */}

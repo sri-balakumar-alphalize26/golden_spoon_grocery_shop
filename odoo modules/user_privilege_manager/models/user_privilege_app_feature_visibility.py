@@ -1,5 +1,8 @@
+import logging
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class AppFeatureVisibility(models.Model):
@@ -71,30 +74,36 @@ class AppFeatureVisibility(models.Model):
         (role.app.feature.visibility, queried via privilege.role). Most-
         restrictive wins — i.e. a key is hidden if EITHER source hides it.
 
-        Returns [] if the caller is the superuser or has the privilege manager
-        group (admins always see everything in the app, same convention the
-        existing module.visibility uses).
+        Returns [] only if the caller is the genuine SUPERUSER (uid 1) — a
+        safety net so the real superuser can never lock themselves out.
+        Every other user (including users in `group_privilege_manager`) is
+        subject to whatever hide rules the admin has configured.
         """
         if user_id is None:
             user_id = self.env.uid
 
         user = self.env['res.users'].sudo().browse(user_id)
         if not user.exists():
+            _logger.info('[FeatureGate] uid=%s does not exist; returning []', user_id)
             return []
-        if user._is_superuser() or user.has_group(
-                'user_privilege_manager.group_privilege_manager'):
+        if user._is_superuser():
+            _logger.info('[FeatureGate] uid=%s is SUPERUSER; bypassing all hides', user_id)
             return []
 
-        keys = set(self.sudo().search([
+        user_keys = set(self.sudo().search([
             ('user_id', '=', user_id),
             ('active', '=', True),
         ]).mapped('feature_key'))
 
         # Merge in role-level hides
         role_keys = self.env['privilege.role'].sudo().get_hidden_features_by_role(user_id)
-        keys.update(role_keys)
-        # Drop any falsy values that could sneak in if a related field is unset
-        return sorted(k for k in keys if k)
+        merged = sorted(k for k in (user_keys | set(role_keys)) if k)
+
+        _logger.info(
+            '[FeatureGate] uid=%s user-level=%s role-level=%s → merged=%s',
+            user_id, sorted(user_keys), sorted(role_keys), merged,
+        )
+        return merged
 
     # ------------------------------------------------------------------
     # Admin RPCs: called by the in-app App Features admin screen.
@@ -164,26 +173,182 @@ class AppFeatureVisibility(models.Model):
         if not user_id:
             return zeros
         uid = int(user_id)
+
+        # Fetch the user's roles ONCE; reused for the role-level unions.
+        roles = self.env['privilege.role'].sudo().search([
+            ('user_ids', 'in', [uid]),
+            ('active', '=', True),
+        ])
+
+        # HIDDEN APPS = union of user-level module.visibility hides AND
+        # role-level role.module.visibility hides. Plain search_count missed
+        # role-level hides, so apps hidden via a group always showed 0.
+        user_hidden_modules = set(self.env['module.visibility'].sudo().search([
+            ('user_id', '=', uid),
+            ('is_visible', '=', False),
+            ('active', '=', True),
+        ]).mapped('module_id').ids)
+        role_hidden_modules = set()
+        for r in roles:
+            role_hidden_modules.update(
+                r.module_visibility_ids
+                 .filtered(lambda x: not x.is_visible)
+                 .mapped('module_id').ids
+            )
+
+        # HIDDEN MENUS = same union pattern across menu.privilege +
+        # role.menu.visibility.
+        user_hidden_menus = set(self.env['menu.privilege'].sudo().search([
+            ('user_id', '=', uid),
+            ('is_visible', '=', False),
+        ]).mapped('menu_id').ids)
+        role_hidden_menus = set()
+        for r in roles:
+            role_hidden_menus.update(
+                r.menu_visibility_ids
+                 .filtered(lambda x: not x.is_visible)
+                 .mapped('menu_id').ids
+            )
+
         return {
-            'groups': self.env['privilege.role'].sudo().search_count([
-                ('user_ids', 'in', [uid]),
-                ('active', '=', True),
-            ]),
+            'groups': len(roles),
             'modules': self.env['module.privilege'].sudo().search_count([
                 ('user_id', '=', uid),
                 ('active', '=', True),
             ]),
-            'hidden_menus': self.env['menu.privilege'].sudo().search_count([
-                ('user_id', '=', uid),
-                ('is_visible', '=', False),
-            ]),
-            'hidden_apps': self.env['module.visibility'].sudo().search_count([
-                ('user_id', '=', uid),
-                ('is_visible', '=', False),
-                ('active', '=', True),
-            ]),
+            'hidden_menus': len(user_hidden_menus | role_hidden_menus),
+            'hidden_apps': len(user_hidden_modules | role_hidden_modules),
             'hidden_features': self.sudo().search_count([
                 ('user_id', '=', uid),
                 ('active', '=', True),
             ]),
         }
+
+    # ------------------------------------------------------------------
+    # Module Privileges admin RPCs — mirror the OWL dashboard's
+    # MODULE-BASED PRIVILEGES section so the React Native admin screen
+    # can manage `module.privilege` records too. All sudo'd; the calling
+    # user just needs to be allowed to invoke the method.
+    # ------------------------------------------------------------------
+    @api.model
+    def list_user_modules_admin(self, user_id):
+        """Return module.privilege rows for the user with the 5 master flags."""
+        if not user_id:
+            return []
+        rows = self.env['module.privilege'].sudo().search([
+            ('user_id', '=', int(user_id)),
+            ('active', '=', True),
+        ], order='module_shortdesc, module_id')
+        return [{
+            'id': r.id,
+            'module_id': [r.module_id.id, r.module_id.name],
+            'module_shortdesc': r.module_shortdesc or r.module_id.shortdesc or r.module_id.name or '',
+            'master_read':   r.master_read,
+            'master_create': r.master_create,
+            'master_write':  r.master_write,
+            'master_cancel': r.master_cancel,
+            'master_unlink': r.master_unlink,
+        } for r in rows]
+
+    @api.model
+    def list_installable_modules_admin(self, user_id, search_text=''):
+        """Installed modules the user doesn't yet have a module.privilege for —
+        feeds the Add Module picker."""
+        if not user_id:
+            return []
+        used_module_ids = self.env['module.privilege'].sudo().search([
+            ('user_id', '=', int(user_id)),
+            ('active', '=', True),
+        ]).mapped('module_id').ids
+        domain = [('state', '=', 'installed'), ('id', 'not in', used_module_ids)]
+        if search_text:
+            domain += ['|', ('shortdesc', 'ilike', search_text),
+                       ('name', 'ilike', search_text)]
+        return self.env['ir.module.module'].sudo().search_read(
+            domain, ['id', 'name', 'shortdesc'],
+            limit=80, order='shortdesc, name')
+
+    @api.model
+    def set_module_master_perm_admin(self, mp_id, field, value):
+        """Flip one of the 5 master_* fields on module.privilege; the existing
+        @api.onchange + write() hooks cascade the change to all child lines
+        and propagate to user.privilege records."""
+        allowed = ('master_read', 'master_create', 'master_write',
+                   'master_cancel', 'master_unlink')
+        if field not in allowed:
+            raise UserError(_('Invalid master field: %s') % field)
+        mp = self.env['module.privilege'].sudo().browse(int(mp_id))
+        if not mp.exists():
+            raise UserError(_('Module privilege not found.'))
+        mp.write({field: bool(value)})
+        return True
+
+    @api.model
+    def grant_all_module_admin(self, mp_id):
+        """All 5 masters → True."""
+        mp = self.env['module.privilege'].sudo().browse(int(mp_id))
+        if not mp.exists():
+            raise UserError(_('Module privilege not found.'))
+        mp.write({
+            'master_read': True, 'master_create': True, 'master_write': True,
+            'master_cancel': True, 'master_unlink': True,
+        })
+        return True
+
+    @api.model
+    def read_only_module_admin(self, mp_id):
+        """Read=True, all other masters=False."""
+        mp = self.env['module.privilege'].sudo().browse(int(mp_id))
+        if not mp.exists():
+            raise UserError(_('Module privilege not found.'))
+        mp.write({
+            'master_read': True, 'master_create': False, 'master_write': False,
+            'master_cancel': False, 'master_unlink': False,
+        })
+        return True
+
+    @api.model
+    def add_module_admin(self, user_id, module_id):
+        """Create a module.privilege for (user, module), load its models,
+        apply privileges, and create the menu privilege records."""
+        if not user_id or not module_id:
+            raise UserError(_('user_id and module_id are required.'))
+        MP = self.env['module.privilege'].sudo()
+        mp = MP.create({'user_id': int(user_id), 'module_id': int(module_id)})
+        # Best-effort: each helper may not exist in every version of the module
+        try:
+            mp.action_load_models()
+        except Exception:
+            pass
+        try:
+            mp.action_apply_privileges()
+        except Exception:
+            pass
+        try:
+            MP.create_module_menu_privileges(
+                module_id=int(module_id), user_id=int(user_id))
+        except Exception:
+            pass
+        return mp.id
+
+    @api.model
+    def remove_module_admin(self, mp_id):
+        """Mirror onRemoveModule in the OWL dashboard: unlink derived
+        user.privilege and menu.privilege rows first, then the module row."""
+        MP = self.env['module.privilege'].sudo().browse(int(mp_id))
+        if not MP.exists():
+            return False
+        derived_user_privs = self.env['user.privilege'].sudo().search(
+            [('source_module_id', '=', MP.id)])
+        if derived_user_privs:
+            derived_user_privs.unlink()
+        if 'source_module_id' in self.env['menu.privilege']._fields:
+            derived_menu_privs = self.env['menu.privilege'].sudo().search(
+                [('source_module_id', '=', MP.id)])
+            if derived_menu_privs:
+                try:
+                    derived_menu_privs.unlink()
+                except Exception:
+                    pass
+        MP.unlink()
+        return True

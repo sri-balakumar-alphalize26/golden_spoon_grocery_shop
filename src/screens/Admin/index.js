@@ -1,2 +1,3 @@
 import AppFeaturesScreen from './AppFeaturesScreen';
-export { AppFeaturesScreen };
+import ModulePrivilegesScreen from './ModulePrivilegesScreen';
+export { AppFeaturesScreen, ModulePrivilegesScreen };

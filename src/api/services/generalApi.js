@@ -1208,6 +1208,74 @@ export const fetchHiddenAppFeaturesAdmin = async (userId) => {
   }
 };
 
+// ─── Module Privileges admin helpers ────────────────────────────────────────
+// Mirror the OWL dashboard's MODULE-BASED PRIVILEGES section. All route
+// through sudo'd methods on `app.feature.visibility`, same pattern as the
+// App Features admin RPCs.
+
+const _callKw = async (method, args = [], kwargs = {}) => {
+  const response = await axios.post(
+    `${getOdooUrl()}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'app.feature.visibility', method, args, kwargs },
+    },
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  if (response.data && response.data.error) {
+    throw new Error(response.data.error?.data?.message || `${method} failed`);
+  }
+  return response.data?.result;
+};
+
+export const fetchUserModulesAdmin = async (userId) => {
+  if (!userId) return [];
+  try {
+    const result = await _callKw('list_user_modules_admin', [Number(userId)]);
+    return Array.isArray(result) ? result : [];
+  } catch (err) {
+    console.warn('[ModulePriv] fetchUserModulesAdmin failed:', err?.message || err);
+    return [];
+  }
+};
+
+export const fetchInstallableModulesAdmin = async (userId, searchText = '') => {
+  if (!userId) return [];
+  try {
+    const result = await _callKw('list_installable_modules_admin', [Number(userId), String(searchText || '')]);
+    return Array.isArray(result) ? result : [];
+  } catch (err) {
+    console.warn('[ModulePriv] fetchInstallableModulesAdmin failed:', err?.message || err);
+    return [];
+  }
+};
+
+export const setModuleMasterPermAdmin = async (mpId, field, value) => {
+  if (!mpId) throw new Error('mpId is required');
+  return _callKw('set_module_master_perm_admin', [Number(mpId), String(field), Boolean(value)]);
+};
+
+export const grantAllModuleAdmin = async (mpId) => {
+  if (!mpId) throw new Error('mpId is required');
+  return _callKw('grant_all_module_admin', [Number(mpId)]);
+};
+
+export const readOnlyModuleAdmin = async (mpId) => {
+  if (!mpId) throw new Error('mpId is required');
+  return _callKw('read_only_module_admin', [Number(mpId)]);
+};
+
+export const addModuleAdmin = async (userId, moduleId) => {
+  if (!userId || !moduleId) throw new Error('userId and moduleId are required');
+  return _callKw('add_module_admin', [Number(userId), Number(moduleId)]);
+};
+
+export const removeModuleAdmin = async (mpId) => {
+  if (!mpId) throw new Error('mpId is required');
+  return _callKw('remove_module_admin', [Number(mpId)]);
+};
+
 // Privilege summary counts for the in-app admin stat tiles. Wraps the sudo'd
 // `get_privilege_stats_for_user` so the calling user doesn't need direct read
 // ACL on privilege.role / module.privilege / menu.privilege / module.visibility.
@@ -1297,7 +1365,9 @@ export const fetchHiddenAppFeatures = async (userId) => {
       return [];
     }
     const result = response.data?.result;
-    return Array.isArray(result) ? result.filter((k) => typeof k === 'string') : [];
+    const keys = Array.isArray(result) ? result.filter((k) => typeof k === 'string') : [];
+    console.log(`[FeatureGate] fetchHiddenAppFeatures uid=${userId} → ${JSON.stringify(keys)}`);
+    return keys;
   } catch (err) {
     console.warn('[FeatureGate] fetchHiddenAppFeatures failed:', err?.message || err);
     return [];

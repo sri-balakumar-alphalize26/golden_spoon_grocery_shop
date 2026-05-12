@@ -38,7 +38,7 @@ const useAuthStore = create((set, get) => ({
         if (!uid) return;
         const keys = await fetchHiddenAppFeatures(uid);
         await get()._applyHiddenFeatures(keys);
-        console.log(`[AUTH] hiddenFeatures refreshed: ${keys.length} key(s)`);
+        console.log(`[AUTH] hiddenFeatures refreshed: ${keys.length} key(s): [${keys.join(', ')}]`);
     },
 
     // Initialize store by loading persisted user data

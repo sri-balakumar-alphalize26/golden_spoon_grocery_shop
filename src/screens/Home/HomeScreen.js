@@ -80,6 +80,7 @@ const SECTIONS = [
       { id: 'users', title: 'Users', screen: 'UsersScreen', featureKey: 'home.tile.users', icon: require('@assets/images/Home/section/userbtnhome.png'), bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
       { id: 'banners', title: 'App Banners', screen: 'BannersScreen', featureKey: 'home.tile.app_banners', icon: 'image', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
       { id: 'app_features', title: 'App Features', screen: 'AppFeaturesScreen', icon: 'visibility-off', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
+      { id: 'module_privileges', title: 'Module Privileges', screen: 'ModulePrivilegesScreen', icon: 'security', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
     ],
   },
 ];
@@ -196,6 +197,12 @@ const HomeScreen = ({ navigation }) => {
     const visibleItems = section.items.filter(
       (it) => !it.featureKey || !hiddenFeatures.has(it.featureKey)
     );
+    if (visibleItems.length < section.items.length) {
+      const hiddenList = section.items
+        .filter((it) => it.featureKey && hiddenFeatures.has(it.featureKey))
+        .map((it) => it.featureKey);
+      console.log(`[FeatureGate] section "${section.title}" filtered out:`, hiddenList);
+    }
     if (visibleItems.length === 0) return null;
     return (
       <View key={section.title} style={styles.section}>
