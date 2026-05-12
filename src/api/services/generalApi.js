@@ -1139,6 +1139,138 @@ export const fetchUserApiToken = async (uid) => {
   }
 };
 
+// ─── App-feature admin helpers ──────────────────────────────────────────────
+// Used by the in-app Admin screen at src/screens/Admin/AppFeaturesScreen.js to
+// list the catalog and manage per-user hide rows. None of these are needed by
+// regular users — only by privilege managers operating the admin UI.
+
+// Read every record in the app.feature catalog for the admin's picker.
+export const fetchAppFeaturesOdoo = async () => {
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'app.feature',
+          method: 'search_read',
+          args: [[['active', '=', true]]],
+          kwargs: {
+            fields: ['id', 'feature_key', 'name', 'description', 'sequence'],
+            order: 'sequence asc, name asc',
+          },
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    if (response.data && response.data.error) {
+      console.warn('[FeatureAdmin] fetchAppFeaturesOdoo error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    return Array.isArray(response.data?.result) ? response.data.result : [];
+  } catch (err) {
+    console.warn('[FeatureAdmin] fetchAppFeaturesOdoo failed:', err?.message || err);
+    return [];
+  }
+};
+
+// Per-user hide rows ONLY (does NOT merge role-level hides — those are
+// configured in the Odoo privilege.role form). Routed through the sudo'd
+// `get_user_hides_for_admin` model method so the calling user only needs to
+// be allowed to invoke the method, not have direct read ACL on the table —
+// the actual security gate is the admin check in AppFeaturesScreen.js.
+export const fetchHiddenAppFeaturesAdmin = async (userId) => {
+  if (!userId) return [];
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'app.feature.visibility',
+          method: 'get_user_hides_for_admin',
+          args: [Number(userId)],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    if (response.data && response.data.error) {
+      console.warn('[FeatureAdmin] fetchHiddenAppFeaturesAdmin error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    return Array.isArray(response.data?.result) ? response.data.result : [];
+  } catch (err) {
+    console.warn('[FeatureAdmin] fetchHiddenAppFeaturesAdmin failed:', err?.message || err);
+    return [];
+  }
+};
+
+// Toggle a (user_id, feature_id) hide row. hidden=true ensures a row exists,
+// hidden=false unlinks. Routed through `toggle_user_hide_admin` on the model —
+// one RPC, sudo'd server-side, no ACL dependency. Throws on error so the
+// caller can roll back its optimistic UI update.
+export const setAppFeatureHiddenForUser = async (userId, featureId, hidden) => {
+  if (!userId || !featureId) {
+    throw new Error('userId and featureId are required');
+  }
+  const response = await axios.post(
+    `${getOdooUrl()}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.feature.visibility',
+        method: 'toggle_user_hide_admin',
+        args: [Number(userId), Number(featureId), Boolean(hidden)],
+        kwargs: {},
+      },
+    },
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  if (response.data && response.data.error) {
+    throw new Error(response.data.error?.data?.message || 'Toggle failed');
+  }
+  return true;
+};
+
+// Fetch the set of app feature_keys hidden for a given user (per-user records
+// + role-level records, merged server-side). The auth store calls this once
+// at login and caches the result; downstream UI uses <FeatureGate> to gate
+// rendering on that cached set.
+export const fetchHiddenAppFeatures = async (userId) => {
+  if (!userId) return [];
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'app.feature.visibility',
+          method: 'get_hidden_features_for_user',
+          args: [[Number(userId)]],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    if (response.data && response.data.error) {
+      // Module not installed / not upgraded yet → no gating, log once and
+      // return an empty list so the app renders everything.
+      console.warn('[FeatureGate] get_hidden_features_for_user error:', response.data.error?.data?.message || response.data.error);
+      return [];
+    }
+    const result = response.data?.result;
+    return Array.isArray(result) ? result.filter((k) => typeof k === 'string') : [];
+  } catch (err) {
+    console.warn('[FeatureGate] fetchHiddenAppFeatures failed:', err?.message || err);
+    return [];
+  }
+};
+
 // Fetch categories directly from Odoo using JSON-RPC
 // NOTE: older code filtered by a non-existent `is_category` field which caused Odoo to raise
 // "Invalid field product.category.is_category". Use a safe domain (empty) and apply
@@ -2336,9 +2468,8 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
       }
     }
 
-    // Build invoice lines and log each line's tax/price
+    // Build invoice lines and log each line's price
     let totalUntaxed = 0;
-    let totalTax = 0;
     const invoice_lines = products.map((p) => {
       const price_unit = p.price || p.price_unit || p.list_price || 0;
       const quantity = p.quantity || p.qty || 1;
@@ -2377,21 +2508,12 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
         console.warn(`[INVOICE LINE] Skipping product_id for product '${p.name || p.product_name || ''}' (id: ${String(p.id)}) - not a numeric Odoo id`);
       }
 
-      // taxes: if provided as array of ids
-      if (p.tax_ids && Array.isArray(p.tax_ids) && p.tax_ids.length) {
-        vals.tax_ids = [[6, 0, p.tax_ids]];
-        // For diagnosis, log tax_ids
-        console.log(`[INVOICE LINE] Product ${p.id} tax_ids:`, p.tax_ids);
-      }
-      // For diagnosis, log price, quantity, discount and resolved id
+      // tax_ids intentionally omitted — Odoo's account.move.line.create
+      // auto-fills it from product_id.taxes_id (the current value), so the
+      // invoice always reflects the product's live tax setup in Odoo.
       const lineSubtotal = price_unit * quantity * (1 - discount_pct / 100);
       console.log(`[INVOICE LINE] Product ${p.id} price_unit:`, price_unit, 'quantity:', quantity, 'discount:', discount_pct + '%', 'line_subtotal:', lineSubtotal, 'resolved_product_id:', vals.product_id || 'none');
       totalUntaxed += lineSubtotal;
-      // Note: Odoo will compute tax, but log if tax_ids present
-      if (p.tax_ids && Array.isArray(p.tax_ids) && p.tax_ids.length) {
-        // This is a placeholder; actual tax calculation is done by Odoo
-        totalTax += 0; // You may add your own calculation if needed
-      }
       return [0, 0, vals];
     });
 
@@ -2407,7 +2529,6 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
 
     // Log computed totals before sending
     console.log('[INVOICE] Computed untaxed total:', totalUntaxed);
-    console.log('[INVOICE] Computed tax (placeholder, Odoo computes):', totalTax);
     console.log('[STEP 2] Invoice Payload:', moveVals);
 
     // Create the account.move record

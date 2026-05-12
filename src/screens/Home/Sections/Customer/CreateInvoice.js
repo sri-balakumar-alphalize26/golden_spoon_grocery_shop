@@ -41,8 +41,8 @@ const CreateInvoice = ({ navigation, route }) => {
   }), [cart]);
 
   const subtotal = useMemo(() => items.reduce((s, it) => s + (it.subtotal || 0), 0), [items]);
-  const tax = subtotal * 0.00; // placeholder tax 0%
-  const service = subtotal * 0.00; // placeholder service charge
+  const tax = 0;
+  const service = 0;
   const total = subtotal + tax + service;
 
   const renderLine = ({ item, index }) => (
@@ -70,22 +70,18 @@ const CreateInvoice = ({ navigation, route }) => {
     try {
       // For demo: use first product's partner_id if present, else fallback
       const partnerId = cart[0]?.partner_id || 1; // TODO: Replace 1 with actual customer selection
-      // Map cart items to Odoo invoice line format, validate IDs
+      // Map cart items to Odoo invoice line format, validate IDs.
+      // tax_ids intentionally omitted — Odoo auto-fills it from product.taxes_id.
       const products = cart.map(it => {
-        // Validate product_id is integer
         let productId = it.id;
         if (typeof productId === 'string') productId = parseInt(productId, 10);
         if (isNaN(productId)) productId = null;
-        // Validate tax_ids are array of integers
-        let taxIds = Array.isArray(it.tax_ids) ? it.tax_ids.map(tid => typeof tid === 'string' ? parseInt(tid, 10) : tid).filter(Number.isInteger) : [];
-        // Optionally validate account_id if present (not used here)
         return {
           id: productId,
           name: it.name,
           quantity: Number(it.quantity ?? it.qty ?? 1),
           price_unit: Number(it.price_unit ?? it.price ?? 0),
           discount: Number(it.discount ?? it.discount_percent ?? 0),
-          tax_ids: taxIds,
         };
       });
       // Log payload for debugging
@@ -181,10 +177,6 @@ const CreateInvoice = ({ navigation, route }) => {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
               <Text style={{ color: '#6b7280' }}>Service</Text>
               <Text style={{ fontWeight: '800' }}>{displayNum(service)}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-              <Text style={{ color: '#6b7280' }}>Tax</Text>
-              <Text style={{ fontWeight: '800' }}>{displayNum(tax)}</Text>
             </View>
             <View style={{ height: 1, backgroundColor: '#efefef', marginVertical: 8 }} />
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>

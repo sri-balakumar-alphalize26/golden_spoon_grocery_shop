@@ -533,7 +533,6 @@ const POSPayment = ({ navigation, route }) => {
                     name: p.name || p.product_name || '',
                     quantity: Number(p.quantity || p.qty || 1),
                     price: Math.round(Number(p.price || p.price_unit || 0) * ratio * 1000) / 1000,
-                    tax_ids: p.tax_ids || [],
                   }));
 
                   const currentTotal = Math.round(invoiceProducts.reduce((sum, p) => sum + (p.price * p.quantity), 0) * 1000000) / 1000000;
@@ -608,6 +607,12 @@ const POSPayment = ({ navigation, route }) => {
       // register screen is empty next time the user navigates back.
       try { clearProducts(); } catch (_) {}
 
+      // Tax is computed server-side by Odoo (account.move.line auto-fills
+      // tax_ids from product.taxes_id). The receipt no longer renders a Tax
+      // row, so we ship 0 here and the receipt's grand total stays equal to
+      // `subtotal + service - discount`.
+      const taxAmount = 0;
+
       navigation.navigate('POSReceiptScreen', {
         orderId: createdOrderId,
         products,
@@ -621,6 +626,7 @@ const POSPayment = ({ navigation, route }) => {
         discount: computedDiscountAmount || discountAmount,
         discountPercent: effectiveDiscountPercent,
         subtotal,
+        tax: taxAmount,
         invoiceChecked,
         invoice: invoiceInfo,
         sessionId,

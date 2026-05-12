@@ -163,9 +163,23 @@ const CartScreen = ({ navigation }) => {
                     }
 
                     showToastMessage('Invoice created and linked');
+                    // Tax is computed by Odoo server-side (account.move.line
+                    // auto-fills tax_ids from product.taxes_id). The local
+                    // receipt no longer renders a Tax row, so total = subtotal.
+                    const total = subtotal;
                     clearProducts();
                     setCreatingOrder(false);
-                    navigation.navigate('POSReceiptScreen', { orderId, products: cart, totalAmount: subtotal, customer: null, paymentMode: 'direct', invoiceId });
+                    navigation.navigate('POSReceiptScreen', {
+                      orderId,
+                      products: cart,
+                      subtotal,
+                      tax: 0,
+                      total,
+                      totalAmount: total,
+                      customer: null,
+                      paymentMode: 'direct',
+                      invoiceId,
+                    });
                   } catch (invErr) {
                     console.error('Invoice creation/linking error', invErr);
                     showToastMessage('Invoice creation failed');

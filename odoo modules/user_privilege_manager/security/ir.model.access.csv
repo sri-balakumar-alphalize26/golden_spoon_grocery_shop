@@ -23,3 +23,12 @@ access_role_module_visibility_manager,role.module.visibility.manager,model_role_
 access_module_visibility_bulk_wizard_manager,module.visibility.bulk.wizard.manager,model_module_visibility_bulk_wizard,user_privilege_manager.group_privilege_manager,1,1,1,1
 access_special_menu_privilege_user,special.menu.privilege.user,model_special_menu_privilege,group_privilege_user,1,0,0,0
 access_special_menu_privilege_manager,special.menu.privilege.manager,model_special_menu_privilege,group_privilege_manager,1,1,1,1
+access_app_feature_user,app.feature.user,model_app_feature,group_privilege_user,1,0,0,0
+access_app_feature_manager,app.feature.manager,model_app_feature,group_privilege_manager,1,1,1,1
+access_app_feature_all_read,app.feature.all.read,model_app_feature,base.group_user,1,0,0,0
+access_app_feature_visibility_user,app.feature.visibility.user,model_app_feature_visibility,group_privilege_user,1,0,0,0
+access_app_feature_visibility_manager,app.feature.visibility.manager,model_app_feature_visibility,group_privilege_manager,1,1,1,1
+access_app_feature_visibility_all_read,app.feature.visibility.all.read,model_app_feature_visibility,base.group_user,1,0,0,0
+access_role_app_feature_visibility_user,role.app.feature.visibility.user,model_role_app_feature_visibility,group_privilege_user,1,0,0,0
+access_role_app_feature_visibility_manager,role.app.feature.visibility.manager,model_role_app_feature_visibility,group_privilege_manager,1,1,1,1
+access_role_app_feature_visibility_all_read,role.app.feature.visibility.all.read,model_role_app_feature_visibility,base.group_user,1,0,0,0

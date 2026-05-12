@@ -19,15 +19,23 @@ import { OverlayLoader } from '@components/Loader';
 import { useLoader } from '@hooks';
 import { version as appVersion } from '../../../package.json';
 
+// Each item carries an optional `featureKey` that, when present, matches a
+// record in the Odoo `app.feature` catalog. The render path filters items
+// whose featureKey appears in useAuthStore.hiddenFeatures — that's how the
+// Privilege Manager dashboard (or in-app App Features admin) hides tiles
+// per user. Items without a featureKey are always visible.
+//
+// The `app_features` admin tile is intentionally featureKey-less so an admin
+// can never accidentally lock themselves out of the management screen.
 const SECTIONS = [
   {
     title: 'Sales & POS',
     icon: 'point-of-sale',
     accent: '#00BCD4',
     items: [
-      { id: 'pos', title: 'POS', screen: 'POSRegister', icon: require('@assets/images/Home/section/possss.png'), bg: '#E0F7FA', accent: '#00BCD4' },
-      { id: 'orders', title: 'Orders', screen: 'MyOrdersScreen', icon: require('@assets/images/Home/section/ordersbtnhome.png'), bg: '#E3F2FD', accent: '#2196F3' },
-      { id: 'salesreport', title: 'Sales Report', screen: 'SalesReport', icon: require('@assets/images/Home/section/salesreportbtn.png'), bg: '#F3E5F5', accent: '#9C27B0' },
+      { id: 'pos', title: 'POS', screen: 'POSRegister', featureKey: 'home.tile.pos', icon: require('@assets/images/Home/section/possss.png'), bg: '#E0F7FA', accent: '#00BCD4' },
+      { id: 'orders', title: 'Orders', screen: 'MyOrdersScreen', featureKey: 'home.tile.orders', icon: require('@assets/images/Home/section/ordersbtnhome.png'), bg: '#E3F2FD', accent: '#2196F3' },
+      { id: 'salesreport', title: 'Sales Report', screen: 'SalesReport', featureKey: 'home.tile.sales_report', icon: require('@assets/images/Home/section/salesreportbtn.png'), bg: '#F3E5F5', accent: '#9C27B0' },
     ],
   },
   {
@@ -35,8 +43,8 @@ const SECTIONS = [
     icon: 'inventory-2',
     accent: '#FF9800',
     items: [
-      { id: 'products', title: 'Products', screen: 'Products', icon: require('@assets/images/Home/section/productsbutton.png'), bg: '#FFF3E0', accent: '#FF9800' },
-      { id: 'stock', title: 'Stock', screen: 'StockScreen', icon: require('@assets/images/Home/section/inventory_management.png'), bg: '#FFF3E0', accent: '#FF9800' },
+      { id: 'products', title: 'Products', screen: 'Products', featureKey: 'home.tile.products', icon: require('@assets/images/Home/section/productsbutton.png'), bg: '#FFF3E0', accent: '#FF9800' },
+      { id: 'stock', title: 'Stock', screen: 'StockScreen', featureKey: 'home.tile.stock', icon: require('@assets/images/Home/section/inventory_management.png'), bg: '#FFF3E0', accent: '#FF9800' },
     ],
   },
   {
@@ -44,7 +52,7 @@ const SECTIONS = [
     icon: 'shopping-cart-checkout',
     accent: '#0EA5E9',
     items: [
-      { id: 'easy-purchase', title: 'Easy Purchase', screen: 'EasyPurchaseList', icon: require('@assets/images/Home/section/easypurchase.png'), bg: '#E0F2FE', accent: '#0284C7' },
+      { id: 'easy-purchase', title: 'Easy Purchase', screen: 'EasyPurchaseList', featureKey: 'home.tile.easy_purchase', icon: require('@assets/images/Home/section/easypurchase.png'), bg: '#E0F2FE', accent: '#0284C7' },
     ],
   },
   {
@@ -52,12 +60,8 @@ const SECTIONS = [
     icon: 'contacts',
     accent: '#16A34A',
     items: [
-      { id: 'customers', title: 'Customers', screen: 'CustomerScreen', icon: require('@assets/images/Home/section/customer.png'), bg: '#DCFCE7', accent: '#16A34A' },
-      // Tile mirrors the tools-rental "Customer ID Proofs" entry —
-      // opens a list of customers narrowed (in the screen) to those
-      // with at least one ID-proof binary on file. Tap → CustomerInfo
-      // for the full Front/Back section.
-      { id: 'customer-id-proofs', title: 'Customer ID Proofs', screen: 'CustomerIdProofs', icon: 'badge', bg: '#FEF3C7', accent: '#B45309' },
+      { id: 'customers', title: 'Customers', screen: 'CustomerScreen', featureKey: 'home.tile.customers', icon: require('@assets/images/Home/section/customer.png'), bg: '#DCFCE7', accent: '#16A34A' },
+      { id: 'customer-id-proofs', title: 'Customer ID Proofs', screen: 'CustomerIdProofs', featureKey: 'home.tile.customer_id_proofs', icon: 'badge', bg: '#FEF3C7', accent: '#B45309' },
     ],
   },
   {
@@ -65,7 +69,7 @@ const SECTIONS = [
     icon: 'account-balance-wallet',
     accent: '#DC2626',
     items: [
-      { id: 'expenses', title: 'Expenses', screen: 'ExpensesScreen', icon: 'receipt-long', bg: '#FEE2E2', accent: '#DC2626' },
+      { id: 'expenses', title: 'Expenses', screen: 'ExpensesScreen', featureKey: 'home.tile.expenses', icon: 'receipt-long', bg: '#FEE2E2', accent: '#DC2626' },
     ],
   },
   {
@@ -73,8 +77,9 @@ const SECTIONS = [
     icon: 'admin-panel-settings',
     accent: '#9C27B0',
     items: [
-      { id: 'users', title: 'Users', screen: 'UsersScreen', icon: require('@assets/images/Home/section/userbtnhome.png'), bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
-      { id: 'banners', title: 'App Banners', screen: 'BannersScreen', icon: 'image', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
+      { id: 'users', title: 'Users', screen: 'UsersScreen', featureKey: 'home.tile.users', icon: require('@assets/images/Home/section/userbtnhome.png'), bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
+      { id: 'banners', title: 'App Banners', screen: 'BannersScreen', featureKey: 'home.tile.app_banners', icon: 'image', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
+      { id: 'app_features', title: 'App Features', screen: 'AppFeaturesScreen', icon: 'visibility-off', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
     ],
   },
 ];
@@ -93,6 +98,7 @@ const padItems = (items) => {
 
 const HomeScreen = ({ navigation }) => {
   const authUser = useAuthStore((s) => s.user);
+  const hiddenFeatures = useAuthStore((s) => s.hiddenFeatures);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [backPressCount, setBackPressCount] = useState(0);
   const [detailLoading] = useLoader(false);
@@ -183,21 +189,30 @@ const HomeScreen = ({ navigation }) => {
     );
   };
 
-  const renderSection = (section) => (
-    <View key={section.title} style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <View style={[styles.sectionIconWrap, { backgroundColor: section.accent + '20' }]}>
-          <MaterialIcons name={section.icon} size={18} color={section.accent} />
+  const renderSection = (section) => {
+    // Filter out items whose featureKey is in the user's hidden set. If a
+    // section is left with zero visible items, hide the whole section
+    // header too — otherwise users see a labelled but empty row.
+    const visibleItems = section.items.filter(
+      (it) => !it.featureKey || !hiddenFeatures.has(it.featureKey)
+    );
+    if (visibleItems.length === 0) return null;
+    return (
+      <View key={section.title} style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <View style={[styles.sectionIconWrap, { backgroundColor: section.accent + '20' }]}>
+            <MaterialIcons name={section.icon} size={18} color={section.accent} />
+          </View>
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+          <View style={styles.sectionLine} />
+          <Text style={styles.sectionCount}>{visibleItems.length}</Text>
         </View>
-        <Text style={styles.sectionTitle}>{section.title}</Text>
-        <View style={styles.sectionLine} />
-        <Text style={styles.sectionCount}>{section.items.length}</Text>
+        <View style={styles.sectionGrid}>
+          {padItems(visibleItems).map(renderCard)}
+        </View>
       </View>
-      <View style={styles.sectionGrid}>
-        {padItems(section.items).map(renderCard)}
-      </View>
-</View>
-);
+    );
+  };
 
 return (
     <SafeAreaView backgroundColor={COLORS.primaryThemeColor}>

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <!-- Catalog of app-side UI elements that can be hidden per user/role.
+         Each record's feature_key must match the corresponding <FeatureGate
+         featureKey="..."> wrapper or the `featureKey` field on an item in
+         the React Native HomeScreen SECTIONS array. Adding more records here
+         + wrapping the matching UI element in JSX is the entire workflow
+         for making a new piece of the app gateable. -->
+
+    <record id="feature_home_banner" model="app.feature">
+        <field name="feature_key">home.banner</field>
+        <field name="name">Home Banner Carousel</field>
+        <field name="description">Top banner slideshow on the home screen.</field>
+        <field name="sequence">10</field>
+    </record>
+
+    <!-- Sales &amp; POS section tiles -->
+    <record id="feature_home_tile_pos" model="app.feature">
+        <field name="feature_key">home.tile.pos</field>
+        <field name="name">POS Tile</field>
+        <field name="description">Home tile: opens the Point of Sale register.</field>
+        <field name="sequence">20</field>
+    </record>
+    <record id="feature_home_tile_orders" model="app.feature">
+        <field name="feature_key">home.tile.orders</field>
+        <field name="name">Orders Tile</field>
+        <field name="description">Home tile: browse and manage customer orders.</field>
+        <field name="sequence">21</field>
+    </record>
+    <record id="feature_home_tile_sales_report" model="app.feature">
+        <field name="feature_key">home.tile.sales_report</field>
+        <field name="name">Sales Report Tile</field>
+        <field name="description">Home tile: view sales analytics and reports.</field>
+        <field name="sequence">22</field>
+    </record>
+
+    <!-- Inventory section tiles -->
+    <record id="feature_home_tile_products" model="app.feature">
+        <field name="feature_key">home.tile.products</field>
+        <field name="name">Products Tile</field>
+        <field name="description">Home tile: browse and manage the product catalog.</field>
+        <field name="sequence">30</field>
+    </record>
+    <record id="feature_home_tile_stock" model="app.feature">
+        <field name="feature_key">home.tile.stock</field>
+        <field name="name">Stock Tile</field>
+        <field name="description">Home tile: manage inventory levels.</field>
+        <field name="sequence">31</field>
+    </record>
+
+    <!-- Easy Purchase section tiles -->
+    <record id="feature_home_tile_easy_purchase" model="app.feature">
+        <field name="feature_key">home.tile.easy_purchase</field>
+        <field name="name">Easy Purchase Tile</field>
+        <field name="description">Home tile: quick bulk purchase ordering.</field>
+        <field name="sequence">40</field>
+    </record>
+
+    <!-- Contacts section tiles -->
+    <record id="feature_home_tile_customers" model="app.feature">
+        <field name="feature_key">home.tile.customers</field>
+        <field name="name">Customers Tile</field>
+        <field name="description">Home tile: customer directory and management.</field>
+        <field name="sequence">50</field>
+    </record>
+    <record id="feature_home_tile_customer_id_proofs" model="app.feature">
+        <field name="feature_key">home.tile.customer_id_proofs</field>
+        <field name="name">Customer ID Proofs Tile</field>
+        <field name="description">Home tile: view customer identity documents.</field>
+        <field name="sequence">51</field>
+    </record>
+
+    <!-- Finance section tiles -->
+    <record id="feature_home_tile_expenses" model="app.feature">
+        <field name="feature_key">home.tile.expenses</field>
+        <field name="name">Expenses Tile</field>
+        <field name="description">Home tile: record and track business expenses.</field>
+        <field name="sequence">60</field>
+    </record>
+
+    <!-- Administration section tiles
+         NOTE: the in-app "App Features" admin tile is intentionally NOT in
+         this catalog. Hiding it would lock an admin out of the very tool
+         that manages hides. -->
+    <record id="feature_home_tile_users" model="app.feature">
+        <field name="feature_key">home.tile.users</field>
+        <field name="name">Users Tile (Admin)</field>
+        <field name="description">Home tile: manage system users.</field>
+        <field name="sequence">70</field>
+    </record>
+    <record id="feature_home_tile_app_banners" model="app.feature">
+        <field name="feature_key">home.tile.app_banners</field>
+        <field name="name">App Banners Tile (Admin)</field>
+        <field name="description">Home tile: configure promotional banners.</field>
+        <field name="sequence">71</field>
+    </record>
+
+</odoo>

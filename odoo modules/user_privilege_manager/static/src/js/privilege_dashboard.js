@@ -30,6 +30,9 @@ class PrivilegeDashboard extends Component {
             menuPrivileges: [], specialMenuPrivileges: [], showAddMenu: false, menuSearch: "",
             // Hide Module/App (user)
             moduleVisibility: [], showAddModuleVis: false, moduleVisSearch: "",
+            // Hide App Feature (React Native side) — user level
+            appFeatureVisibility: [], showAddAppFeature: false, appFeatureSearch: "",
+            allAppFeatures: [],
             // Groups tab
             roles: [], selectedRoleId: null, selectedRoleName: "",
             searchRole: "", roleLines: [], roleModulePrivileges: [], roleMaster: {}, roleLoading: false,
@@ -39,17 +42,36 @@ class PrivilegeDashboard extends Component {
             // Group Hide Module
             roleModuleVisibility: [], showAddRoleModule: false, roleModuleSearch: "",
             // Collapsible sections (default collapsed)
-            collapsedSections: { hiddenMenus: true, moduleMenus: true, manualMenus: true, specialMenus: true, moduleVis: true, roleMenus: true, roleModuleVis: true },
+            collapsedSections: { hiddenMenus: true, moduleMenus: true, manualMenus: true, specialMenus: true, moduleVis: true, roleMenus: true, roleModuleVis: true, depGroup: true },
             // Pending changes tracking: key = "model:id", value = {field: newVal, ...}
             pendingChanges: {},
             pendingCount: 0,
             updating: false,
+            // Access groups per module-privilege id: { [mpId]: [{id, name, short_name, comment, is_member, is_user_group}, ...] }
+            moduleAccessGroups: {},
+            // Per-module classification: { [mpId]: {is_dependency, parent_module_names} }
+            moduleClassification: {},
+            // Per-module expand state for dependency cards (default collapsed)
+            expandedDepCards: {},
+            // Per-module expand state for Access Level chip section (default collapsed for tidiness)
+            expandedAccessLevels: {},
+            // Admin bypass status for the selected user (filled in by _checkUserAdminStatus)
+            adminStatus: { is_admin: false, bypass_group_names: [] },
+            cleaningUp: false,
+            // Dependency prompt modal state
+            depPrompt: {
+                show: false,
+                moduleId: null,
+                moduleName: "",
+                missingDeps: [],
+                selectedDepIds: {},
+            },
         });
 
         this._onClickOutside = this._onClickOutside.bind(this);
 
         onWillStart(async () => {
-            await Promise.all([this._loadAllUsers(), this._loadRoles(), this._loadInstalledModules(), this._loadAllMenus()]);
+            await Promise.all([this._loadAllUsers(), this._loadRoles(), this._loadInstalledModules(), this._loadAllMenus(), this._loadAppFeatures()]);
             if (this.state.allUsers.length > 0) await this.onSelectUser(this.state.allUsers[0].id);
         });
         onMounted(() => { document.addEventListener("click", this._onClickOutside, true); });
@@ -111,6 +133,16 @@ class PrivilegeDashboard extends Component {
                 }
             }
 
+            // Synthetic key: access_group:<groupId> dispatched via toggle_user_group
+            if (byModel['access_group'] && this.state.selectedUserId) {
+                for (const { id: groupId, fields } of byModel['access_group']) {
+                    await this.orm.call(
+                        "module.privilege", "toggle_user_group",
+                        [], { user_id: this.state.selectedUserId, group_id: groupId, checked: !!fields.is_member }
+                    );
+                }
+            }
+
             // Call action_apply_privileges for module privileges that had line changes
             if (byModel['module.privilege.line']) {
                 const mpIds = new Set();
@@ -152,6 +184,9 @@ class PrivilegeDashboard extends Component {
                 this.state.menuPrivileges = menuPrivs;
                 this.state.specialMenuPrivileges = specialMenuPrivs;
                 this.state.moduleVisibility = modVis;
+                if (byModel['access_group']) {
+                    await this._refreshAccessGroupsForAll();
+                }
             } else if (this.state.activeTab === 'roles' && this.state.selectedRoleId) {
                 await this._loadRoleLines(this.state.selectedRoleId);
             }
@@ -292,6 +327,17 @@ class PrivilegeDashboard extends Component {
         const s = this.state.moduleVisSearch.toLowerCase();
         return s ? avail.filter(m => (m.shortdesc || "").toLowerCase().includes(s) || m.name.toLowerCase().includes(s) || (m.menu_label || "").toLowerCase().includes(s)) : avail;
     }
+    get filteredAppFeaturesForAdd() {
+        const used = this.state.appFeatureVisibility.map(af =>
+            Array.isArray(af.feature_id) ? af.feature_id[0] : af.feature_id);
+        const all = this.state.allAppFeatures || [];
+        let avail = all.filter(f => !used.includes(f.id));
+        const s = (this.state.appFeatureSearch || "").toLowerCase();
+        return s ? avail.filter(f =>
+            (f.name || "").toLowerCase().includes(s) ||
+            (f.feature_key || "").toLowerCase().includes(s)
+        ) : avail;
+    }
     get filteredMenusForRoleAdd() {
         const used = this.state.roleMenuVisibility.map(m => m.menu_id[0]);
         let avail = this.state.allMenus.filter(m => !used.includes(m.id));
@@ -335,15 +381,16 @@ class PrivilegeDashboard extends Component {
         this.state.selectedUserName = user ? user.name : "";
         this.state.selectedUserLogin = user ? user.login : "";
         this.state.loading = true;
-        this.state.showAddModule = this.state.showAddMenu = this.state.showAddModuleVis = false;
+        this.state.showAddModule = this.state.showAddMenu = this.state.showAddModuleVis = this.state.showAddAppFeature = false;
         this._currentLoadId = userId;
 
-        const [mps, userRoles, menuPrivs, specialMenuPrivs, modVis] = await Promise.all([
+        const [mps, userRoles, menuPrivs, specialMenuPrivs, modVis, appFeatVis] = await Promise.all([
             this._fetchModulePrivileges(userId),
             this._fetchUserRoles(userId),
             this._fetchMenuPrivileges(userId),
             this._fetchSpecialMenuPrivileges(userId),
             this._fetchModuleVisibility(userId),
+            this._fetchAppFeatureVisibility(userId),
         ]);
         if (this._currentLoadId === userId) {
             this.state.modules = mps;
@@ -351,8 +398,134 @@ class PrivilegeDashboard extends Component {
             this.state.menuPrivileges = menuPrivs;
             this.state.specialMenuPrivileges = specialMenuPrivs;
             this.state.moduleVisibility = modVis;
+            this.state.appFeatureVisibility = appFeatVis;
+            this.state.moduleAccessGroups = {};
+            this.state.moduleClassification = {};
+            this.state.expandedDepCards = {};
+            this.state.expandedAccessLevels = {};
             this.state.loading = false;
+            // Load access groups, dep classification, admin status (non-blocking)
+            this._refreshAccessGroupsForAll();
+            this._refreshModuleClassification(userId);
+            this._checkUserAdminStatus(userId);
         }
+    }
+
+    /**
+     * Classify each of the user's modules as primary vs dependency so we
+     * can visually separate them in the UI. Dependency cards collapse by
+     * default to reduce clutter (Option A: "start with fewer things on
+     * screen, expand only what you need").
+     */
+    async _refreshModuleClassification(userId) {
+        try {
+            const classification = await this.orm.call(
+                "module.privilege", "classify_user_modules",
+                [], { user_id: userId }
+            );
+            this.state.moduleClassification = classification || {};
+        } catch (e) {
+            this.state.moduleClassification = {};
+        }
+    }
+
+    /** Is a given module.privilege card a dependency? */
+    isDependencyCard(mpId) {
+        const c = this.state.moduleClassification[mpId];
+        return !!(c && c.is_dependency);
+    }
+
+    /** Human-readable "dependency of X, Y" label. */
+    dependencyParentLabel(mpId) {
+        const c = this.state.moduleClassification[mpId];
+        if (!c || !c.parent_module_names || c.parent_module_names.length === 0) return "";
+        return c.parent_module_names.join(", ");
+    }
+
+    /** Dep card expand/collapse toggle. */
+    toggleDepCard(mpId) {
+        this.state.expandedDepCards[mpId] = !this.state.expandedDepCards[mpId];
+    }
+    isDepCardExpanded(mpId) {
+        return !!this.state.expandedDepCards[mpId];
+    }
+
+    /** Access-Level chip section expand/collapse (Option C). */
+    toggleAccessLevelSection(mpId) {
+        this.state.expandedAccessLevels[mpId] = !this.state.expandedAccessLevels[mpId];
+    }
+    isAccessLevelExpanded(mpId) {
+        return !!this.state.expandedAccessLevels[mpId];
+    }
+
+    /** Summary text for collapsed Access Level section: "User ✓ Auditor ✓ +3 more" */
+    accessLevelSummary(mpId) {
+        const groups = this.state.moduleAccessGroups[mpId] || [];
+        const ticked = groups.filter(g => g.is_member);
+        if (ticked.length === 0) {
+            return { text: "No access level selected", empty: true, total: groups.length };
+        }
+        const maxShown = 2;
+        const shownNames = ticked.slice(0, maxShown).map(g => g.short_name || g.name);
+        const more = ticked.length - maxShown;
+        return {
+            text: shownNames.join(", ") + (more > 0 ? `  +${more} more` : ""),
+            empty: false,
+            total: groups.length,
+            ticked_count: ticked.length,
+        };
+    }
+
+    async _checkUserAdminStatus(userId) {
+        try {
+            const status = await this.orm.call(
+                "module.privilege", "check_user_admin_status",
+                [], { user_id: userId }
+            );
+            this.state.adminStatus = status || { is_admin: false, bypass_group_names: [] };
+        } catch (e) {
+            this.state.adminStatus = { is_admin: false, bypass_group_names: [] };
+        }
+    }
+
+    async onCleanupAdminGroups() {
+        if (!this.state.selectedUserId) return;
+        if (this.state.cleaningUp) return;
+        // Browser-native confirm — simple, works everywhere
+        const proceed = window.confirm(
+            "This will remove 'Access Rights' and any Manager / Administrator " +
+            "groups that were over-granted to this user. It will NOT remove the " +
+            "full 'Settings' admin role — that must be done manually in " +
+            "Settings → Users & Companies.\n\nProceed?"
+        );
+        if (!proceed) return;
+        this.state.cleaningUp = true;
+        try {
+            const result = await this.orm.call(
+                "module.privilege", "cleanup_admin_groups",
+                [], { user_id: this.state.selectedUserId }
+            );
+            const removed = (result && result.removed) || [];
+            const kept = (result && result.kept_critical) || [];
+            let msg = "";
+            if (removed.length > 0) {
+                msg += `Removed ${removed.length} group(s): ` + removed.join("; ");
+            } else {
+                msg += "No over-granted groups found.";
+            }
+            if (kept.length > 0) {
+                msg += "\n\nStill to remove manually:\n" + kept.join("\n");
+            }
+            this.notification.add(msg, {
+                type: kept.length > 0 ? "warning" : "success",
+                sticky: kept.length > 0,
+            });
+            // Re-check status
+            await this._checkUserAdminStatus(this.state.selectedUserId);
+        } catch (e) {
+            this.notification.add("Error: " + (e.message || e), { type: "danger" });
+        }
+        this.state.cleaningUp = false;
     }
 
     async _fetchUserRoles(userId) {
@@ -390,6 +563,23 @@ class PrivilegeDashboard extends Component {
     async _fetchModuleVisibility(userId) {
         return this.orm.searchRead("module.visibility", [["user_id", "=", userId], ["active", "=", true]], ["id", "module_id", "module_shortdesc", "is_visible"], { order: "module_shortdesc" });
     }
+    async _fetchAppFeatureVisibility(userId) {
+        try {
+            return await this.orm.searchRead(
+                "app.feature.visibility",
+                [["user_id", "=", userId], ["active", "=", true]],
+                ["id", "feature_id", "feature_key"],
+                { order: "feature_key" },
+            );
+        } catch (e) { return []; }
+    }
+    async _loadAppFeatures() {
+        try {
+            this.state.allAppFeatures = await this.orm.searchRead(
+                "app.feature", [["active", "=", true]],
+                ["id", "name", "feature_key", "description"], { order: "sequence, name" });
+        } catch (e) { this.state.allAppFeatures = []; }
+    }
 
     // ══ COLLAPSIBLE SECTIONS ══
     toggleSection(section) { this.state.collapsedSections[section] = !this.state.collapsedSections[section]; }
@@ -415,33 +605,211 @@ class PrivilegeDashboard extends Component {
 
     async onPickModule(moduleId) {
         this.state.showAddModule = false;
+        const userId = this.state.selectedUserId;
+        if (!userId) return;
         try {
-            const result = await this.orm.create("module.privilege", [{ user_id: this.state.selectedUserId, module_id: moduleId }]);
+            // First check for missing dependencies — if any, show a prompt.
+            // The admin decides whether to co-add them. This prevents the
+            // classic "Can't access account.payment from Easy Sales" type errors.
+            let depInfo = null;
+            try {
+                depInfo = await this.orm.call(
+                    "module.privilege", "get_module_dependencies_info",
+                    [], { module_id: moduleId, user_id: userId }
+                );
+            } catch (e) {
+                depInfo = { missing_deps: [] };
+            }
+
+            if (depInfo && depInfo.missing_deps && depInfo.missing_deps.length > 0) {
+                // Show the prompt, actual add happens in onDepPromptConfirm
+                const selected = {};
+                for (const d of depInfo.missing_deps) selected[d.id] = true;
+                this.state.depPrompt = {
+                    show: true,
+                    moduleId: moduleId,
+                    moduleName: depInfo.module_name || "Module",
+                    missingDeps: depInfo.missing_deps,
+                    selectedDepIds: selected,
+                };
+                return;
+            }
+
+            // No missing deps — add directly
+            await this._applyPickModuleWithDeps(moduleId, []);
+        } catch (e) {
+            this.notification.add("Error: " + (e.message || e), { type: "danger" });
+        }
+    }
+
+    /** Core add-module flow used by both direct and post-prompt paths. */
+    async _applyPickModuleWithDeps(mainModuleId, extraModuleIds) {
+        const userId = this.state.selectedUserId;
+        if (!userId) return;
+        try {
+            // Add each chosen dependency first
+            for (const depId of extraModuleIds) {
+                try {
+                    const dres = await this.orm.create(
+                        "module.privilege",
+                        [{ user_id: userId, module_id: depId }]
+                    );
+                    const dmpId = Array.isArray(dres) ? dres[0] : dres;
+                    await this.orm.call("module.privilege", "action_load_models", [[dmpId]]);
+                    await this.orm.call("module.privilege", "action_apply_privileges", [[dmpId]]);
+                    await this.orm.call(
+                        "module.privilege", "create_module_menu_privileges", [],
+                        { module_id: depId, user_id: userId }
+                    );
+                } catch (e) {
+                    console.warn("Failed to add dependency", depId, e);
+                }
+            }
+
+            // Now add the main module
+            const result = await this.orm.create(
+                "module.privilege",
+                [{ user_id: userId, module_id: mainModuleId }]
+            );
             const mpId = Array.isArray(result) ? result[0] : result;
             await this.orm.call("module.privilege", "action_load_models", [[mpId]]);
             await this.orm.call("module.privilege", "action_apply_privileges", [[mpId]]);
-            this.state.modules = await this._fetchModulePrivileges(this.state.selectedUserId);
-
             const created = await this.orm.call(
                 "module.privilege", "create_module_menu_privileges", [],
-                { module_id: moduleId, user_id: this.state.selectedUserId }
+                { module_id: mainModuleId, user_id: userId }
             );
 
-            this.state.menuPrivileges = await this._fetchMenuPrivileges(this.state.selectedUserId);
-            if (created > 0) {
-                this.notification.add(
-                    `Module added. ${created} menu(s) now listed under HIDE MENU BUTTON — toggle OFF to hide specific menus.`,
-                    { type: "success" }
-                );
-            } else {
-                this.notification.add("Module added successfully.", { type: "success" });
-            }
+            // Refresh module + menu data
+            this.state.modules = await this._fetchModulePrivileges(userId);
+            this.state.menuPrivileges = await this._fetchMenuPrivileges(userId);
 
-        } catch (e) { this.notification.add("Error: " + (e.message || e), { type: "danger" }); }
+            // Load access groups for each newly-added module card
+            await this._refreshAccessGroupsForAll();
+            // Recompute dependency classification now that modules changed
+            await this._refreshModuleClassification(userId);
+
+            const parts = [];
+            if (extraModuleIds.length > 0) parts.push(`${extraModuleIds.length} dependency module(s) added`);
+            if (created > 0) parts.push(`${created} menu(s) available`);
+            const msg = parts.length > 0
+                ? `Module added. ${parts.join(", ")}.`
+                : "Module added successfully.";
+            this.notification.add(msg, { type: "success" });
+        } catch (e) {
+            this.notification.add("Error: " + (e.message || e), { type: "danger" });
+        }
+    }
+
+    /** Fetch and cache access groups for every module currently listed. */
+    async _refreshAccessGroupsForAll() {
+        const userId = this.state.selectedUserId;
+        if (!userId) return;
+        const modules = this.state.modules || [];
+        for (const mp of modules) {
+            const moduleId = Array.isArray(mp.module_id) ? mp.module_id[0] : mp.module_id;
+            try {
+                const groups = await this.orm.call(
+                    "module.privilege", "get_module_access_groups",
+                    [], { module_id: moduleId, user_id: userId }
+                );
+                this.state.moduleAccessGroups[mp.id] = groups || [];
+            } catch (e) {
+                this.state.moduleAccessGroups[mp.id] = [];
+            }
+        }
+    }
+
+    /** Tick or untick a single group. Buffered into pendingChanges; saved by Update. */
+    onAccessGroupToggle(mpId, groupId) {
+        if (this.state.updating) return;
+        const groups = this.state.moduleAccessGroups[mpId] || [];
+        const g = groups.find(x => x.id === groupId);
+        if (!g) return;
+        const newValue = !g.is_member;
+        g.is_member = newValue;  // optimistic UI flip
+
+        // Access groups are binary: if a pending entry already exists, this click
+        // reverts it back to the server baseline — drop the pending entry.
+        const key = `access_group:${groupId}`;
+        if (this.state.pendingChanges[key]) {
+            this._removePending(key);
+        } else {
+            this._addPending('access_group', groupId, 'is_member', newValue);
+        }
+    }
+
+    /** "Grant all groups" button inside a module card. */
+    async onGrantAllGroups(mpId) {
+        if (this.hasPendingChanges && !window.confirm("You have unsaved changes that will be discarded. Continue?")) {
+            return;
+        }
+        const mp = this.state.modules.find(m => m.id === mpId);
+        if (!mp) return;
+        const moduleId = Array.isArray(mp.module_id) ? mp.module_id[0] : mp.module_id;
+        try {
+            const count = await this.orm.call(
+                "module.privilege", "grant_all_module_groups",
+                [], { module_id: moduleId, user_id: this.state.selectedUserId }
+            );
+            // Refresh just this card
+            const refreshed = await this.orm.call(
+                "module.privilege", "get_module_access_groups",
+                [], { module_id: moduleId, user_id: this.state.selectedUserId }
+            );
+            this.state.moduleAccessGroups[mpId] = refreshed || [];
+            // Drop any pending access_group entries for groups in this card —
+            // the server-side bulk grant has just overwritten their state.
+            for (const g of (refreshed || [])) {
+                this._removePending(`access_group:${g.id}`);
+            }
+            this.notification.add(
+                count > 0
+                    ? `${count} additional access group(s) granted.`
+                    : "User already has all access groups for this module.",
+                { type: "success" }
+            );
+        } catch (e) {
+            this.notification.add("Error: " + (e.message || e), { type: "danger" });
+        }
+    }
+
+    // ── Dependency prompt actions ─────────────────────────────────
+    onDepPromptToggle(depId) {
+        const cur = this.state.depPrompt.selectedDepIds[depId];
+        this.state.depPrompt.selectedDepIds[depId] = !cur;
+    }
+    onDepPromptToggleAll(value) {
+        for (const d of this.state.depPrompt.missingDeps) {
+            this.state.depPrompt.selectedDepIds[d.id] = value;
+        }
+    }
+    async onDepPromptConfirm() {
+        const { moduleId, missingDeps, selectedDepIds } = this.state.depPrompt;
+        const picked = missingDeps.filter(d => selectedDepIds[d.id]).map(d => d.id);
+        this._closeDepPrompt();
+        await this._applyPickModuleWithDeps(moduleId, picked);
+    }
+    async onDepPromptSkip() {
+        const { moduleId } = this.state.depPrompt;
+        this._closeDepPrompt();
+        await this._applyPickModuleWithDeps(moduleId, []);
+    }
+    onDepPromptCancel() {
+        this._closeDepPrompt();
+    }
+    _closeDepPrompt() {
+        this.state.depPrompt = {
+            show: false,
+            moduleId: null,
+            moduleName: "",
+            missingDeps: [],
+            selectedDepIds: {},
+        };
     }
 
     // ══ MODULE TOGGLE METHODS (local state only — buffered) ══
     onMasterToggle(mpId, field, cur) {
+        if (this.state.updating) return;
         const mp = this.state.modules.find(m => m.id === mpId);
         if (!mp) return;
         const newVal = !cur;
@@ -457,6 +825,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onLineToggle(lineId, field, cur) {
+        if (this.state.updating) return;
         // Find the line in modules and update locally
         for (const mp of this.state.modules) {
             const line = (mp.lines || []).find(l => l.id === lineId);
@@ -469,6 +838,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onGrantAll(mpId) {
+        if (this.state.updating) return;
         const mp = this.state.modules.find(m => m.id === mpId);
         if (!mp) return;
         const masterFields = ['master_read', 'master_create', 'master_write', 'master_cancel', 'master_unlink'];
@@ -486,6 +856,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRevokeAll(mpId) {
+        if (this.state.updating) return;
         const mp = this.state.modules.find(m => m.id === mpId);
         if (!mp) return;
         // Read Only: read=true, everything else=false
@@ -515,6 +886,9 @@ class PrivilegeDashboard extends Component {
 
     async onFullPermission() {
         if (!this.state.selectedUserId) return;
+        if (this.hasPendingChanges && !window.confirm("You have unsaved changes that will be discarded. Continue?")) {
+            return;
+        }
         this.state.updating = true;
         try {
             const userId = this.state.selectedUserId;
@@ -595,6 +969,12 @@ class PrivilegeDashboard extends Component {
     }
 
     async onResetAllPrivileges() {
+        if (this.hasPendingChanges && !window.confirm("You have unsaved changes that will be discarded. Continue?")) {
+            return;
+        }
+        if (!window.confirm("This will delete ALL privilege records for this user. Continue?")) {
+            return;
+        }
         this.state.updating = true;
         try {
             const userId = this.state.selectedUserId;
@@ -702,6 +1082,7 @@ class PrivilegeDashboard extends Component {
 
     // Menu visibility toggles (local state only — buffered)
     onSpecialMenuVisToggle(spId, cur) {
+        if (this.state.updating) return;
         const sp = this.state.specialMenuPrivileges.find(s => s.id === spId);
         if (sp) {
             sp.is_visible = !cur;
@@ -718,6 +1099,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onMenuVisToggle(mpId, cur) {
+        if (this.state.updating) return;
         const mp = this.state.menuPrivileges.find(m => m.id === mpId);
         if (mp) {
             mp.is_visible = !cur;
@@ -755,6 +1137,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onModuleVisToggle(mvId, cur) {
+        if (this.state.updating) return;
         const mv = this.state.moduleVisibility.find(m => m.id === mvId);
         if (mv) {
             mv.is_visible = !cur;
@@ -767,6 +1150,39 @@ class PrivilegeDashboard extends Component {
             await this.orm.unlink("module.visibility", [mvId]);
             this._removePending(`module.visibility:${mvId}`);
             this.state.moduleVisibility = await this._fetchModuleVisibility(this.state.selectedUserId);
+        } catch (e) { this.notification.add("Error: " + (e.message || e), { type: "danger" }); }
+    }
+
+    // ══ USER: HIDE APP FEATURE (React Native side) ══
+    toggleAddAppFeature() {
+        const opening = !this.state.showAddAppFeature;
+        this.state.showAddModule = false;
+        this.state.showAddMenu = false;
+        this.state.showAddModuleVis = false;
+        this.state.showAddAppFeature = false;
+        this.state.showAddRoleMenu = false;
+        this.state.showAddRoleModule = false;
+        if (opening) { this.state.showAddAppFeature = true; this.state.appFeatureSearch = ""; }
+    }
+    onAppFeatureSearch(ev) { this.state.appFeatureSearch = ev.target.value; }
+
+    async onPickAppFeature(featureId) {
+        this.state.showAddAppFeature = false;
+        try {
+            await this.orm.create("app.feature.visibility", [{
+                user_id: this.state.selectedUserId,
+                feature_id: featureId,
+                active: true,
+            }]);
+            this.state.appFeatureVisibility = await this._fetchAppFeatureVisibility(this.state.selectedUserId);
+            this.notification.add("App feature hidden for this user.", { type: "success" });
+        } catch (e) { this.notification.add("Error: " + (e.message || e), { type: "danger" }); }
+    }
+
+    async onRemoveAppFeature(afvId) {
+        try {
+            await this.orm.unlink("app.feature.visibility", [afvId]);
+            this.state.appFeatureVisibility = await this._fetchAppFeatureVisibility(this.state.selectedUserId);
         } catch (e) { this.notification.add("Error: " + (e.message || e), { type: "danger" }); }
     }
 
@@ -837,6 +1253,7 @@ class PrivilegeDashboard extends Component {
 
     // ══ GROUP TOGGLE METHODS (local state only — buffered) ══
     onRoleMasterToggle(field, cur) {
+        if (this.state.updating) return;
         const roleId = this.state.selectedRoleId;
         if (!roleId) return;
         const newVal = !cur;
@@ -852,6 +1269,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleLineToggle(lineId, field, cur) {
+        if (this.state.updating) return;
         const line = this.state.roleLines.find(l => l.id === lineId);
         if (line) {
             line[field] = !cur;
@@ -860,6 +1278,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleModuleGrantAll(moduleId) {
+        if (this.state.updating) return;
         const mod = this.state.roleModulePrivileges.find(m => m.module_id === moduleId);
         if (!mod) return;
         const lineFields = ['perm_read', 'perm_create', 'perm_write', 'perm_cancel', 'perm_unlink'];
@@ -872,6 +1291,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleModuleRevokeAll(moduleId) {
+        if (this.state.updating) return;
         const mod = this.state.roleModulePrivileges.find(m => m.module_id === moduleId);
         if (!mod) return;
         for (const line of mod.lines) {
@@ -948,6 +1368,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleGrantAll() {
+        if (this.state.updating) return;
         const roleId = this.state.selectedRoleId;
         if (!roleId) return;
         const masterFields = ['master_read', 'master_create', 'master_write', 'master_cancel', 'master_unlink'];
@@ -965,6 +1386,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleRevokeAll() {
+        if (this.state.updating) return;
         const roleId = this.state.selectedRoleId;
         if (!roleId) return;
         // Read Only: read=true, everything else=false
@@ -993,6 +1415,12 @@ class PrivilegeDashboard extends Component {
     }
 
     async onResetRolePrivileges() {
+        if (this.hasPendingChanges && !window.confirm("You have unsaved changes that will be discarded. Continue?")) {
+            return;
+        }
+        if (!window.confirm("This will delete ALL privilege records for this group. Continue?")) {
+            return;
+        }
         this.state.updating = true;
         try {
             const roleId = this.state.selectedRoleId;
@@ -1059,6 +1487,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleMenuVisToggle(id, cur) {
+        if (this.state.updating) return;
         const rm = this.state.roleMenuVisibility.find(m => m.id === id);
         if (rm) {
             rm.is_visible = !cur;
@@ -1096,6 +1525,7 @@ class PrivilegeDashboard extends Component {
     }
 
     onRoleModuleVisToggle(id, cur) {
+        if (this.state.updating) return;
         const rmod = this.state.roleModuleVisibility.find(m => m.id === id);
         if (rmod) {
             rmod.is_visible = !cur;

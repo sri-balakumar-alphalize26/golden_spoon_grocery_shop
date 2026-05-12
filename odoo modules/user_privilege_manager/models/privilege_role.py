@@ -146,6 +146,15 @@ class PrivilegeRole(models.Model):
         help='Apps listed here with Visible=False will be hidden for all users in this group.',
     )
 
+    # ── Hide App Feature per Role ─────────────────────────────────
+    app_feature_visibility_ids = fields.One2many(
+        'role.app.feature.visibility', 'role_id',
+        string='App Feature Visibility',
+        copy=True,
+        help='App features listed here are hidden in the React Native app for '
+             'all users in this group.',
+    )
+
     # ── Master toggles for quick bulk control ────────────────────
     add_model_ids = fields.Many2many(
         'ir.model',
@@ -1113,6 +1122,28 @@ class PrivilegeRole(models.Model):
         return hidden
 
     @api.model
+    def get_hidden_features_by_role(self, user_id):
+        """Return set of app feature_key strings hidden for this user via roles."""
+        company_id = self.env.company.id
+        roles = self.sudo().search([
+            ('user_ids', 'in', [user_id]),
+            ('active', '=', True),
+            '|',
+            ('company_ids', 'in', [company_id]),
+            ('company_ids', '=', False),
+        ])
+        if not roles:
+            return set()
+
+        hidden = set()
+        for role in roles:
+            hidden.update(
+                role.app_feature_visibility_ids.filtered(lambda x: x.active)
+                    .mapped('feature_key')
+            )
+        return {k for k in hidden if k}
+
+    @api.model
     def is_menu_visible_by_role(self, menu_id, user_id):
         """Check if a specific menu is visible for user across all their roles."""
         hidden = self.get_hidden_menus_by_role(user_id)
@@ -1412,3 +1443,33 @@ class RoleModuleVisibility(models.Model):
                 'default_name': f'{self.name} Access',
             },
         }
+
+
+class RoleAppFeatureVisibility(models.Model):
+    """Per-role record that hides one app feature for every user in the role.
+
+    Mirrors the role.module.visibility shape — adding a row here causes the
+    feature_key to appear in get_hidden_features_by_role(user) for every user
+    that belongs to this role.
+    """
+    _name = 'role.app.feature.visibility'
+    _description = 'Group App Feature Visibility'
+    _order = 'role_id, feature_id'
+
+    role_id = fields.Many2one('privilege.role', required=True, ondelete='cascade')
+    feature_id = fields.Many2one(
+        'app.feature',
+        string='App Feature',
+        required=True,
+        ondelete='cascade',
+        domain=[('active', '=', True)],
+    )
+    feature_key = fields.Char(related='feature_id.feature_key', store=True, readonly=True)
+    feature_description = fields.Text(related='feature_id.description', readonly=True)
+    active = fields.Boolean(default=True)
+    company_id = fields.Many2one(related='role_id.company_id', store=True, readonly=True)
+
+    _sql_constraints = [
+        ('role_feature_unique', 'UNIQUE(role_id, feature_id)',
+         'A feature can be hidden only once per group.'),
+    ]

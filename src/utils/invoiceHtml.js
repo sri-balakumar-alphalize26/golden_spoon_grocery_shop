@@ -36,7 +36,6 @@ export const extractOrderRef = (orderName, orderId) => {
 export const generateInvoiceHtml = ({
   items = [],
   subtotal = 0,
-  tax = 0,
   service = 0,
   total = 0,
   discount = 0,

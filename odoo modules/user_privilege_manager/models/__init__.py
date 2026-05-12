@@ -4,4 +4,6 @@ from . import module_privilege
 from . import menu_privilege
 from . import module_visibility
 from . import res_users
+from . import user_privilege_app_feature
+from . import user_privilege_app_feature_visibility
 from . import privilege_role

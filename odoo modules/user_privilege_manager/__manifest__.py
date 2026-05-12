@@ -1,6 +1,6 @@
 {
     'name': 'User Privilege Manager',
-    'version': '19.0.4.1.0',
+    'version': '19.0.5.4.0',
     'category': 'Administration',
     'summary': 'Granular user-level CRUD + Hide Menu + Hide Module + Group-based privileges + User Management',
     'description': """
@@ -38,9 +38,11 @@
         'views/module_privilege_views.xml',
         'views/module_visibility_views.xml',
         'views/menu_privilege_views.xml',
+        'views/user_privilege_app_feature_views.xml',
         'views/dashboard_action.xml',
         'views/res_users_views.xml',
         'views/menu.xml',
+        'data/user_privilege_app_feature_data.xml',
     ],
     'assets': {
         'web.assets_backend': [
