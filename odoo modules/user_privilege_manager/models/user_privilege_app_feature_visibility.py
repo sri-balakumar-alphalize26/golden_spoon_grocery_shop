@@ -149,3 +149,41 @@ class AppFeatureVisibility(models.Model):
         if existing:
             existing.unlink()
         return False
+
+    @api.model
+    def get_privilege_stats_for_user(self, user_id):
+        """Return the four counts shown on the OWL Privilege Manager
+        dashboard's top stat tiles, plus a bonus app-feature count.
+
+        All counts are computed under sudo so the calling user only needs
+        to be allowed to invoke this method — same pattern as the rest of
+        the admin RPCs on this model.
+        """
+        zeros = {'groups': 0, 'modules': 0, 'hidden_menus': 0,
+                 'hidden_apps': 0, 'hidden_features': 0}
+        if not user_id:
+            return zeros
+        uid = int(user_id)
+        return {
+            'groups': self.env['privilege.role'].sudo().search_count([
+                ('user_ids', 'in', [uid]),
+                ('active', '=', True),
+            ]),
+            'modules': self.env['module.privilege'].sudo().search_count([
+                ('user_id', '=', uid),
+                ('active', '=', True),
+            ]),
+            'hidden_menus': self.env['menu.privilege'].sudo().search_count([
+                ('user_id', '=', uid),
+                ('is_visible', '=', False),
+            ]),
+            'hidden_apps': self.env['module.visibility'].sudo().search_count([
+                ('user_id', '=', uid),
+                ('is_visible', '=', False),
+                ('active', '=', True),
+            ]),
+            'hidden_features': self.sudo().search_count([
+                ('user_id', '=', uid),
+                ('active', '=', True),
+            ]),
+        }

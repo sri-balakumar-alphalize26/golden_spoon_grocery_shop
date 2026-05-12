@@ -1208,6 +1208,39 @@ export const fetchHiddenAppFeaturesAdmin = async (userId) => {
   }
 };
 
+// Privilege summary counts for the in-app admin stat tiles. Wraps the sudo'd
+// `get_privilege_stats_for_user` so the calling user doesn't need direct read
+// ACL on privilege.role / module.privilege / menu.privilege / module.visibility.
+// Returns zeros on any error so the UI just shows 0s instead of breaking.
+export const fetchPrivilegeStatsForUser = async (userId) => {
+  const ZERO = { groups: 0, modules: 0, hidden_menus: 0, hidden_apps: 0, hidden_features: 0 };
+  if (!userId) return ZERO;
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'app.feature.visibility',
+          method: 'get_privilege_stats_for_user',
+          args: [Number(userId)],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    if (response.data && response.data.error) {
+      console.warn('[FeatureAdmin] fetchPrivilegeStatsForUser error:', response.data.error?.data?.message || response.data.error);
+      return ZERO;
+    }
+    return { ...ZERO, ...(response.data?.result || {}) };
+  } catch (err) {
+    console.warn('[FeatureAdmin] fetchPrivilegeStatsForUser failed:', err?.message || err);
+    return ZERO;
+  }
+};
+
 // Toggle a (user_id, feature_id) hide row. hidden=true ensures a row exists,
 // hidden=false unlinks. Routed through `toggle_user_hide_admin` on the model —
 // one RPC, sudo'd server-side, no ACL dependency. Throws on error so the
