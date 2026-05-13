@@ -86,11 +86,11 @@ const SECTIONS = [
   },
 ];
 
-const padItems = (items) => {
-  // Pad to a multiple of 3 so each row fills out the 3-column grid.
-  const remainder = items.length % 3;
+const padItems = (items, cols = 2) => {
+  // Pad to a multiple of `cols` so each row fills out the grid.
+  const remainder = items.length % cols;
   if (remainder === 0) return items;
-  const padCount = 3 - remainder;
+  const padCount = cols - remainder;
   const padded = [...items];
   for (let i = 0; i < padCount; i++) {
     padded.push({ id: `blank-${items[0]?.id || 'x'}-${i}`, empty: true });
@@ -166,7 +166,7 @@ const HomeScreen = ({ navigation }) => {
     authUser?.company?.name ||
     null;
 
-  const renderCard = (item) => {
+  const renderCard = (item, sectionAccent) => {
     if (item.empty) {
       return <View key={item.id} style={[styles.card, styles.cardInvisible]} />;
     }
@@ -179,14 +179,23 @@ const HomeScreen = ({ navigation }) => {
         activeOpacity={0.7}
         onPress={() => handleCardPress(item)}
       >
+        <View style={[styles.cardAccentBar, { backgroundColor: sectionAccent }]} />
         <View style={[styles.iconWrapper, { backgroundColor: item.bg }]}>
           {isImageAsset
             ? <Image source={item.icon} style={styles.cardIcon} resizeMode="contain" />
-            : <MaterialIcons name={item.icon} size={24} color={item.accent} />}
+            : <MaterialIcons name={item.icon} size={26} color={item.accent} />}
         </View>
         <View style={styles.cardTextContainer}>
-          <Text numberOfLines={2} ellipsizeMode="tail" style={styles.cardTitle}>{item.title}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.cardTitle}>
+            {item.title}
+          </Text>
         </View>
+        <MaterialIcons
+          name="chevron-right"
+          size={20}
+          color="#C9CDD6"
+          style={styles.cardChevron}
+        />
       </TouchableOpacity>
     );
   };
@@ -216,7 +225,7 @@ const HomeScreen = ({ navigation }) => {
           <Text style={styles.sectionCount}>{visibleItems.length}</Text>
         </View>
         <View style={styles.sectionGrid}>
-          {padItems(visibleItems).map(renderCard)}
+          {padItems(visibleItems, 2).map((item) => renderCard(item, section.accent))}
         </View>
       </View>
     );
@@ -407,48 +416,55 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   sectionGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 0 },
+  // 2-column row tiles. Width math: 47.5% × 2 + 1.25% × 4 margins = 100%.
   card: {
-    width: '30.5%',
+    width: '47.5%',
+    flexDirection: 'row',
     alignItems: 'center',
     margin: '1.25%',
     borderRadius: 14,
     backgroundColor: '#fff',
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    minHeight: 100,
+    paddingVertical: 14,
+    paddingLeft: 0,                  // accent bar handles the left edge
+    paddingRight: 10,
+    minHeight: 76,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.04)',
+    overflow: 'hidden',              // clip the accent bar to rounded corners
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
-      android: { elevation: 4 },
+      ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+      android: { elevation: 3 },
     }),
   },
   cardInvisible: { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0, borderWidth: 0 },
+  cardAccentBar: {
+    width: 4,
+    alignSelf: 'stretch',
+    marginRight: 12,
+  },
   iconWrapper: {
-    width: 44,
-    height: 44,
+    width: 52,
+    height: 52,
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 2,
   },
   cardIcon: {
-    width: 28,
-    height: 28,
+    width: 30,
+    height: 30,
   },
   cardTextContainer: {
-    alignSelf: 'stretch',
+    flex: 1,
+    paddingHorizontal: 10,
     justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: 6,
-    paddingHorizontal: 2,
   },
   cardTitle: {
-    fontSize: 10.5,
-    textAlign: 'center',
+    fontSize: 13,
+    textAlign: 'left',
     color: COLORS.primaryThemeColor,
     fontFamily: FONT_FAMILY.urbanistBold,
   },
+  cardChevron: { marginLeft: 4 },
   footer: {
     textAlign: 'center',
     fontSize: 12,

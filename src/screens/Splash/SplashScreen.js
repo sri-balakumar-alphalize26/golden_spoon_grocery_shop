@@ -67,7 +67,7 @@ const SplashScreen = () => {
                 style={styles.image}
                 resizeMode="contain"
             />
-            <Text style={styles.versionText}>Version 1.0.8</Text>
+            <Text style={styles.poweredText}>Powered by 369ai</Text>
         </View>
     );
 };
@@ -83,13 +83,14 @@ const styles = StyleSheet.create({
         width: '100%',
         height: '100%',
     },
-    versionText: {
+    poweredText: {
         position: 'absolute',
-        bottom: 30,
-        fontSize: 16,
-        marginTop: 20,
-        color: COLORS.primaryThemeColor,
-        fontFamily: FONT_FAMILY.urbanistBold,
+        bottom: 24,
+        alignSelf: 'center',
+        fontSize: 12,
+        color: '#94a3b8',
+        fontFamily: FONT_FAMILY.urbanistMedium,
+        letterSpacing: 0.4,
     },
 });
 

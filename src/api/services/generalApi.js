@@ -5147,6 +5147,12 @@ export const fetchAllAppBannersOdoo = async () => {
         kwargs: {
           fields: ['id', 'name', 'sequence', 'active', 'image'],
           order: 'sequence asc, id asc',
+          // active_test:false disables Odoo's implicit `active=True`
+          // filter so deactivated banners still show up in the in-app
+          // admin list (greyed). Without this, the carousel and admin
+          // list would behave identically and admins would think
+          // deactivation deleted the row.
+          context: { active_test: false },
         },
       },
       id: new Date().getTime(),

@@ -2,7 +2,7 @@
   "expo": {
     "name": "icecube",
     "slug": "vendingmachine",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,6 +16,7 @@
     ],
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "1",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -39,6 +40,7 @@
         "android.permission.ACCESS_NETWORK_STATE"
       ],
       "package": "com.danat.alphalize",
+      "versionCode": 1,
       "usesCleartextTraffic": true
     },
     "plugins": [
