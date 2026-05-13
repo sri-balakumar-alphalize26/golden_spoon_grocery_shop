@@ -81,23 +81,10 @@ const BannersScreen = ({ navigation }) => {
             style={[styles.dot, item.active ? styles.dotOn : styles.dotOff]}
           />
         </View>
-        <Text style={styles.meta}>Sequence {item.sequence}</Text>
         <Text style={[styles.meta, item.active ? styles.activeOn : styles.activeOff]}>
           {item.active ? 'Active' : 'Inactive'}
         </Text>
       </View>
-      <TouchableOpacity
-        style={styles.cropBtn}
-        onPress={(e) => {
-          // Stop the row's onPress from also firing.
-          e.stopPropagation?.();
-          navigation.navigate('BannerDetails', { mode: 'edit', banner: item, autoCrop: true });
-        }}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        activeOpacity={0.7}
-      >
-        <Icon name="crop" size={20} color={NAVY} />
-      </TouchableOpacity>
       <Icon name="chevron-right" size={22} color="#C9CDD6" />
     </TouchableOpacity>
   ), [navigation]);
@@ -202,15 +189,6 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12, color: MUTED, fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 2 },
   activeOn: { color: '#16a34a' },
   activeOff: { color: '#9CA3AF' },
-  cropBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EEF2FF',
-    marginRight: 4,
-  },
   fab: {
     position: 'absolute',
     right: 16,

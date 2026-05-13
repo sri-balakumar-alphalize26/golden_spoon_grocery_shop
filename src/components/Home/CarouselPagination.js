@@ -5,19 +5,11 @@ import { useFocusEffect } from '@react-navigation/native'
 import { fetchAppBannersOdoo } from '@api/services/generalApi'
 import { FeatureGate } from '@components/FeatureGate'
 
-const { width: screenWidth, height: screenHeight } = Dimensions.get('window')
-
-// Bundled fallback so the carousel never renders empty — used while the
-// Odoo `app.banner` fetch is in flight, when the module isn't installed,
-// or when the admin hasn't uploaded any banners yet.
-const FALLBACK_BANNERS = [
-  { id: 'fallback-1', source: require('@assets/images/Home/Banner/Banner1.png') },
-  { id: 'fallback-2', source: require('@assets/images/Home/Banner/Banner2.png') },
-]
+const { width: screenWidth } = Dimensions.get('window')
 
 const CarouselPagination = () => {
   const [activeSlide, setActiveSlide] = useState(0)
-  const [data, setData] = useState(FALLBACK_BANNERS)
+  const [data, setData] = useState([])
 
   // Refetch every time the Home screen comes into focus so banners
   // added/edited/deleted (in the in-app admin tile OR in Odoo Web)
@@ -30,20 +22,24 @@ const CarouselPagination = () => {
         const remote = await fetchAppBannersOdoo()
         if (!alive) return
         if (Array.isArray(remote) && remote.length > 0) {
-          console.log(`[AppBanner] carousel got ${remote.length} rows, switching from fallback`)
+          console.log(`[AppBanner] carousel got ${remote.length} rows`)
           setData(remote.map((b) => ({
             id: `remote-${b.id}`,
             source: { uri: `data:image/jpeg;base64,${b.image}` },
           })))
         } else {
-          // No active rows / Odoo unreachable → fall back to bundled images.
-          console.log('[AppBanner] carousel got 0 rows, using bundled fallback')
-          setData(FALLBACK_BANNERS)
+          // No active rows / Odoo unreachable → render nothing. The local
+          // assets/images/Home/Banner folder is intentionally NOT used as
+          // a fallback so the carousel only ever shows banner-module images.
+          console.log('[AppBanner] carousel got 0 rows, hiding carousel')
+          setData([])
         }
       })()
       return () => { alive = false }
     }, [])
   )
+
+  if (data.length === 0) return null
 
   return (
     <FeatureGate featureKey="home.banner">
@@ -96,7 +92,10 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    height: screenHeight * 0.14,
+    // Lock to 3:1 so the card's shape matches the BannerDetailsScreen
+    // image-picker crop frame (also `aspect: [3, 1]`). Width is set by
+    // Carousel's `itemWidth`, height is derived from aspectRatio.
+    aspectRatio: 3,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: 'transparent',

@@ -1,7 +1,7 @@
 // Banner create / edit screen — admin uploads / replaces a home-screen
-// banner image, sets its name + sequence + active flag. Save action is
-// the word "Save" in the top-right of the header (matches UserDetails).
-import React, { useEffect, useState } from 'react';
+// banner image, sets its name + active flag. Save action is the word
+// "Save" in the top-right of the header (matches UserDetails).
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -12,8 +12,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import Toast from 'react-native-toast-message';
@@ -22,6 +22,7 @@ import Text from '@components/Text';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { TextInput as FormInput } from '@components/common/TextInput';
+import ConfirmModal from '@components/Modal/ConfirmModal';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import {
   createAppBannerOdoo,
@@ -38,7 +39,6 @@ const SOFT_BG = '#F5F6FA';
 const BannerDetailsScreen = ({ navigation, route }) => {
   const mode = route?.params?.mode === 'edit' ? 'edit' : 'create';
   const seedBanner = route?.params?.banner || null;
-  const autoCrop = !!route?.params?.autoCrop;
   const bannerId = seedBanner?.id || null;
   // Defense-in-depth: mode-aware Save gate.
   const saveOpHidden = useFeatureHidden(mode === 'edit' ? 'app_banners.edit' : 'app_banners.add');
@@ -47,10 +47,10 @@ const BannerDetailsScreen = ({ navigation, route }) => {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
 
   const [form, setForm] = useState({
     name: seedBanner?.name || '',
-    sequence: String(seedBanner?.sequence ?? 10),
     active: seedBanner?.active !== false,
     image: seedBanner?.image || null,           // base64 string, no `data:` prefix
     image_filename: seedBanner?.image_filename || '',
@@ -59,48 +59,37 @@ const BannerDetailsScreen = ({ navigation, route }) => {
   const [errors, setErrors] = useState({});
 
   useEffect(() => {
-    console.log(`[AppBanner] detail mount mode=${mode}, bannerId=${bannerId}, autoCrop=${autoCrop}`);
+    console.log(`[AppBanner] detail mount mode=${mode}, bannerId=${bannerId}`);
   }, []);
 
   // Edit mode: pull the full record from Odoo so the form has the
   // latest base64 (the list helper drops it for non-active rows).
-  useEffect(() => {
-    if (mode !== 'edit' || !bannerId) return;
-    let alive = true;
-    (async () => {
-      const row = await fetchAppBannerByIdOdoo(bannerId);
-      if (!alive) return;
-      if (row) {
-        const imgKB = row.image ? Math.round(row.image.length / 1024) : 0;
-        console.log(`[AppBanner] detail bootstrap loaded, name="${row.name}", imageKB=${imgKB}`);
-        setForm((p) => ({
-          ...p,
-          name: row.name || p.name,
-          sequence: String(row.sequence ?? p.sequence),
-          active: row.active !== false,
-          image: row.image || p.image,
-          image_filename: row.image_filename || '',
-          imageDirty: false,
-        }));
-      } else {
-        console.warn('[AppBanner] detail bootstrap returned null');
-      }
-      setBootstrapping(false);
-    })();
-    return () => { alive = false; };
-  }, [mode, bannerId]);
-
-  // When the list's crop button navigates here with autoCrop=true, jump
-  // straight into the gallery + crop UI so the cashier doesn't have to
-  // tap "Replace image" first. Fires once after bootstrap completes.
-  const autoCropFiredRef = React.useRef(false);
-  useEffect(() => {
-    if (!autoCrop || bootstrapping || autoCropFiredRef.current) return;
-    autoCropFiredRef.current = true;
-    pickFromGallery();
-    // pickFromGallery is stable (doesn't depend on render-time refs we care about)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoCrop, bootstrapping]);
+  useFocusEffect(
+    useCallback(() => {
+      if (mode !== 'edit' || !bannerId) return;
+      let alive = true;
+      (async () => {
+        const row = await fetchAppBannerByIdOdoo(bannerId);
+        if (!alive) return;
+        if (row) {
+          const imgKB = row.image ? Math.round(row.image.length / 1024) : 0;
+          console.log(`[AppBanner] detail bootstrap loaded, name="${row.name}", imageKB=${imgKB}`);
+          setForm((p) => ({
+            ...p,
+            name: row.name || p.name,
+            active: row.active !== false,
+            image: row.image || p.image,
+            image_filename: row.image_filename || '',
+            imageDirty: false,
+          }));
+        } else {
+          console.warn('[AppBanner] detail bootstrap returned null');
+        }
+        setBootstrapping(false);
+      })();
+      return () => { alive = false; };
+    }, [mode, bannerId])
+  );
 
   const setField = (k, v) => {
     setForm((p) => ({ ...p, [k]: v }));
@@ -131,7 +120,9 @@ const BannerDetailsScreen = ({ navigation, route }) => {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.85,
         allowsEditing: true,
-        aspect: [16, 9],
+        // Match the Home carousel card's 3:1 aspect so what the admin
+        // crops is exactly what users see on Home (no cover-crop loss).
+        aspect: [3, 1],
         exif: false,
       });
       if (res.canceled) return;
@@ -181,14 +172,14 @@ const BannerDetailsScreen = ({ navigation, route }) => {
           name: form.name.trim(),
           image: form.image,
           image_filename: form.image_filename || 'banner.jpg',
-          sequence: Number(form.sequence) || 10,
+          sequence: 10,
           active: form.active,
         });
       } else {
         const payload = {
           id: bannerId,
           name: form.name.trim(),
-          sequence: Number(form.sequence) || 10,
+          sequence: 10,
           active: form.active,
         };
         // Only ship the new bytes when the user actually picked something.
@@ -229,41 +220,31 @@ const BannerDetailsScreen = ({ navigation, route }) => {
     }
   };
 
-  const handleDelete = () => {
-    Alert.alert(
-      'Delete banner?',
-      'This permanently removes the banner from the carousel.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            console.log(`[AppBanner] delete start, id=${bannerId}`);
-            setDeleting(true);
-            try {
-              const res = await deleteAppBannerOdoo(bannerId);
-              if (res?.error) {
-                const msg = res.error?.data?.message || res.error?.message || '';
-                console.warn('[AppBanner] delete failed:', msg);
-                Toast.show({
-                  type: 'error',
-                  text1: 'Delete failed',
-                  text2: msg,
-                  position: 'bottom',
-                });
-                return;
-              }
-              console.log(`[AppBanner] delete done, id=${bannerId}, ok=true`);
-              Toast.show({ type: 'success', text1: 'Banner deleted', position: 'bottom' });
-              navigation.goBack();
-            } finally {
-              setDeleting(false);
-            }
-          },
-        },
-      ],
-    );
+  const handleDelete = () => setDeleteConfirmVisible(true);
+
+  const performDelete = async () => {
+    setDeleteConfirmVisible(false);
+    console.log(`[AppBanner] delete start, id=${bannerId}`);
+    setDeleting(true);
+    try {
+      const res = await deleteAppBannerOdoo(bannerId);
+      if (res?.error) {
+        const msg = res.error?.data?.message || res.error?.message || '';
+        console.warn('[AppBanner] delete failed:', msg);
+        Toast.show({
+          type: 'error',
+          text1: 'Delete failed',
+          text2: msg,
+          position: 'bottom',
+        });
+        return;
+      }
+      console.log(`[AppBanner] delete done, id=${bannerId}, ok=true`);
+      Toast.show({ type: 'success', text1: 'Banner deleted', position: 'bottom' });
+      navigation.goBack();
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const SectionHeader = ({ icon, children }) => (
@@ -312,13 +293,6 @@ const BannerDetailsScreen = ({ navigation, route }) => {
               error={errors.name}
               required
             />
-            <FormInput
-              label="Sequence"
-              placeholder="10"
-              value={form.sequence}
-              onChangeText={(t) => setField('sequence', t.replace(/[^0-9]/g, ''))}
-              keyboardType="number-pad"
-            />
             <View style={styles.switchRow}>
               <Text style={styles.switchLabel}>Active</Text>
               <Switch
@@ -345,46 +319,25 @@ const BannerDetailsScreen = ({ navigation, route }) => {
               </View>
             )}
             {errors.image ? <Text style={styles.errorText}>{errors.image}</Text> : null}
-            {mode === 'edit' && form.image ? (
-              // Two-button row in edit mode — Replace (primary, swap the
-              // photo entirely) + Crop (ghost, re-frame the existing
-              // banner). Both share pickFromGallery under the hood; the
-              // labels disambiguate intent for the cashier.
-              <View style={styles.pickBtnRow}>
-                <TouchableOpacity
-                  style={[styles.pickBtn, styles.pickBtnFlex, picking && { opacity: 0.6 }]}
-                  onPress={pickFromGallery}
-                  disabled={picking}
-                  activeOpacity={0.85}
-                >
-                  <MaterialIcons name="cached" size={18} color="#fff" />
-                  <Text style={styles.pickBtnText}>
-                    {picking ? 'Loading…' : 'Replace image'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.pickBtn, styles.pickBtnFlex, styles.pickBtnGhost, picking && { opacity: 0.6 }]}
-                  onPress={pickFromGallery}
-                  disabled={picking}
-                  activeOpacity={0.85}
-                >
-                  <MaterialIcons name="crop" size={18} color={NAVY} />
-                  <Text style={[styles.pickBtnText, styles.pickBtnGhostText]}>Crop</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={[styles.pickBtn, picking && { opacity: 0.6 }]}
-                onPress={pickFromGallery}
-                disabled={picking}
-                activeOpacity={0.85}
-              >
-                <MaterialIcons name="photo-library" size={18} color="#fff" />
-                <Text style={styles.pickBtnText}>
-                  {picking ? 'Loading…' : 'Pick from gallery'}
-                </Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={[styles.pickBtn, picking && { opacity: 0.6 }]}
+              onPress={pickFromGallery}
+              disabled={picking}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons
+                name={mode === 'edit' && form.image ? 'cached' : 'photo-library'}
+                size={18}
+                color="#fff"
+              />
+              <Text style={styles.pickBtnText}>
+                {picking
+                  ? 'Loading…'
+                  : mode === 'edit' && form.image
+                    ? 'Replace image'
+                    : 'Pick from gallery'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           {/* DELETE — edit mode only */}
@@ -412,6 +365,17 @@ const BannerDetailsScreen = ({ navigation, route }) => {
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <ConfirmModal
+        isVisible={deleteConfirmVisible}
+        title="Delete banner?"
+        message="This permanently removes the banner from the carousel."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        destructive
+        onConfirm={performDelete}
+        onCancel={() => setDeleteConfirmVisible(false)}
+      />
     </SafeAreaView>
   );
 };
@@ -463,21 +427,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     backgroundColor: NAVY,
     borderRadius: 10, paddingVertical: 12, gap: 6,
-  },
-  pickBtnRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  pickBtnFlex: {
-    flex: 1,
-  },
-  pickBtnGhost: {
-    backgroundColor: '#fff',
-    borderWidth: 1.2,
-    borderColor: NAVY,
-  },
-  pickBtnGhostText: {
-    color: NAVY,
   },
   pickBtnText: {
     color: '#fff', fontFamily: FONT_FAMILY.urbanistBold, fontSize: 14, letterSpacing: 0.4,

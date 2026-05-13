@@ -7,19 +7,40 @@
         <field name="model">app.banner</field>
         <field name="arch" type="xml">
             <form string="Banner">
+                <header>
+                    <button name="action_unarchive_banner" type="object"
+                            string="Unarchive" class="oe_highlight"
+                            invisible="active"/>
+                    <button name="action_archive_banner" type="object"
+                            string="Archive"
+                            invisible="not active"/>
+                    <button name="action_delete_banner" type="object"
+                            string="Delete" class="btn-danger"
+                            confirm="This permanently removes the banner from the carousel. Continue?"/>
+                </header>
                 <sheet>
+                    <widget name="web_ribbon" title="Archived"
+                            bg_color="text-bg-danger" invisible="active"/>
+                    <!-- 3:1 image preview matches the mobile-app Home
+                         carousel exactly (CarouselPagination.js renders
+                         each banner card at aspectRatio: 3). Click the
+                         image to upload / replace; this is the native
+                         Odoo Replace UX. -->
+                    <field name="image" widget="image" class="oe_avatar"
+                           options="{'size': [900, 300], 'preview_image': 'image'}"/>
+                    <div class="oe_title">
+                        <label for="name" string="Banner Title"/>
+                        <h1>
+                            <field name="name" placeholder="e.g. Summer Sale"/>
+                        </h1>
+                    </div>
                     <group>
-                        <group>
-                            <field name="name"/>
-                            <field name="sequence"/>
-                            <field name="active"/>
-                        </group>
-                        <group>
-                            <field name="image" widget="image" options="{'size': [800, 400]}"/>
-                            <field name="image_filename" invisible="1"/>
-                        </group>
+                        <field name="active"/>
                     </group>
+                    <field name="image_filename" invisible="1"/>
+                    <field name="sequence" invisible="1"/>
                 </sheet>
+                <chatter/>
             </form>
         </field>
     </record>
@@ -29,12 +50,65 @@
         <field name="name">app.banner.list</field>
         <field name="model">app.banner</field>
         <field name="arch" type="xml">
-            <list string="Banners" editable="bottom">
-                <field name="sequence" widget="handle"/>
-                <field name="image" widget="image" options="{'size': [100, 50]}"/>
+            <list string="Banners" multi_edit="1">
+                <field name="image" widget="image" class="oe_avatar"
+                       options="{'size': [120, 40]}"/>
+                <field name="name"/>
+                <field name="active" widget="boolean_toggle"/>
+                <field name="create_date" optional="hide"/>
+                <field name="write_date" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Kanban View -->
+    <record id="app_banner_kanban_view" model="ir.ui.view">
+        <field name="name">app.banner.kanban</field>
+        <field name="model">app.banner</field>
+        <field name="arch" type="xml">
+            <kanban>
+                <field name="id"/>
                 <field name="name"/>
                 <field name="active"/>
-            </list>
+                <field name="write_date"/>
+                <templates>
+                    <!-- Odoo 19 kanban: template name MUST be "card"
+                         (legacy "kanban-box" was dropped) and the
+                         kanban_image() helper was REMOVED — calling it
+                         throws "ctx.kanban_image is not a function".
+                         Use the public /web/image/<model>/<id>/<field>
+                         endpoint instead, with ?unique=<write_date> to
+                         bust the browser cache when admins replace the
+                         image. -->
+                    <t t-name="card">
+                        <img t-attf-src="/web/image/app.banner/{{record.id.raw_value}}/image?unique={{record.write_date.raw_value}}"
+                             alt="Banner" class="w-100 rounded"
+                             style="aspect-ratio: 3 / 1; object-fit: cover;"/>
+                        <div class="mt-2 d-flex align-items-center">
+                            <strong class="me-2">
+                                <field name="name"/>
+                            </strong>
+                            <span t-if="!record.active.raw_value"
+                                  class="badge text-bg-secondary">Archived</span>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <!-- Search View -->
+    <record id="app_banner_search_view" model="ir.ui.view">
+        <field name="name">app.banner.search</field>
+        <field name="model">app.banner</field>
+        <field name="arch" type="xml">
+            <search string="Search Banners">
+                <field name="name"/>
+                <filter string="Active" name="active"
+                        domain="[('active', '=', True)]"/>
+                <filter string="Archived" name="inactive"
+                        domain="[('active', '=', False)]"/>
+            </search>
         </field>
     </record>
 
@@ -42,10 +116,21 @@
     <record id="app_banner_action" model="ir.actions.act_window">
         <field name="name">App Banners</field>
         <field name="res_model">app.banner</field>
-        <field name="view_mode">list,form</field>
+        <field name="view_mode">kanban,list,form</field>
+        <field name="search_view_id" ref="app_banner_search_view"/>
+        <field name="context">{'search_default_active': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Add your first banner</p>
+            <p>
+                Banners appear in the mobile app's Home carousel at a fixed
+                3:1 aspect ratio. Upload images cropped to 3:1 for the
+                cleanest look.
+            </p>
+        </field>
     </record>
 
     <!-- Menu -->
-    <menuitem id="app_banner_menu_root" name="App Banners" action="app_banner_action" sequence="100"/>
+    <menuitem id="app_banner_menu_root" name="App Banners"
+              action="app_banner_action" sequence="100"/>
 
 </odoo>
