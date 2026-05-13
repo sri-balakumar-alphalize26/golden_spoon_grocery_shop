@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Add a "Location" group on the pos.order form so a back-office
+         user can see the device GPS coordinates + reverse-geocoded place
+         name captured at receipt time. Read-only on purpose: edits flow
+         from the React Native register, not the desktop. -->
+    <record id="view_pos_pos_form_location" model="ir.ui.view">
+        <field name="name">pos.order.form.location</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_pos_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <group string="Location" name="order_location_group">
+                    <group>
+                        <field name="order_location_name" readonly="1"/>
+                    </group>
+                    <group>
+                        <field name="order_latitude" readonly="1"/>
+                        <field name="order_longitude" readonly="1"/>
+                    </group>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Add a Location column on the standard pos.order list. Marked
+         optional='show' so admins can hide it via the column toggle if
+         they don't care about it on a given filter. -->
+    <record id="view_pos_order_tree_location" model="ir.ui.view">
+        <field name="name">pos.order.tree.location</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_order_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='date_order']" position="after">
+                <field name="order_location_name" optional="show" string="Location"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Dedicated action for the app's "Orders with Location" submenu.
+         Filters to orders that actually captured a place name so the
+         list isn't padded with desktop-created orders that have no
+         GPS data. -->
+    <record id="action_pos_orders_with_location" model="ir.actions.act_window">
+        <field name="name">Orders with Location</field>
+        <field name="res_model">pos.order</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('order_location_name', '!=', False)]</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No POS orders with captured location yet.
+            </p>
+            <p>
+                Orders captured via the React Native POS register with GPS
+                permission granted will appear here, tagged with the device
+                latitude, longitude and reverse-geocoded place name.
+            </p>
+        </field>
+    </record>
+
+</odoo>

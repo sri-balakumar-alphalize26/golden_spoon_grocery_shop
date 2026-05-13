@@ -157,6 +157,89 @@ export const updatePosOrderOdoo = async (orderId, values) => {
   }
 };
 
+// Capture device GPS + reverse-geocoded place name and write them onto the
+// just-validated pos.order. Lazy-loads expo-location so the rest of the API
+// module doesn't pay the import cost. Graceful on permission denial / GPS
+// timeout — returns null and logs `[POSLocation] denied/failed`. The 3
+// fields live in the standalone `pos_order_location` Odoo module.
+export const captureAndStoreOrderLocation = async (orderId) => {
+  if (!orderId) return null;
+  let Location;
+  try {
+    Location = require('expo-location');
+  } catch (e) {
+    console.warn('[POSLocation] expo-location not available:', e?.message || e);
+    return null;
+  }
+  try {
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (perm?.status !== 'granted') {
+      console.log('[POSLocation] denied — permission not granted');
+      return null;
+    }
+    // Fast path: try the OS's last-known position first. Returns instantly
+    // (no GPS lock) when there's a fix from the last 60s. Falls back to
+    // an active fetch only when the cache is stale.
+    let pos = null;
+    try {
+      pos = await Location.getLastKnownPositionAsync({
+        maxAge: 60_000,
+        requiredAccuracy: 200,
+      });
+    } catch (lastErr) {
+      // Some devices reject getLastKnownPositionAsync without options support.
+      // Fall through to the active fetch below.
+    }
+    if (!pos) {
+      pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy?.Low ?? 1,
+        timeout: 2500,
+      });
+    }
+    const latitude = pos?.coords?.latitude;
+    const longitude = pos?.coords?.longitude;
+    if (latitude == null || longitude == null) {
+      console.warn('[POSLocation] failed — no coords from GPS');
+      return null;
+    }
+    let locationName = '';
+    try {
+      const places = await Location.reverseGeocodeAsync({ latitude, longitude });
+      const p = (places && places[0]) || null;
+      if (p) {
+        locationName = [p.street, p.name && p.name !== p.street ? p.name : null,
+                        p.district, p.city || p.subregion, p.region, p.country]
+          .filter(Boolean).join(', ');
+      }
+    } catch (geoErr) {
+      console.warn('[POSLocation] reverse geocode failed:', geoErr?.message || geoErr);
+    }
+    const writeResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'write',
+        args: [[Number(orderId)], {
+          order_latitude: Number(latitude),
+          order_longitude: Number(longitude),
+          order_location_name: locationName || '',
+        }],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (writeResp.data?.error) {
+      console.warn('[POSLocation] write failed:', writeResp.data.error?.data?.message || writeResp.data.error);
+      return null;
+    }
+    console.log('[POSLocation] captured', { orderId, latitude, longitude, locationName });
+    return { latitude, longitude, locationName };
+  } catch (err) {
+    console.warn('[POSLocation] failed:', err?.message || err);
+    return null;
+  }
+};
+
 export const validatePosOrderOdoo = async (orderId) => {
   try {
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -4471,6 +4554,9 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           'partner_id', 'user_id', 'date_order',
           'amount_total', 'amount_tax', 'amount_paid', 'amount_return',
           'state', 'session_id', 'config_id', 'lines',
+          // Location fields populated by the RN app at Validate Payment
+          // time via the standalone pos_order_location module.
+          'order_latitude', 'order_longitude', 'order_location_name',
         ],
         limit: 1,
       },
@@ -4518,7 +4604,7 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
     }
   }
 
-  return {
+  const result = {
     id: order.id,
     name: order.name || '',
     pos_reference: order.pos_reference || '',
@@ -4533,7 +4619,21 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
     amount_return: Number(order.amount_return) || 0,
     state: order.state || 'draft',
     lines,
+    // Location fields from the pos_order_location module. null/empty when
+    // the order didn't capture GPS (placed before the feature shipped or
+    // the cashier denied permission).
+    order_latitude: order.order_latitude == null || order.order_latitude === false ? null : Number(order.order_latitude),
+    order_longitude: order.order_longitude == null || order.order_longitude === false ? null : Number(order.order_longitude),
+    order_location_name: order.order_location_name || '',
   };
+  console.log('[POSLocation] fetchPosOrderDetailOdoo returned', {
+    id: result.id,
+    location_name: result.order_location_name,
+    latitude: result.order_latitude,
+    longitude: result.order_longitude,
+    rawKeysReturned: Object.keys(order).filter((k) => k.startsWith('order_')),
+  });
+  return result;
 };
 
 // Fetch sales report data from Odoo

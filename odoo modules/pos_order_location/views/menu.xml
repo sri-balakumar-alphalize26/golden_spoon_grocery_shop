@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Top-level app entry. Web client lists this in the app drawer
+         alongside Discuss / Contacts / etc. once application=True is
+         set in the manifest. The web_icon path is conventional; if
+         the PNG isn't shipped Odoo falls back to a generic placeholder
+         tile (the menu still appears). -->
+    <menuitem id="menu_pos_order_location_root"
+              name="POS Locations"
+              sequence="55"
+              web_icon="pos_order_location,static/description/icon.png"/>
+
+    <menuitem id="menu_pos_order_location_orders"
+              name="Orders with Location"
+              parent="menu_pos_order_location_root"
+              action="action_pos_orders_with_location"
+              sequence="10"/>
+
+</odoo>

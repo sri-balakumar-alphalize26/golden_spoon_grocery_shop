@@ -25,6 +25,7 @@ import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
 import Toast from 'react-native-toast-message';
 import { FeatureGate } from '@components/FeatureGate';
+import LocationModal from '@components/Modal/LocationModal';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -70,6 +71,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency) || { symbol: 'ر.ع.', position: 'before' };
   const [loading, setLoading] = useState(true);
   const [order, setOrder] = useState(null);
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
   // Each `pos.payment` attached to this order — drives the Payments card so
   // split-paid orders surface every method + amount instead of just the
   // aggregate `amount_paid`.
@@ -461,6 +463,41 @@ const OrderDetailScreen = ({ navigation, route }) => {
             </View>
             <Text style={s.invoiceChipText}>Print</Text>
           </TouchableOpacity>
+
+          {/* Location chip — opens the same popup as the post-payment
+              receipt. Disabled (greyed) when this order didn't capture
+              GPS (placed before the feature shipped, or permission was
+              denied that day). */}
+          {(() => {
+            const hasLocation = !!(
+              order?.order_location_name ||
+              (order?.order_latitude != null && order?.order_longitude != null)
+            );
+            return (
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[POSLocation] chip tap', {
+                    hasLocation,
+                    location_name: order?.order_location_name,
+                    latitude: order?.order_latitude,
+                    longitude: order?.order_longitude,
+                  });
+                  if (!hasLocation) {
+                    Toast.show({ type: 'info', text1: 'No location', text2: 'This order has no captured GPS data.' });
+                    return;
+                  }
+                  setLocationModalVisible(true);
+                }}
+                activeOpacity={0.85}
+                style={[s.invoiceChip, { borderColor: '#E9D5FF' }, !hasLocation && { opacity: 0.45 }]}
+              >
+                <View style={s.invoiceChipIcon}>
+                  <MaterialIcons name="place" size={20} color="#9333ea" />
+                </View>
+                <Text style={s.invoiceChipText}>Location</Text>
+              </TouchableOpacity>
+            );
+          })()}
         </View>
       </ScrollView>
 
@@ -488,6 +525,15 @@ const OrderDetailScreen = ({ navigation, route }) => {
           />
         </SafeAreaViewNative>
       </Modal>
+
+      {/* Shared Location modal — same look as the post-payment receipt. */}
+      <LocationModal
+        isVisible={locationModalVisible}
+        locationName={order?.order_location_name}
+        latitude={order?.order_latitude}
+        longitude={order?.order_longitude}
+        onClose={() => setLocationModalVisible(false)}
+      />
     </SafeAreaView>
   );
 };

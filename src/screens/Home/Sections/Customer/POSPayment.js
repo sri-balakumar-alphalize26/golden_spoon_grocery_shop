@@ -9,6 +9,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import {
   fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
   validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
+  captureAndStoreOrderLocation,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
 } from '@api/services/generalApi';
@@ -98,6 +99,28 @@ const fetchPaymentMethodId = async (journalId) => {
 };
 
 const POSPayment = ({ navigation, route }) => {
+  // Pre-warm the OS location cache on mount so by the time the cashier
+  // taps Validate Payment a few seconds later, getLastKnownPositionAsync
+  // returns a fresh fix synchronously (no GPS lock delay). Fire-and-
+  // forget; permission failures and offline are swallowed.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const Location = require('expo-location');
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (cancelled || perm?.status !== 'granted') return;
+        await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy?.Low ?? 1,
+        });
+        console.log('[POSLocation] pre-warm done');
+      } catch (e) {
+        // Pre-warm is best-effort; suppress.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const [invoiceChecked, setInvoiceChecked] = useState(false);
   const [amountModalVisible, setAmountModalVisible] = useState(false);
   const [customerModalVisible, setCustomerModalVisible] = useState(false);
@@ -378,6 +401,7 @@ const POSPayment = ({ navigation, route }) => {
       }
       let createdOrderId = orderId || null;
       let invoiceInfo = null;
+      let capturedLocation = null;
       if (!createdOrderId) {
         console.log('[STEP 1] No orderId passed to POSPayment. Creating a new order...');
         const posOrderPayload = {
@@ -519,6 +543,16 @@ const POSPayment = ({ navigation, route }) => {
             } else {
               console.log('✅ Order validated successfully');
 
+              // Capture device GPS + reverse-geocoded place name and store
+              // them on the just-validated pos.order. Best-effort: failures
+              // (permission denied / GPS timeout / no network) just leave
+              // capturedLocation null and the receipt skips the line.
+              try {
+                capturedLocation = await captureAndStoreOrderLocation(createdOrderId);
+              } catch (locErr) {
+                console.warn('[POSLocation] capture exception:', locErr?.message || locErr);
+              }
+
               const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
               if (shouldCreateInvoice) {
                 try {
@@ -631,6 +665,10 @@ const POSPayment = ({ navigation, route }) => {
         invoice: invoiceInfo,
         sessionId,
         registerName,
+        // GPS coordinates + place name captured at Validate Payment time
+        // (null if permission denied or capture failed — receipt skips
+        // the line in that case).
+        capturedLocation,
       });
     } catch (e) {
       Toast.show({ type: 'error', text1: 'POS Error', text2: e?.message || 'Failed to create POS order', position: 'bottom' });

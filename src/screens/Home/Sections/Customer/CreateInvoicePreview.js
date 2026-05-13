@@ -11,6 +11,7 @@ import { useProductStore } from '@stores/product';
 import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import Toast from 'react-native-toast-message';
+import LocationModal from '@components/Modal/LocationModal';
 
 const NAVY = '#2E294E';
 const ORANGE = '#F47B20';
@@ -31,6 +32,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const [previewHtml, setPreviewHtml] = useState('');
   const [downloading, setDownloading] = useState(false);
   const [printing, setPrinting] = useState(false);
+  // Tappable Location button + popup with Open-in-Maps link
+  // (popup is the shared <LocationModal> so the past-order detail and
+  // this screen render the same UI).
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
 
   // Itemised pos.payment records pulled from Odoo for this order. When the
   // order was paid via the partial-payment popup this returns 2+ entries
@@ -90,6 +95,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const discount = typeof params.discount !== 'undefined' ? Number(params.discount) : 0;
   const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + service - discount;
   const orderId = params.orderId || params.id || params.invoiceId || null;
+  // GPS + place name captured at Validate Payment time. Null if permission
+  // was denied or capture failed — receipt skips the line in that case.
+  const capturedLocation = params.capturedLocation || null;
 
   const grandTotal = total;
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
@@ -267,6 +275,23 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               </View>
             </View>
           </View>
+
+          {/* Location strip — only shown when capture succeeded */}
+          {capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null) ? (
+            <View style={[s.metaStrip, { marginTop: 8 }]}>
+              <View style={[s.metaCell, { flex: 1 }]}>
+                <View style={s.metaIconDisk}>
+                  <MaterialIcons name="place" size={16} color={NAVY} />
+                </View>
+                <View style={{ marginLeft: 8, flex: 1 }}>
+                  <Text style={s.metaCaption}>LOCATION</Text>
+                  <Text style={s.metaValue} numberOfLines={2}>
+                    {capturedLocation.locationName || `${Number(capturedLocation.latitude).toFixed(5)}, ${Number(capturedLocation.longitude).toFixed(5)}`}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
 
           {/* Plain paper-receipt preview — black on white, mirrors the print output */}
           <View style={s.paperOuter}>
@@ -466,6 +491,18 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               </View>
               <Text style={s.actionChipText}>Print</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => capturedLocation && setLocationModalVisible(true)}
+              disabled={!capturedLocation}
+              activeOpacity={0.85}
+              style={[s.actionChip, s.locationChip, !capturedLocation && { opacity: 0.45 }]}
+            >
+              <View style={s.actionIconDisk}>
+                <MaterialIcons name="place" size={20} color="#9333ea" />
+              </View>
+              <Text style={s.actionChipText}>Location</Text>
+            </TouchableOpacity>
           </View>
 
           <TouchableOpacity
@@ -503,6 +540,16 @@ const CreateInvoicePreview = ({ navigation, route }) => {
           />
         </SafeAreaView>
       </Modal>
+
+      {/* Location modal — shared component used by both this screen and
+          the past-order detail. Opened by the bottom Location chip. */}
+      <LocationModal
+        isVisible={locationModalVisible}
+        locationName={capturedLocation?.locationName}
+        latitude={capturedLocation?.latitude}
+        longitude={capturedLocation?.longitude}
+        onClose={() => setLocationModalVisible(false)}
+      />
     </SafeAreaView>
   );
 };
@@ -764,6 +811,11 @@ const s = StyleSheet.create({
     backgroundColor: '#f3e7f5',
     borderColor: '#7B2D8E',
   },
+  locationChip: {
+    backgroundColor: '#f3e8ff',
+    borderColor: '#9333ea',
+  },
+
   actionIconDisk: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: '#fff',
