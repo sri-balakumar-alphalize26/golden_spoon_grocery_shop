@@ -379,10 +379,6 @@ const OrderDetailScreen = ({ navigation, route }) => {
         {/* Totals */}
         <View style={s.totalsCard}>
           <View style={s.totalRow}>
-            <Text style={s.totalLabel}>Tax</Text>
-            <Text style={s.totalValue}>{formatCurrency(order.amount_tax, currency)}</Text>
-          </View>
-          <View style={s.totalRow}>
             <Text style={s.totalLabel}>Paid</Text>
             <Text style={s.totalValue}>{formatCurrency(order.amount_paid, currency)}</Text>
           </View>

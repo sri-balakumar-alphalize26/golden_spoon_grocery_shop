@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "icecube",
-    "slug": "vendingmachine",
+    "name": "Golden Spoon Vegetables",
+    "slug": "golden-spoon-vegetables",
     "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -39,7 +39,7 @@
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
       ],
-      "package": "com.danat.alphalize",
+      "package": "com.alphalize.goldenspoon",
       "versionCode": 1,
       "usesCleartextTraffic": true
     },
@@ -48,7 +48,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Grocery Shop to use your camera to capture ID-proof photos."
+          "cameraPermission": "Allow Golden Spoon Vegetables to use your camera to capture ID-proof photos."
         }
       ]
     ],
