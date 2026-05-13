@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<odoo noupdate="1">
+<odoo>
+    <!-- Tile catalog: noupdate=1 so admin-edited labels survive upgrades. -->
+    <data noupdate="1">
 
     <!-- Catalog of app-side UI elements that can be hidden per user/role.
          Each record's feature_key must match the corresponding <FeatureGate
@@ -96,6 +98,14 @@
         <field name="sequence">71</field>
     </record>
 
+    </data>
+
+    <!-- Per-operation child gates: noupdate=0 so the parent_id link and
+         description are re-applied every upgrade. These are structural
+         records (parent_id IS the source of truth); admins should not
+         re-parent them in the UI. -->
+    <data noupdate="0">
+
     <!-- Products screen: per-operation gates (not tile-level).
          Nested under the Products Tile via parent_id so they render as
          indented sub-rows behind an expand arrow in the App Features admin. -->
@@ -114,4 +124,5 @@
         <field name="sequence">101</field>
     </record>
 
+    </data>
 </odoo>

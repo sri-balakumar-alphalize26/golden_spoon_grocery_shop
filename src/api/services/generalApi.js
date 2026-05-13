@@ -1168,7 +1168,10 @@ export const fetchAppFeaturesOdoo = async () => {
       console.warn('[FeatureAdmin] fetchAppFeaturesOdoo error:', response.data.error?.data?.message || response.data.error);
       return [];
     }
-    return Array.isArray(response.data?.result) ? response.data.result : [];
+    const rows = Array.isArray(response.data?.result) ? response.data.result : [];
+    console.log('[FeatureAdmin] features fetched:', rows.length,
+      rows.map((r) => ({ id: r.id, key: r.feature_key, parent: r.parent_id })));
+    return rows;
   } catch (err) {
     console.warn('[FeatureAdmin] fetchAppFeaturesOdoo failed:', err?.message || err);
     return [];

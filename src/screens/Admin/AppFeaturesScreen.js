@@ -327,12 +327,17 @@ const AppFeaturesScreen = ({ navigation }) => {
       if (collapsedGroups.has(b.groupKey)) continue;
       for (const it of b.items) {
         const kids = childrenOf.get(it.id) || [];
-        out.push({ kind: 'feature', ...it, _hasChildren: kids.length > 0 });
+        out.push({ kind: 'feature', ...it, _hasChildren: kids.length > 0, _childCount: kids.length });
         if (kids.length > 0 && expandedParents.has(it.id)) {
           for (const c of kids) out.push({ kind: 'feature', ...c, _isChild: true });
         }
       }
     }
+    console.log('[FeatureAdmin] flatList:',
+      'childrenOf=', Array.from(childrenOf.entries()).map(([pid, kids]) =>
+        ({ pid, count: kids.length, keys: kids.map((k) => k.feature_key) })),
+      'rows=', out.filter((r) => r.kind === 'feature').map((r) =>
+        ({ id: r.id, key: r.feature_key, has: r._hasChildren, child: r._isChild })));
     return out;
   }, [features, hiddenIds, collapsedGroups, expandedParents]);
 
@@ -410,8 +415,8 @@ const AppFeaturesScreen = ({ navigation }) => {
           >
             <Icon
               name={isExpanded ? 'expand-more' : 'chevron-right'}
-              size={20}
-              color="#475569"
+              size={22}
+              color={NAVY}
             />
           </TouchableOpacity>
         ) : null}
@@ -420,6 +425,11 @@ const AppFeaturesScreen = ({ navigation }) => {
           <View style={{ flex: 1, marginLeft: 10 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <Text style={styles.featureName} numberOfLines={1}>{feature.name}</Text>
+              {feature._hasChildren ? (
+                <View style={styles.subCountPill}>
+                  <Text style={styles.subCountPillText}>{feature._childCount} options</Text>
+                </View>
+              ) : null}
               {isDirty ? <View style={styles.dirtyDot} /> : null}
             </View>
             {subline ? (
@@ -762,8 +772,29 @@ const styles = StyleSheet.create({
     marginLeft: 28,
   },
   expandChevron: {
-    marginRight: 4,
-    paddingHorizontal: 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+  },
+  subCountPill: {
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+  },
+  subCountPillText: {
+    fontSize: 10,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.semiBold,
+    letterSpacing: 0.2,
   },
   dirtyDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#f59e0b' },
   featureCardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
