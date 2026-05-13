@@ -1,6 +1,6 @@
 {
     'name': 'User Privilege Manager',
-    'version': '19.0.5.4.5',
+    'version': '19.0.5.4.6',
     'category': 'Administration',
     'summary': 'Granular user-level CRUD + Hide Menu + Hide Module + Group-based privileges + User Management',
     'description': """

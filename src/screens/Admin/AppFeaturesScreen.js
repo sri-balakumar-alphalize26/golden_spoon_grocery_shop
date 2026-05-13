@@ -624,6 +624,33 @@ const AppFeaturesScreen = ({ navigation }) => {
           </TouchableOpacity>
         )}
 
+        {/* ── Admin warning banner — privilege rules don't apply to admins
+             (Odoo bypasses access control checks at the framework level
+             for users in base.group_system). Mirrors the OWL dashboard's
+             warning banner. ── */}
+        {selectedUser?._isAdmin ? (
+          <View style={styles.adminWarnBanner}>
+            <View style={styles.adminWarnIconWrap}>
+              <Icon name="warning" size={22} color="#dc2626" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.adminWarnTitle}>
+                This user is an administrator — privilege rules will NOT apply
+              </Text>
+              <Text style={styles.adminWarnBody}>
+                {selectedUser.name} is a member of Role / Administrator. Odoo
+                bypasses all access control checks for administrators at the
+                framework level, so toggles below will have no effect.
+              </Text>
+              <Text style={styles.adminWarnBody}>
+                <Text style={styles.adminWarnFix}>To fix:</Text> open Settings →
+                Users &amp; Companies → {selectedUser.name}, change Role from
+                "Administrator" to "User", and save.
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* ── Stat tile (single banner since this admin only cares about
              the App Hidden Feature count) ── */}
         {selectedUser ? (
@@ -828,6 +855,36 @@ const styles = StyleSheet.create({
   },
   pickerEmptyTitle: { fontSize: 15, color: '#0f172a', fontFamily: FONT_FAMILY.semiBold },
   pickerEmptySub: { fontSize: 12, color: MUTED, marginTop: 2, fontFamily: FONT_FAMILY.regular },
+
+  // ── Admin warning banner ──────────────────────────────────────────
+  adminWarnBanner: {
+    flexDirection: 'row',
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
+    borderWidth: 1.5,
+    borderRadius: 14,
+    padding: 12,
+    marginHorizontal: 12, marginTop: 10,
+    gap: 10,
+    elevation: 1,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, shadowOffset: { width: 0, height: 1 },
+  },
+  adminWarnIconWrap: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  adminWarnTitle: {
+    fontSize: 13, color: '#b91c1c', fontFamily: FONT_FAMILY.semiBold,
+    letterSpacing: 0.1, marginBottom: 4,
+  },
+  adminWarnBody: {
+    fontSize: 12, color: '#991b1b', fontFamily: FONT_FAMILY.regular,
+    lineHeight: 17, marginTop: 2,
+  },
+  adminWarnFix: {
+    fontFamily: FONT_FAMILY.semiBold, color: '#7f1d1d',
+  },
 
   // ── Stat banner (single tile since this admin only shows hidden_features) ──
   statsRow: {
