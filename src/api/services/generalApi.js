@@ -1352,7 +1352,7 @@ export const fetchHiddenAppFeatures = async (userId) => {
         params: {
           model: 'app.feature.visibility',
           method: 'get_hidden_features_for_user',
-          args: [[Number(userId)]],
+          args: [Number(userId)],
           kwargs: {},
         },
       },
@@ -3739,11 +3739,13 @@ const _resolveUserGroupsField = async () => {
       id: new Date().getTime(),
     }, { headers: { 'Content-Type': 'application/json' } });
     const fields = probe.data?.result || {};
-    // Try in priority order. Skip computed-only fields by preferring
-    // names that are typically writable many2many.
+    // Try in priority order. Match by `type === 'many2many'` rather than
+    // `relation === 'res.groups'` — in Odoo 19 `group_ids` is a computed
+    // m2m and some builds omit `relation` from fields_get when only a
+    // narrow attribute set is requested.
     const candidates = ['group_ids', 'groups_id', 'direct_group_ids', 'all_group_ids'];
     let resolved = candidates.find(
-      (n) => fields[n] && fields[n].relation === 'res.groups'
+      (n) => fields[n] && (fields[n].type === 'many2many' || fields[n].relation === 'res.groups')
     );
     if (!resolved) {
       // Last-ditch fallback — fetch every field and pick anything that
@@ -3762,16 +3764,62 @@ const _resolveUserGroupsField = async () => {
       const allFields = all.data?.result || {};
       resolved = Object.keys(allFields).find(
         (n) => allFields[n].relation === 'res.groups' && allFields[n].type === 'many2many'
-      ) || 'groups_id';
+      ) || 'group_ids';
     }
     console.log(`[USERS] resolved groups field: ${resolved}`);
     _cachedUserGroupsField = resolved;
     return resolved;
   } catch (e) {
-    console.warn('[USERS] fields_get probe failed, falling back to groups_id:', e?.message || e);
-    _cachedUserGroupsField = 'groups_id';
-    return 'groups_id';
+    console.warn('[USERS] fields_get probe failed, falling back to group_ids:', e?.message || e);
+    _cachedUserGroupsField = 'group_ids';
+    return 'group_ids';
   }
+};
+
+// Detect "Invalid field 'X' on 'res.users'" errors from Odoo and, if X
+// is the groups field we just used, swap to the next candidate and
+// retry. Caches the corrected name for the rest of the session so a
+// stale or wrong probe result self-heals on first real call.
+const USER_GROUPS_FIELD_CANDIDATES = ['group_ids', 'groups_id', 'direct_group_ids', 'all_group_ids'];
+
+const _isInvalidGroupsFieldError = (errorObj, field) => {
+  const msg = errorObj?.data?.message || errorObj?.message || '';
+  const m = /Invalid field '([^']+)' on 'res\.users'/.exec(String(msg));
+  return !!(m && m[1] === field);
+};
+
+const _nextGroupsFieldCandidate = (used) => {
+  const tried = new Set(used);
+  return USER_GROUPS_FIELD_CANDIDATES.find((c) => !tried.has(c)) || null;
+};
+
+// Run a JSON-RPC call against res.users where `payload(field)` builds
+// the request body using the discovered groups field name. Retries
+// once with the next candidate if Odoo rejects the field.
+const _callUsersWithGroupsField = async (payloadBuilder) => {
+  const tried = [];
+  let field = await _resolveUserGroupsField();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    tried.push(field);
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      payloadBuilder(field),
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    const err = response.data?.error;
+    if (err && _isInvalidGroupsFieldError(err, field)) {
+      const next = _nextGroupsFieldCandidate(tried);
+      if (next) {
+        console.warn(`[USERS] field '${field}' rejected by server, retrying with '${next}'`);
+        _cachedUserGroupsField = next;
+        field = next;
+        continue;
+      }
+    }
+    return { response, field };
+  }
+  // Should be unreachable — loop exits via return above.
+  return { response: null, field };
 };
 
 // Create a new user in Odoo
@@ -3784,40 +3832,38 @@ export const createUserOdoo = async ({
     if (!login) throw new Error('login is required');
     if (!password) throw new Error('password is required');
 
-    const groupsField = await _resolveUserGroupsField();
-
-    const userVals = {
+    const baseVals = {
       name,
       login,
       password,
       email: email || '',
       phone: phone || '',
     };
-
-    // Add groups if provided (e.g., [1, 2, 3] for group IDs)
-    if (Array.isArray(groups) && groups.length > 0) {
-      userVals[groupsField] = [[6, 0, groups]];
-    }
     if (Array.isArray(companyIds) && companyIds.length > 0) {
-      userVals.company_ids = [[6, 0, companyIds]];
+      baseVals.company_ids = [[6, 0, companyIds]];
     }
     if (defaultCompanyId !== undefined && defaultCompanyId !== null) {
-      userVals.company_id = Number(defaultCompanyId);
+      baseVals.company_id = Number(defaultCompanyId);
     }
 
-    console.log('[CREATE USER] Creating user with payload:', userVals);
-
-    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'res.users',
-        method: 'create',
-        args: [userVals],
-        kwargs: {},
-      },
-      id: new Date().getTime(),
-    }, { headers: { 'Content-Type': 'application/json' } });
+    const { response } = await _callUsersWithGroupsField((field) => {
+      const userVals = { ...baseVals };
+      if (Array.isArray(groups) && groups.length > 0) {
+        userVals[field] = [[6, 0, groups]];
+      }
+      console.log('[CREATE USER] Creating user with payload:', userVals);
+      return {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.users',
+          method: 'create',
+          args: [userVals],
+          kwargs: {},
+        },
+        id: new Date().getTime(),
+      };
+    });
 
     if (response.data && response.data.error) {
       console.error('[CREATE USER] Odoo error:', response.data.error);
@@ -3877,10 +3923,9 @@ export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = '' }
       ];
     }
 
-    const groupsField = await _resolveUserGroupsField();
     const adminGroupId = await _resolveAdminGroupId();
 
-    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+    const { response, field: groupsField } = await _callUsersWithGroupsField((field) => ({
       jsonrpc: '2.0',
       method: 'call',
       params: {
@@ -3888,18 +3933,18 @@ export const fetchUsersOdoo = async ({ offset = 0, limit = 50, searchText = '' }
         method: 'search_read',
         args: [domain],
         kwargs: {
-          fields: ['id', 'name', 'login', 'email', 'phone', 'active', groupsField],
+          fields: ['id', 'name', 'login', 'email', 'phone', 'active', field],
           offset,
           limit,
           order: 'name asc',
         },
       },
       id: new Date().getTime(),
-    }, { headers: { 'Content-Type': 'application/json' } });
+    }));
 
     if (response.data && response.data.error) {
       console.error('[FETCH USERS] Odoo error:', response.data.error);
-      return { error: response.data.error };
+      return [];
     }
 
     const users = (response.data.result || []).map((u) => {
@@ -3922,8 +3967,7 @@ export const fetchUserDetailsOdoo = async (userId) => {
   try {
     const id = Number(userId);
     if (!id) return null;
-    const groupsField = await _resolveUserGroupsField();
-    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+    const { response, field: groupsField } = await _callUsersWithGroupsField((field) => ({
       jsonrpc: '2.0',
       method: 'call',
       params: {
@@ -3932,11 +3976,11 @@ export const fetchUserDetailsOdoo = async (userId) => {
         args: [[id]],
         kwargs: {
           fields: ['id', 'name', 'login', 'email', 'phone', 'active',
-                   'company_id', 'company_ids', groupsField, 'share'],
+                   'company_id', 'company_ids', field, 'share'],
         },
       },
       id: new Date().getTime(),
-    }, { headers: { 'Content-Type': 'application/json' } });
+    }));
     if (response.data?.error) {
       console.error('[FETCH USER] Odoo error:', response.data.error);
       return null;
@@ -4235,30 +4279,32 @@ export const updateUserOdoo = async ({
   try {
     const id = Number(userId);
     if (!id) throw new Error('userId is required');
-    const groupsField = await _resolveUserGroupsField();
-    const vals = {};
-    if (name !== undefined) vals.name = name;
-    if (login !== undefined) vals.login = login;
-    if (email !== undefined) vals.email = email;
-    if (phone !== undefined) vals.phone = phone;
-    if (active !== undefined) vals.active = !!active;
-    if (Array.isArray(companyIds)) vals.company_ids = [[6, 0, companyIds]];
+    const baseVals = {};
+    if (name !== undefined) baseVals.name = name;
+    if (login !== undefined) baseVals.login = login;
+    if (email !== undefined) baseVals.email = email;
+    if (phone !== undefined) baseVals.phone = phone;
+    if (active !== undefined) baseVals.active = !!active;
+    if (Array.isArray(companyIds)) baseVals.company_ids = [[6, 0, companyIds]];
     if (defaultCompanyId !== undefined && defaultCompanyId !== null) {
-      vals.company_id = Number(defaultCompanyId);
+      baseVals.company_id = Number(defaultCompanyId);
     }
-    if (Array.isArray(groupIds)) vals[groupsField] = [[6, 0, groupIds]];
 
-    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'res.users',
-        method: 'write',
-        args: [[id], vals],
-        kwargs: {},
-      },
-      id: new Date().getTime(),
-    }, { headers: { 'Content-Type': 'application/json' } });
+    const { response } = await _callUsersWithGroupsField((field) => {
+      const vals = { ...baseVals };
+      if (Array.isArray(groupIds)) vals[field] = [[6, 0, groupIds]];
+      return {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'res.users',
+          method: 'write',
+          args: [[id], vals],
+          kwargs: {},
+        },
+        id: new Date().getTime(),
+      };
+    });
     if (response.data?.error) {
       console.error('[UPDATE USER] Odoo error:', response.data.error);
       return { error: response.data.error };

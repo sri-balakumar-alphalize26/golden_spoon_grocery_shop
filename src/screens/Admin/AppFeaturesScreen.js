@@ -12,7 +12,7 @@
 // the header whenever there are unsaved changes; tapping it commits them
 // all in one batch. The user picker is a centered RNModal popup matching
 // the in-app convention (LogoutModal etc.).
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, StyleSheet, TouchableOpacity, Switch, FlatList, TextInput,
   RefreshControl, ActivityIndicator, Alert,
@@ -84,7 +84,10 @@ const AppFeaturesScreen = ({ navigation }) => {
   // Snapshot of `hiddenIds` as it was when modules were last fetched. Lets
   // us detect "toggled back to original" and accurately drive the Save (N)
   // counter — we only consider feature_ids whose current state diverges.
-  const originalHiddenIdsRef = useRef(new Set());
+  // State (not a ref) so the dirty-state useMemo is guaranteed to recompute
+  // when the snapshot changes — a stale ref read had been making the Save
+  // button persist after a successful save.
+  const [originalHiddenIds, setOriginalHiddenIds] = useState(new Set());
   const [saving, setSaving] = useState(false);
 
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -134,7 +137,7 @@ const AppFeaturesScreen = ({ navigation }) => {
       setHiddenIds(ids);
       // Fresh-loaded server state becomes the new "original" — buffered
       // changes from before this load are implicitly discarded.
-      originalHiddenIdsRef.current = new Set(ids);
+      setOriginalHiddenIds(new Set(ids));
       setStats(statsResult);
     } finally {
       setLoadingHidden(false);
@@ -144,7 +147,7 @@ const AppFeaturesScreen = ({ navigation }) => {
   useEffect(() => {
     if (!selectedUser) {
       setHiddenIds(new Set());
-      originalHiddenIdsRef.current = new Set();
+      setOriginalHiddenIds(new Set());
       setStats(ZERO_STATS);
       return;
     }
@@ -154,16 +157,15 @@ const AppFeaturesScreen = ({ navigation }) => {
   // Buffered-changes derivation: feature ids whose current hidden state
   // diverges from the originally-loaded snapshot.
   const pendingFeatureIds = useMemo(() => {
-    const orig = originalHiddenIdsRef.current;
     const pending = new Set();
     // Look at every id present in either set so we catch both "newly hidden"
     // and "newly un-hidden" cases.
-    const union = new Set([...orig, ...hiddenIds]);
+    const union = new Set([...originalHiddenIds, ...hiddenIds]);
     for (const id of union) {
-      if (orig.has(id) !== hiddenIds.has(id)) pending.add(id);
+      if (originalHiddenIds.has(id) !== hiddenIds.has(id)) pending.add(id);
     }
     return pending;
-  }, [hiddenIds]);
+  }, [hiddenIds, originalHiddenIds]);
   const pendingCount = pendingFeatureIds.size;
 
   // ── User picker modal ─────────────────────────────────────────────
