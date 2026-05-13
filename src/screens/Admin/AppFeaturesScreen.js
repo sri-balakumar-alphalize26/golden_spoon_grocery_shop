@@ -96,6 +96,9 @@ const AppFeaturesScreen = ({ navigation }) => {
 
   // Collapsed group keys (Set of groupKey strings). Default empty = all expanded.
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+  // Parent feature ids that are currently expanded (revealing nested children).
+  // Default empty = all collapsed; tap the chevron to reveal sub-rows.
+  const [expandedParents, setExpandedParents] = useState(new Set());
 
   // Admin guard — same shape as UsersScreen so behavior is consistent.
   useEffect(() => {
@@ -285,19 +288,30 @@ const AppFeaturesScreen = ({ navigation }) => {
 
   // ── Build the grouped flat list for FlatList ──────────────────────
   // Output items: { kind: 'header', groupKey, groupLabel, total, hiddenCount }
-  //         or:  { kind: 'feature', ...feature }
+  //         or:  { kind: 'feature', ...feature, _hasChildren?, _isChild? }
+  // Features with parent_id are pulled out of prefix-grouping and rendered
+  // as indented sub-rows directly under their parent (when the parent is
+  // expanded). Top-level features still group by dotted prefix as before.
   const flatList = useMemo(() => {
     if (!features || features.length === 0) return [];
-    // Bucket features by group
-    const buckets = new Map();
+    const parentIdOf = (f) => (Array.isArray(f.parent_id) ? f.parent_id[0] : f.parent_id) || null;
+    const childrenOf = new Map();
     for (const f of features) {
+      const pid = parentIdOf(f);
+      if (pid) {
+        if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+        childrenOf.get(pid).push(f);
+      }
+    }
+    const topLevel = features.filter((f) => !parentIdOf(f));
+    const buckets = new Map();
+    for (const f of topLevel) {
       const { groupKey, groupLabel } = groupOf(f);
       if (!buckets.has(groupKey)) {
         buckets.set(groupKey, { groupKey, groupLabel, items: [] });
       }
       buckets.get(groupKey).items.push(f);
     }
-    // Stable order: by group label
     const ordered = Array.from(buckets.values()).sort((a, b) =>
       a.groupLabel.localeCompare(b.groupLabel));
     const out = [];
@@ -310,18 +324,32 @@ const AppFeaturesScreen = ({ navigation }) => {
         total: b.items.length,
         hiddenCount,
       });
-      if (!collapsedGroups.has(b.groupKey)) {
-        for (const it of b.items) out.push({ kind: 'feature', ...it });
+      if (collapsedGroups.has(b.groupKey)) continue;
+      for (const it of b.items) {
+        const kids = childrenOf.get(it.id) || [];
+        out.push({ kind: 'feature', ...it, _hasChildren: kids.length > 0 });
+        if (kids.length > 0 && expandedParents.has(it.id)) {
+          for (const c of kids) out.push({ kind: 'feature', ...c, _isChild: true });
+        }
       }
     }
     return out;
-  }, [features, hiddenIds, collapsedGroups]);
+  }, [features, hiddenIds, collapsedGroups, expandedParents]);
 
   const toggleGroupCollapse = (groupKey) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(groupKey)) next.delete(groupKey);
       else next.add(groupKey);
+      return next;
+    });
+  };
+
+  const toggleParentExpand = (parentId) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
       return next;
     });
   };
@@ -366,8 +394,27 @@ const AppFeaturesScreen = ({ navigation }) => {
     const subline = [feature.feature_key, feature.description]
       .filter(Boolean)
       .join('  ·  ');
+    const isExpanded = expandedParents.has(feature.id);
     return (
-      <View style={[styles.featureCard, { borderLeftColor: borderColor }, isDirty && styles.featureCardDirty]}>
+      <View style={[
+        styles.featureCard,
+        { borderLeftColor: borderColor },
+        isDirty && styles.featureCardDirty,
+        feature._isChild && styles.featureCardChild,
+      ]}>
+        {feature._hasChildren ? (
+          <TouchableOpacity
+            onPress={() => toggleParentExpand(feature.id)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.expandChevron}
+          >
+            <Icon
+              name={isExpanded ? 'expand-more' : 'chevron-right'}
+              size={20}
+              color="#475569"
+            />
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.featureCardLeft}>
           <View style={[styles.statusDot, { backgroundColor: accent }]} />
           <View style={{ flex: 1, marginLeft: 10 }}>
@@ -710,6 +757,13 @@ const styles = StyleSheet.create({
   },
   featureCardDirty: {
     backgroundColor: '#fffbeb',
+  },
+  featureCardChild: {
+    marginLeft: 28,
+  },
+  expandChevron: {
+    marginRight: 4,
+    paddingHorizontal: 2,
   },
   dirtyDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#f59e0b' },
   featureCardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },

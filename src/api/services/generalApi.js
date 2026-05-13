@@ -1157,7 +1157,7 @@ export const fetchAppFeaturesOdoo = async () => {
           method: 'search_read',
           args: [[['active', '=', true]]],
           kwargs: {
-            fields: ['id', 'feature_key', 'name', 'description', 'sequence'],
+            fields: ['id', 'feature_key', 'name', 'description', 'sequence', 'parent_id'],
             order: 'sequence asc, name asc',
           },
         },

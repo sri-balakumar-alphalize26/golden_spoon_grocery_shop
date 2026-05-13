@@ -16,6 +16,7 @@ import { fetchEmployeesDropdown } from '@api/dropdowns/dropdownApi';
 import { Button } from '../Button';
 import { useProductStore } from '@stores/product';
 import { formatCurrency } from '@utils/currency';
+import { FeatureGate } from '@components/FeatureGate';
 
 const ProductDetail = ({ navigation, route }) => {
   const { detail = {}, fromCustomerDetails = {} } = route?.params || {};
@@ -311,14 +312,16 @@ const ProductDetail = ({ navigation, route }) => {
               <DetailRow icon="qr-code-scanner" label="Barcode" value={barcodeDisplay} />
               <DetailRow icon="tag" label="Internal Reference" value={internalRefDisplay} />
               {isOdooProduct && !route?.params?.fromPOS ? (
-                <TouchableOpacity
-                  style={s.editProductBtn}
-                  activeOpacity={0.85}
-                  onPress={() => navigation.navigate('ProductCreationForm', { productId: detail.id })}
-                >
-                  <MaterialIcons name="edit" size={18} color="#fff" />
-                  <Text style={s.editProductBtnText}>Edit Product</Text>
-                </TouchableOpacity>
+                <FeatureGate featureKey="products.edit">
+                  <TouchableOpacity
+                    style={s.editProductBtn}
+                    activeOpacity={0.85}
+                    onPress={() => navigation.navigate('ProductCreationForm', { productId: detail.id })}
+                  >
+                    <MaterialIcons name="edit" size={18} color="#fff" />
+                    <Text style={s.editProductBtnText}>Edit Product</Text>
+                  </TouchableOpacity>
+                </FeatureGate>
               ) : null}
             </View>
 

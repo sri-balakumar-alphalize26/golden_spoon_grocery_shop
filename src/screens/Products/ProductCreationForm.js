@@ -30,6 +30,7 @@ import {
   updatePosCategoryOdoo,
 } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
+import { useFeatureHidden } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -45,6 +46,9 @@ const ODOO_COLORS = [
 const ProductCreationForm = ({ navigation, route }) => {
   const editId = route?.params?.productId || null;
   const isEdit = !!editId;
+  // Defense-in-depth: even if a user reaches this form, hide Save when the
+  // matching App Features key is off for them.
+  const isOpHidden = useFeatureHidden(isEdit ? 'products.edit' : 'products.add');
 
   const [saving, setSaving] = useState(false);
   const [prefilling, setPrefilling] = useState(isEdit);
@@ -294,9 +298,13 @@ const ProductCreationForm = ({ navigation, route }) => {
           <Text style={s.headerBtn}>Back</Text>
         </TouchableOpacity>
         <Text style={s.headerTitle}>{isEdit ? 'Edit Product' : 'New Product'}</Text>
-        <TouchableOpacity onPress={handleSubmit} disabled={saving} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Text style={s.headerBtn}>{saving ? 'Saving…' : 'Save'}</Text>
-        </TouchableOpacity>
+        {isOpHidden ? (
+          <View style={{ width: 40 }} />
+        ) : (
+          <TouchableOpacity onPress={handleSubmit} disabled={saving} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Text style={s.headerBtn}>{saving ? 'Saving…' : 'Save'}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

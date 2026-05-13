@@ -35,6 +35,15 @@ class AppFeature(models.Model):
     )
     sequence = fields.Integer(default=10)
     active = fields.Boolean(default=True)
+    parent_id = fields.Many2one(
+        'app.feature',
+        string='Parent Feature',
+        ondelete='set null',
+        index=True,
+        help="Optional parent in the App Features admin tree. Children render "
+             "as indented sub-rows under the parent's expand arrow. Visibility "
+             "is independent per row -- hiding the parent does NOT hide children.",
+    )
 
     _sql_constraints = [
         ('feature_key_unique', 'UNIQUE(feature_key)',

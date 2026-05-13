@@ -20,6 +20,7 @@ import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Toast from 'react-native-toast-message';
 import { useProductStore } from '@stores/product';
 import { FABButton } from '@components/common/Button';
+import { FeatureGate } from '@components/FeatureGate';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 
 const NAVY = COLORS.primaryThemeColor;
@@ -242,7 +243,9 @@ const ProductsScreen = ({ navigation, route }) => {
       <RoundedContainer>
         {renderProducts()}
         {!route?.params?.fromPOS && !fromCustomerDetails ? (
-          <FABButton onPress={() => navigation.navigate('ProductCreationForm')} />
+          <FeatureGate featureKey="products.add">
+            <FABButton onPress={() => navigation.navigate('ProductCreationForm')} />
+          </FeatureGate>
         ) : null}
       </RoundedContainer>
       <OverlayLoader visible={loading} />

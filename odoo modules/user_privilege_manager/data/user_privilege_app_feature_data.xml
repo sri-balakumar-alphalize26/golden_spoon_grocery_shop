@@ -96,4 +96,22 @@
         <field name="sequence">71</field>
     </record>
 
+    <!-- Products screen: per-operation gates (not tile-level).
+         Nested under the Products Tile via parent_id so they render as
+         indented sub-rows behind an expand arrow in the App Features admin. -->
+    <record id="feature_products_add" model="app.feature">
+        <field name="feature_key">products.add</field>
+        <field name="name">Add</field>
+        <field name="description">Show the "+" Add Product button on the Products screen and the Save button in the new-product form.</field>
+        <field name="parent_id" ref="feature_home_tile_products"/>
+        <field name="sequence">100</field>
+    </record>
+    <record id="feature_products_edit" model="app.feature">
+        <field name="feature_key">products.edit</field>
+        <field name="name">Edit</field>
+        <field name="description">Show the "Edit Product" button on a product's detail screen and the Save button in edit mode.</field>
+        <field name="parent_id" ref="feature_home_tile_products"/>
+        <field name="sequence">101</field>
+    </record>
+
 </odoo>
