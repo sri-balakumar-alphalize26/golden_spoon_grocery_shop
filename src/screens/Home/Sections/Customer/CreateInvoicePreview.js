@@ -12,6 +12,7 @@ import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/service
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import Toast from 'react-native-toast-message';
 import LocationModal from '@components/Modal/LocationModal';
+import PaperSizeModal from '@components/Modal/PaperSizeModal';
 
 const NAVY = '#2E294E';
 const ORANGE = '#F47B20';
@@ -36,6 +37,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // (popup is the shared <LocationModal> so the past-order detail and
   // this screen render the same UI).
   const [locationModalVisible, setLocationModalVisible] = useState(false);
+  // Paper-size picker — populated when the cashier taps a Preview /
+  // Download / Print chip. Holds the *pending action* until the picker
+  // resolves to a width in mm; then the matching `runX(mm)` fires.
+  const [sizePicker, setSizePicker] = useState(null);
 
   // Itemised pos.payment records pulled from Odoo for this order. When the
   // order was paid via the partial-payment popup this returns 2+ entries
@@ -137,9 +142,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const isSplit = payments.length > 1;
 
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
-  const handlePrintPreview = () => {
+  const runPreview = (paperWidthMm) => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -153,11 +158,11 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // picker so the file lands wherever the user chooses (Downloads, Drive,
   // Documents, etc.). On iOS we fall back to the share sheet, whose
   // "Save to Files" entry is the iOS-equivalent of a folder picker.
-  const handleDownloadPdf = async () => {
+  const runDownload = async (paperWidthMm) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -206,10 +211,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
 
   // 3. Print Receipt — open the OS print dialog so the user can pick any
   // already-paired printer (AirPrint on iOS, Android print services).
-  const handlePrintReceipt = async () => {
+  const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -450,7 +455,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
         <View style={s.footer}>
           <View style={s.actionRow}>
             <TouchableOpacity
-              onPress={handlePrintPreview}
+              onPress={() => setSizePicker('preview')}
               activeOpacity={0.85}
               style={[s.actionChip, s.previewChip]}
             >
@@ -461,7 +466,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={handleDownloadPdf}
+              onPress={() => setSizePicker('download')}
               disabled={downloading}
               activeOpacity={0.85}
               style={[s.actionChip, s.downloadChip, downloading && { opacity: 0.6 }]}
@@ -477,7 +482,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={handlePrintReceipt}
+              onPress={() => setSizePicker('print')}
               disabled={printing}
               activeOpacity={0.85}
               style={[s.actionChip, s.printChip, printing && { opacity: 0.6 }]}
@@ -549,6 +554,21 @@ const CreateInvoicePreview = ({ navigation, route }) => {
         latitude={capturedLocation?.latitude}
         longitude={capturedLocation?.longitude}
         onClose={() => setLocationModalVisible(false)}
+      />
+
+      {/* Paper-size picker — fired by Preview / Download / Print chips.
+          On select we close the picker and run the pending action with
+          the chosen width. */}
+      <PaperSizeModal
+        isVisible={!!sizePicker}
+        onSelect={(mm) => {
+          const action = sizePicker;
+          setSizePicker(null);
+          if (action === 'preview') runPreview(mm);
+          else if (action === 'download') runDownload(mm);
+          else if (action === 'print') runPrint(mm);
+        }}
+        onCancel={() => setSizePicker(null)}
       />
     </SafeAreaView>
   );

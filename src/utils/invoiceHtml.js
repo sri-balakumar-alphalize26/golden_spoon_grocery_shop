@@ -44,7 +44,13 @@ export const generateInvoiceHtml = ({
   paidAmount = 0,
   customer = null,
   payments = [],
+  // Paper width in millimetres for the @page + .receipt CSS. Defaults to
+  // 80mm (the original thermal-receipt size, ≈3.15"). Other supported
+  // values from the in-app PaperSizeModal: 50 (2"), 76 (3"), 100 (4").
+  paperWidthMm = 80,
 } = {}) => {
+  const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
+  const receiptWidth = Math.max(10, pageWidth - 8);  // 4mm margin × 2
   const orderRef = extractOrderRef(orderName, orderId);
   // OMR receipts: prefix the rial-omani Arabic abbreviation. Decimals
   // are kept at 2 to match what the rest of the app shows on screen
@@ -82,9 +88,9 @@ export const generateInvoiceHtml = ({
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Invoice</title>
     <style>
-      @page { size: 80mm auto; margin: 4mm; }
+      @page { size: ${pageWidth}mm auto; margin: 4mm; }
       html,body { margin:0; padding:0; }
-      .receipt { width:72mm; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; direction: rtl; }
+      .receipt { width:${receiptWidth}mm; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; direction: rtl; }
       .header { text-align:center; font-size:11px; }
       .header .company { font-weight:700; font-size:13px; }
       .hr { border-top:1px solid #999; margin:10px 0; }

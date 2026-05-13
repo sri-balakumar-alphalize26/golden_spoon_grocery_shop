@@ -26,6 +26,7 @@ import useAuthStore from '@stores/auth/useAuthStore';
 import Toast from 'react-native-toast-message';
 import { FeatureGate } from '@components/FeatureGate';
 import LocationModal from '@components/Modal/LocationModal';
+import PaperSizeModal from '@components/Modal/PaperSizeModal';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -84,6 +85,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const [previewHtml, setPreviewHtml] = useState('');
   const [downloading, setDownloading] = useState(false);
   const [printing, setPrinting] = useState(false);
+  // Holds the pending action ('preview' | 'download' | 'print') while the
+  // PaperSizeModal is open. Cleared when the user picks a size or cancels.
+  const [sizePicker, setSizePicker] = useState(null);
 
   // Map the fetched pos.order + pos.payment[] into the params expected by the
   // shared `generateInvoiceHtml` helper. Kept inline because it depends on
@@ -132,11 +136,11 @@ const OrderDetailScreen = ({ navigation, route }) => {
     };
   };
 
-  const handlePrintPreview = () => {
+  const runPreview = (paperWidthMm) => {
     try {
       const params = buildInvoiceParams();
       if (!params) return;
-      setPreviewHtml(generateInvoiceHtml(params));
+      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm }));
       setPreviewVisible(true);
     } catch (err) {
       console.error('[OrderDetail] preview error', err);
@@ -144,13 +148,13 @@ const OrderDetailScreen = ({ navigation, route }) => {
     }
   };
 
-  const handleDownloadPdf = async () => {
+  const runDownload = async (paperWidthMm) => {
     setDownloading(true);
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
       const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
-      const html = generateInvoiceHtml(params);
+      const html = generateInvoiceHtml({ ...params, paperWidthMm });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -192,12 +196,12 @@ const OrderDetailScreen = ({ navigation, route }) => {
     }
   };
 
-  const handlePrintReceipt = async () => {
+  const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
-      const html = generateInvoiceHtml(params);
+      const html = generateInvoiceHtml({ ...params, paperWidthMm });
       await Print.printAsync({ html });
     } catch (err) {
       if (err?.message && !/cancel/i.test(err.message)) {
@@ -428,7 +432,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
             re-exported from the orders list. */}
         <View style={s.invoiceActionRow}>
           <TouchableOpacity
-            onPress={handlePrintPreview}
+            onPress={() => setSizePicker('preview')}
             activeOpacity={0.85}
             style={[s.invoiceChip, { borderColor: '#BFDBFE' }]}
           >
@@ -440,7 +444,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
 
           <FeatureGate featureKey="orders.export_pdf">
             <TouchableOpacity
-              onPress={handleDownloadPdf}
+              onPress={() => setSizePicker('download')}
               disabled={downloading}
               activeOpacity={0.85}
               style={[s.invoiceChip, { borderColor: '#FED7AA' }, downloading && { opacity: 0.6 }]}
@@ -457,7 +461,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
           </FeatureGate>
 
           <TouchableOpacity
-            onPress={handlePrintReceipt}
+            onPress={() => setSizePicker('print')}
             disabled={printing}
             activeOpacity={0.85}
             style={[s.invoiceChip, { borderColor: '#E9D5FF' }, printing && { opacity: 0.6 }]}
@@ -541,6 +545,20 @@ const OrderDetailScreen = ({ navigation, route }) => {
         latitude={order?.order_latitude}
         longitude={order?.order_longitude}
         onClose={() => setLocationModalVisible(false)}
+      />
+
+      {/* Paper-size picker — fires before Preview / Download / Print so the
+          cashier can re-render the receipt at 2"/3"/3.5"/4" thermal widths. */}
+      <PaperSizeModal
+        isVisible={!!sizePicker}
+        onSelect={(mm) => {
+          const action = sizePicker;
+          setSizePicker(null);
+          if (action === 'preview') runPreview(mm);
+          else if (action === 'download') runDownload(mm);
+          else if (action === 'print') runPrint(mm);
+        }}
+        onCancel={() => setSizePicker(null)}
       />
     </SafeAreaView>
   );
