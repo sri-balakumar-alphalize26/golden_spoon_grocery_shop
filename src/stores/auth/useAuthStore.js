@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { fetchUserApiToken, fetchHiddenAppFeatures } from '@api/services/generalApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveCurrencyConfig } from '@utils/currency';
+import * as Location from 'expo-location';
 
 // App is locked to Omani Rial regardless of the Odoo company currency.
 const APP_CURRENCY = { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
@@ -103,6 +104,24 @@ const useAuthStore = create((set, get) => ({
             const uid = enrichedUser.uid || enrichedUser.id;
             if (uid) {
                 get().refreshHiddenFeatures(uid).catch(() => {});
+            }
+
+            // Ask for location permission once per install. The captured GPS
+            // is used when validating a POS payment (see captureAndStoreOrderLocation
+            // in generalApi.js). Cached via AsyncStorage so returning users
+            // don't see the prompt again. Failure is swallowed so login itself
+            // is unaffected. If the user revokes permission later, the per-
+            // action prompts in POSPayment / captureAndStoreOrderLocation
+            // surface the OS prompt as a fallback.
+            try {
+                const asked = await AsyncStorage.getItem('locationPermissionAsked');
+                if (!asked) {
+                    await Location.requestForegroundPermissionsAsync();
+                    await AsyncStorage.setItem('locationPermissionAsked', '1');
+                    console.log('[POSLocation] first-login permission requested');
+                }
+            } catch (e) {
+                console.warn('[POSLocation] login-time permission request failed:', e?.message || e);
             }
         } catch (err) {
             console.error('useAuthStore.login error:', err);

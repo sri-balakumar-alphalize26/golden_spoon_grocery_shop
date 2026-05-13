@@ -353,10 +353,18 @@ const OrderDetailScreen = ({ navigation, route }) => {
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={s.lineName} numberOfLines={2}>{line.name}</Text>
-                  <Text style={s.lineMeta}>
-                    {line.qty} × {formatCurrency(line.price_unit, currency)}
-                    {line.discount > 0 ? `  •  −${line.discount}%` : ''}
-                  </Text>
+                  {/* Two separate <Text> spans avoid the RTL/LTR reorder
+                      that made "1 × 1.80 ر.ع." render as "1.80 ر.ع. = 1"
+                      when the Arabic currency symbol sat next to the × */}
+                  <View style={s.lineMetaRow}>
+                    <Text style={s.lineMetaQty}>{`Qty × ${line.qty}`}</Text>
+                    <Text style={s.lineMetaPrice}>
+                      {formatCurrency(line.price_unit, currency)}
+                    </Text>
+                    {line.discount > 0 ? (
+                      <Text style={s.lineMetaDiscount}>{`−${line.discount}%`}</Text>
+                    ) : null}
+                  </View>
                 </View>
                 <Text style={s.lineSubtotal}>{formatCurrency(line.price_subtotal_incl || line.price_subtotal, currency)}</Text>
               </View>
@@ -624,6 +632,22 @@ const s = StyleSheet.create({
   lineThumb: { width: 44, height: 44, borderRadius: 8 },
   lineName: { fontSize: 13, color: '#1a1a2e', fontFamily: FONT_FAMILY.urbanistBold },
   lineMeta: { fontSize: 12, color: MUTED, marginTop: 2, fontFamily: FONT_FAMILY.urbanistMedium },
+  // Bidi-safe meta row — each fragment lives in its own Text so the RN
+  // text engine doesn't reorder around the Arabic currency symbol.
+  lineMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2, gap: 8 },
+  lineMetaQty: {
+    fontSize: 12, color: MUTED, fontFamily: FONT_FAMILY.urbanistMedium,
+    writingDirection: 'ltr',
+  },
+  lineMetaPrice: {
+    fontSize: 12, color: '#475569', fontFamily: FONT_FAMILY.urbanistMedium,
+    writingDirection: 'ltr',
+  },
+  lineMetaDiscount: {
+    fontSize: 11, color: '#b45309', fontFamily: FONT_FAMILY.urbanistBold,
+    backgroundColor: '#fef3c7', paddingHorizontal: 6, paddingVertical: 1,
+    borderRadius: 6, overflow: 'hidden',
+  },
   lineSubtotal: {
     fontSize: 13, color: NAVY,
     fontFamily: FONT_FAMILY.urbanistBold,

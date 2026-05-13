@@ -4586,9 +4586,44 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
     }, { headers: { 'Content-Type': 'application/json' } });
 
     if (!(linesResp.data && linesResp.data.error)) {
-      lines = (linesResp.data.result || []).map((l) => {
+      const rawLines = linesResp.data.result || [];
+      // Pull image_128 base64 in one extra round-trip keyed by the line's
+      // product_ids. The naive Web URL fallback below is unreliable from
+      // a mobile context (auth/cache), so embedding base64 like the POS
+      // register and Products list do is more reliable.
+      const productIds = Array.from(new Set(
+        rawLines
+          .map((l) => (Array.isArray(l.product_id) ? l.product_id[0] : null))
+          .filter((x) => x != null)
+      ));
+      const imageByProductId = new Map();
+      if (productIds.length > 0) {
+        try {
+          const prodResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'product.product',
+              method: 'read',
+              args: [productIds],
+              kwargs: { fields: ['id', 'image_128'] },
+            },
+          }, { headers: { 'Content-Type': 'application/json' } });
+          if (!prodResp.data?.error) {
+            for (const p of (prodResp.data.result || [])) {
+              if (p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0) {
+                imageByProductId.set(p.id, `data:image/png;base64,${p.image_128}`);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[FETCH POS ORDER DETAIL] image fetch failed:', e?.message || e);
+        }
+      }
+      lines = rawLines.map((l) => {
         const pid = Array.isArray(l.product_id) ? l.product_id[0] : null;
         const pname = Array.isArray(l.product_id) ? l.product_id[1] : (l.name || 'Product');
+        const base64Url = pid ? imageByProductId.get(pid) : null;
         return {
           id: l.id,
           product_id: pid,
@@ -4598,7 +4633,9 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           discount: Number(l.discount) || 0,
           price_subtotal: Number(l.price_subtotal) || 0,
           price_subtotal_incl: Number(l.price_subtotal_incl) || 0,
-          image_url: pid ? `${baseUrl}/web/image?model=product.product&id=${pid}&field=image_128` : null,
+          // Prefer the embedded base64 (works offline / no auth header issues);
+          // fall back to the Web URL if image_128 wasn't returned for this product.
+          image_url: base64Url || (pid ? `${baseUrl}/web/image?model=product.product&id=${pid}&field=image_128` : null),
         };
       });
     }
