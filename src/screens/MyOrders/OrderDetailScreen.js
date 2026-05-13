@@ -24,6 +24,7 @@ import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
 import Toast from 'react-native-toast-message';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -427,21 +428,23 @@ const OrderDetailScreen = ({ navigation, route }) => {
             <Text style={s.invoiceChipText}>Preview</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={handleDownloadPdf}
-            disabled={downloading}
-            activeOpacity={0.85}
-            style={[s.invoiceChip, { borderColor: '#FED7AA' }, downloading && { opacity: 0.6 }]}
-          >
-            <View style={s.invoiceChipIcon}>
-              {downloading ? (
-                <ActivityIndicator color="#E85D04" size="small" />
-              ) : (
-                <MaterialIcons name="file-download" size={20} color="#E85D04" />
-              )}
-            </View>
-            <Text style={s.invoiceChipText}>Download</Text>
-          </TouchableOpacity>
+          <FeatureGate featureKey="orders.export_pdf">
+            <TouchableOpacity
+              onPress={handleDownloadPdf}
+              disabled={downloading}
+              activeOpacity={0.85}
+              style={[s.invoiceChip, { borderColor: '#FED7AA' }, downloading && { opacity: 0.6 }]}
+            >
+              <View style={s.invoiceChipIcon}>
+                {downloading ? (
+                  <ActivityIndicator color="#E85D04" size="small" />
+                ) : (
+                  <MaterialIcons name="file-download" size={20} color="#E85D04" />
+                )}
+              </View>
+              <Text style={s.invoiceChipText}>Download</Text>
+            </TouchableOpacity>
+          </FeatureGate>
 
           <TouchableOpacity
             onPress={handlePrintReceipt}

@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchEasyPurchases } from '@api/services/easyPurchaseApi';
 import { showToastMessage } from '@components/Toast';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -99,14 +100,16 @@ const EasyPurchaseListScreen = ({ navigation }) => {
           />
         )}
 
-        <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.fab}
-          onPress={() => navigation.navigate('EasyPurchaseForm')}
-        >
-          <MaterialIcons name="add" size={26} color="#fff" />
-          <Text style={styles.fabText}>New Purchase</Text>
-        </TouchableOpacity>
+        <FeatureGate featureKey="easy_purchase.create">
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.fab}
+            onPress={() => navigation.navigate('EasyPurchaseForm')}
+          >
+            <MaterialIcons name="add" size={26} color="#fff" />
+            <Text style={styles.fabText}>New Purchase</Text>
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
     </SafeAreaView>
   );

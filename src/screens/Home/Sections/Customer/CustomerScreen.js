@@ -28,6 +28,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { FABButton } from '@components/common/Button';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -203,18 +204,20 @@ const CustomerScreen = ({ navigation, route }) => {
           </TouchableOpacity>
         ) : null}
 
-        <TouchableOpacity
-          style={styles.editBtn}
-          activeOpacity={0.7}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          onPress={(e) => {
-            e?.stopPropagation && e.stopPropagation();
-            primePartnerCache(item.id);
-            navigation.navigate('CustomerInfo', { details: item });
-          }}
-        >
-          <MaterialIcons name="edit" size={18} color={NAVY} />
-        </TouchableOpacity>
+        <FeatureGate featureKey="customers.edit">
+          <TouchableOpacity
+            style={styles.editBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            onPress={(e) => {
+              e?.stopPropagation && e.stopPropagation();
+              primePartnerCache(item.id);
+              navigation.navigate('CustomerInfo', { details: item });
+            }}
+          >
+            <MaterialIcons name="edit" size={18} color={NAVY} />
+          </TouchableOpacity>
+        </FeatureGate>
 
         <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
       </TouchableOpacity>
@@ -261,7 +264,9 @@ const CustomerScreen = ({ navigation, route }) => {
       />
       <RoundedContainer>
         {renderCustomers()}
-        <FABButton onPress={() => navigation.navigate('CustomerInfo')} />
+        <FeatureGate featureKey="customers.add">
+          <FABButton onPress={() => navigation.navigate('CustomerInfo')} />
+        </FeatureGate>
       </RoundedContainer>
 
       {/* Preview modal — POS select-mode only. Shows the customer's

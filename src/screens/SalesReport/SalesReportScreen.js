@@ -31,6 +31,7 @@ import useAuthStore from '@stores/auth/useAuthStore';
 import { formatCurrency as formatCurrencyUtil, formatNumber } from '@utils/currency';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -641,36 +642,40 @@ const SalesReportScreen = ({ navigation }) => {
         })}
       </ScrollView>
       <View style={styles.exportRow}>
-        <TouchableOpacity
-          style={[styles.exportBtn, styles.exportBtnPdf, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
-          activeOpacity={0.85}
-          disabled={pdfBusy || xlsBusy}
-          onPress={handleExportPdf}
-        >
-          {pdfBusy ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <>
-              <MaterialIcons name="picture-as-pdf" size={14} color="#fff" />
-              <Text style={styles.exportBtnText}>PDF</Text>
-            </>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.exportBtn, styles.exportBtnXls, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
-          activeOpacity={0.85}
-          disabled={pdfBusy || xlsBusy}
-          onPress={handleExportExcel}
-        >
-          {xlsBusy ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <>
-              <MaterialIcons name="grid-on" size={14} color="#fff" />
-              <Text style={styles.exportBtnText}>Excel</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        <FeatureGate featureKey="sales_report.export_pdf">
+          <TouchableOpacity
+            style={[styles.exportBtn, styles.exportBtnPdf, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+            disabled={pdfBusy || xlsBusy}
+            onPress={handleExportPdf}
+          >
+            {pdfBusy ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <MaterialIcons name="picture-as-pdf" size={14} color="#fff" />
+                <Text style={styles.exportBtnText}>PDF</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </FeatureGate>
+        <FeatureGate featureKey="sales_report.export_excel">
+          <TouchableOpacity
+            style={[styles.exportBtn, styles.exportBtnXls, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+            disabled={pdfBusy || xlsBusy}
+            onPress={handleExportExcel}
+          >
+            {xlsBusy ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <MaterialIcons name="grid-on" size={14} color="#fff" />
+                <Text style={styles.exportBtnText}>Excel</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
     </View>
   );

@@ -1312,6 +1312,58 @@ export const fetchPrivilegeStatsForUser = async (userId) => {
   }
 };
 
+// Bulk-hide every active app.feature for `userId` (the "Hide All" button
+// on the in-app Apps Privileges admin). Returns the count of currently-
+// active visibility rows after the bulk write. Throws on error so the
+// caller can show a failure toast.
+export const hideAllFeaturesForUser = async (userId) => {
+  if (!userId) return 0;
+  const response = await axios.post(
+    `${getOdooUrl()}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.feature.visibility',
+        method: 'hide_all_features_for_user',
+        args: [Number(userId)],
+        kwargs: {},
+      },
+    },
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  if (response.data && response.data.error) {
+    throw new Error(response.data.error?.data?.message || 'Hide all failed');
+  }
+  return Number(response.data?.result || 0);
+};
+
+// Bulk-clear every per-user app.feature.visibility row for `userId` (the
+// "Full Permission" button on the in-app Apps Privileges admin). Returns
+// the number of rows removed. Throws on error so the caller can show a
+// failure toast.
+export const clearAllHidesForUser = async (userId) => {
+  if (!userId) return 0;
+  const response = await axios.post(
+    `${getOdooUrl()}/web/dataset/call_kw`,
+    {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'app.feature.visibility',
+        method: 'clear_all_hides_for_user',
+        args: [Number(userId)],
+        kwargs: {},
+      },
+    },
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  if (response.data && response.data.error) {
+    throw new Error(response.data.error?.data?.message || 'Clear all failed');
+  }
+  return Number(response.data?.result || 0);
+};
+
 // Toggle a (user_id, feature_id) hide row. hidden=true ensures a row exists,
 // hidden=false unlinks. Routed through `toggle_user_hide_admin` on the model —
 // one RPC, sudo'd server-side, no ACL dependency. Throws on error so the

@@ -196,6 +196,10 @@
                                     <div class="priv-stat-num" style="color:#dc2626;" t-esc="state.moduleVisibility.filter(m=>!m.is_visible).length"/>
                                     <div class="priv-stat-label">Hidden Apps</div>
                                 </div>
+                                <div class="priv-stat-card">
+                                    <div class="priv-stat-num" style="color:#9333ea;" t-esc="state.appFeatureVisibility.length"/>
+                                    <div class="priv-stat-label">App Hidden Feature</div>
+                                </div>
                             </div>
                         </div>
                         <!-- Row 2: Action buttons -->
@@ -673,15 +677,15 @@
                         <!-- ── HIDE APP FEATURE — User level (RN app) ─ -->
                         <!-- ══════════════════════════════════════════ -->
                         <div class="priv-section-label" style="color:#0EA5E9;">
-                            <i class="fa fa-mobile"/>Hide App Feature
+                            <i class="fa fa-mobile"/>Hide Apps Privilege
                             <div class="position-relative ms-auto">
                                 <button class="priv-add-btn-sm priv-add-btn" t-on-click="toggleAddAppFeature">
-                                    <i class="fa fa-plus me-1"/>Add App Feature
+                                    <i class="fa fa-plus me-1"/>Add Apps Privilege
                                 </button>
                                 <t t-if="state.showAddAppFeature">
                                     <div class="priv-dropdown" style="left:auto;right:0;">
                                         <div style="padding:12px;">
-                                            <input type="text" class="priv-search-input" placeholder="Search app features..." t-on-input="onAppFeatureSearch" t-att-value="state.appFeatureSearch"/>
+                                            <input type="text" class="priv-search-input" placeholder="Search apps privileges..." t-on-input="onAppFeatureSearch" t-att-value="state.appFeatureSearch"/>
                                         </div>
                                         <div style="overflow:auto;max-height:300px;">
                                             <t t-foreach="filteredAppFeaturesForAdd" t-as="feat" t-key="feat.id">
@@ -694,7 +698,7 @@
                                                 </div>
                                             </t>
                                             <t t-if="filteredAppFeaturesForAdd.length===0">
-                                                <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No app features available</div>
+                                                <div style="padding:20px;text-align:center;color:#94a3b8;font-size:13px;">No apps privileges available</div>
                                             </t>
                                         </div>
                                     </div>
@@ -706,12 +710,12 @@
                             <t t-if="state.appFeatureVisibility.length===0">
                                 <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">
                                     <i class="fa fa-mobile" style="font-size:28px;opacity:0.3;display:block;margin-bottom:8px;"/>
-                                    All app features visible. Click <b>Add App Feature</b> to hide specific React Native app elements for this user.
+                                    All apps privileges visible. Click <b>Add Apps Privilege</b> to hide specific React Native app elements for this user.
                                 </div>
                             </t>
                             <t t-if="state.appFeatureVisibility.length>0">
                                 <div class="priv-table-header">
-                                    <div class="priv-model-name">App Feature</div>
+                                    <div class="priv-model-name">Apps Privilege</div>
                                     <div class="priv-vis-col" style="text-align:center;">Feature Key</div>
                                     <div style="width:50px;"/>
                                 </div>

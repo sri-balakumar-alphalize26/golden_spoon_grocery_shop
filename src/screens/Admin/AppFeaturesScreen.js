@@ -29,7 +29,10 @@ import {
   fetchHiddenAppFeaturesAdmin,
   fetchPrivilegeStatsForUser,
   setAppFeatureHiddenForUser,
+  clearAllHidesForUser,
+  hideAllFeaturesForUser,
 } from '@api/services/generalApi';
+import ConfirmModal from '@components/Modal/ConfirmModal';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Toast from 'react-native-toast-message';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -43,12 +46,11 @@ const VISIBLE_BG = '#dcfce7';
 const HIDDEN_ACCENT = '#dc2626';
 const HIDDEN_BG = '#fee2e2';
 
-// Stat tile palette — mirrors the Odoo Privilege Manager dashboard.
+// Apps Privileges admin only cares about the "App Hidden Feature" count.
+// The other 4 (groups/modules/hidden_menus/hidden_apps) live on the
+// Module Privileges screen + the OWL dashboard, where they make sense.
 const STAT_TILES = [
-  { key: 'groups',       label: 'GROUPS',        accent: '#7c3aed' },
-  { key: 'modules',      label: 'MODULES',       accent: '#d97706' },
-  { key: 'hidden_menus', label: 'HIDDEN MENUS',  accent: '#e85d00' },
-  { key: 'hidden_apps',  label: 'HIDDEN APPS',   accent: '#dc2626' },
+  { key: 'hidden_features', label: 'APP HIDDEN FEATURE', accent: '#9333ea' },
 ];
 
 const ZERO_STATS = { groups: 0, modules: 0, hidden_menus: 0, hidden_apps: 0, hidden_features: 0 };
@@ -99,6 +101,15 @@ const AppFeaturesScreen = ({ navigation }) => {
   // Parent feature ids that are currently expanded (revealing nested children).
   // Default empty = all collapsed; tap the chevron to reveal sub-rows.
   const [expandedParents, setExpandedParents] = useState(new Set());
+  // Generic confirm popup state (replaces Alert.alert across the screen).
+  // Set via askConfirm({...}); cleared via cancel/confirm or closeConfirm().
+  const [confirmModal, setConfirmModal] = useState(null);
+
+  const askConfirm = useCallback((opts) => {
+    console.log('[AppsPriv] askConfirm', { title: opts?.title });
+    setConfirmModal(opts);
+  }, []);
+  const closeConfirm = useCallback(() => setConfirmModal(null), []);
 
   // Admin guard — same shape as UsersScreen so behavior is consistent.
   useEffect(() => {
@@ -247,21 +258,99 @@ const AppFeaturesScreen = ({ navigation }) => {
 
   const handleDiscard = useCallback(() => {
     if (pendingCount === 0) return;
-    Alert.alert(
-      'Discard unsaved changes?',
-      `You have ${pendingCount} feature${pendingCount === 1 ? '' : 's'} with unsaved visibility changes.`,
-      [
-        { text: 'Keep editing', style: 'cancel' },
-        {
-          text: 'Discard',
-          style: 'destructive',
-          onPress: () => {
-            if (selectedUser) loadUserData(selectedUser.id);
-          },
-        },
-      ],
-    );
-  }, [pendingCount, selectedUser, loadUserData]);
+    askConfirm({
+      title: 'Discard unsaved changes?',
+      message: `You have ${pendingCount} feature${pendingCount === 1 ? '' : 's'} with unsaved visibility changes.`,
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+      destructive: true,
+      onConfirm: () => {
+        console.log('[AppsPriv] ConfirmModal confirm', { title: 'Discard unsaved changes?' });
+        closeConfirm();
+        if (selectedUser) loadUserData(selectedUser.id);
+      },
+    });
+  }, [pendingCount, selectedUser, loadUserData, askConfirm, closeConfirm]);
+
+  // ── Bulk action: Hide All ────────────────────────────────────────
+  // Replaces the previous "Full Permission" (which un-hid everything).
+  // Now: bulk-hides every defined app.feature for the selected user.
+  const handleHideAll = useCallback(() => {
+    console.log('[AppsPriv] Hide All tap', { user: selectedUser?.id, saving });
+    if (!selectedUser || saving) return;
+    askConfirm({
+      title: 'Hide every feature?',
+      message: `Mark every defined feature as hidden for ${selectedUser.name}. On their next login every gated UI element disappears.`,
+      confirmLabel: 'Hide all',
+      cancelLabel: 'Cancel',
+      destructive: true,
+      onConfirm: async () => {
+        console.log('[AppsPriv] ConfirmModal confirm', { title: 'Hide every feature?' });
+        closeConfirm();
+        setSaving(true);
+        try {
+          const total = await hideAllFeaturesForUser(selectedUser.id);
+          console.log('[AppsPriv] Hide All result', { total });
+          await loadUserData(selectedUser.id);
+          Toast.show({
+            type: 'success',
+            text1: 'All features hidden',
+            text2: `${total} feature${total === 1 ? '' : 's'} hidden for ${selectedUser.name}`,
+          });
+        } catch (err) {
+          console.warn('[AppsPriv] Hide All failed', err?.message || err);
+          Toast.show({
+            type: 'error',
+            text1: 'Could not hide all',
+            text2: err?.message || 'Server error',
+          });
+        } finally {
+          setSaving(false);
+        }
+      },
+    });
+  }, [selectedUser, saving, loadUserData, askConfirm, closeConfirm]);
+
+  // Reset All — inverse of Hide All. Bulk-clear every hide for the
+  // selected user so they see every gated element again on next login.
+  // Routes through the existing `clear_all_hides_for_user` RPC.
+  const handleResetAll = useCallback(() => {
+    console.log('[AppsPriv] Reset All tap', { user: selectedUser?.id, pendingCount, saving });
+    if (!selectedUser || saving) return;
+    askConfirm({
+      title: 'Reset all hides?',
+      message: `Clear every hide for ${selectedUser.name}. Their next login will show every gated UI element again.`,
+      confirmLabel: 'Reset all',
+      cancelLabel: 'Cancel',
+      destructive: true,
+      onConfirm: async () => {
+        console.log('[AppsPriv] ConfirmModal confirm', { title: 'Reset all hides?' });
+        closeConfirm();
+        setSaving(true);
+        try {
+          const removed = await clearAllHidesForUser(selectedUser.id);
+          console.log('[AppsPriv] Reset All result', { removed });
+          await loadUserData(selectedUser.id);
+          Toast.show({
+            type: 'success',
+            text1: 'All hides cleared',
+            text2: removed > 0
+              ? `${removed} hide${removed === 1 ? '' : 's'} removed for ${selectedUser.name}`
+              : `${selectedUser.name} already had no hides`,
+          });
+        } catch (err) {
+          console.warn('[AppsPriv] Reset All failed', err?.message || err);
+          Toast.show({
+            type: 'error',
+            text1: 'Could not clear hides',
+            text2: err?.message || 'Server error',
+          });
+        } finally {
+          setSaving(false);
+        }
+      },
+    });
+  }, [selectedUser, saving, pendingCount, loadUserData, askConfirm, closeConfirm]);
 
   // Intercept Back press when there are pending changes — standard React
   // Navigation pattern so an admin doesn't silently lose work.
@@ -270,21 +359,21 @@ const AppFeaturesScreen = ({ navigation }) => {
     const unsubscribe = navigation.addListener('beforeRemove', (e) => {
       if (saving) return; // let the save complete naturally
       e.preventDefault();
-      Alert.alert(
-        'Discard unsaved changes?',
-        `You have ${pendingCount} feature${pendingCount === 1 ? '' : 's'} with unsaved visibility changes.`,
-        [
-          { text: 'Keep editing', style: 'cancel' },
-          {
-            text: 'Discard & leave',
-            style: 'destructive',
-            onPress: () => navigation.dispatch(e.data.action),
-          },
-        ],
-      );
+      askConfirm({
+        title: 'Discard unsaved changes?',
+        message: `You have ${pendingCount} feature${pendingCount === 1 ? '' : 's'} with unsaved visibility changes.`,
+        confirmLabel: 'Discard & leave',
+        cancelLabel: 'Keep editing',
+        destructive: true,
+        onConfirm: () => {
+          console.log('[AppsPriv] ConfirmModal confirm', { title: 'Discard & leave' });
+          closeConfirm();
+          navigation.dispatch(e.data.action);
+        },
+      });
     });
     return unsubscribe;
-  }, [navigation, pendingCount, saving]);
+  }, [navigation, pendingCount, saving, askConfirm, closeConfirm]);
 
   // ── Build the grouped flat list for FlatList ──────────────────────
   // Output items: { kind: 'header', groupKey, groupLabel, total, hiddenCount }
@@ -478,7 +567,7 @@ const AppFeaturesScreen = ({ navigation }) => {
   return (
     <SafeAreaView backgroundColor={NAVY}>
       <NavigationHeader
-        title="App Features"
+        title="Apps Privileges"
         onBackPress={() => navigation.goBack()}
         saveLabel={pendingCount > 0 ? (saving ? 'Saving…' : `Save (${pendingCount})`) : undefined}
         onSavePress={handleSave}
@@ -535,20 +624,53 @@ const AppFeaturesScreen = ({ navigation }) => {
           </TouchableOpacity>
         )}
 
-        {/* ── Stat tiles row (only when a user is picked) ── */}
+        {/* ── Stat tile (single banner since this admin only cares about
+             the App Hidden Feature count) ── */}
         {selectedUser ? (
           <View style={styles.statsRow}>
             {STAT_TILES.map((t) => (
-              <View key={t.key} style={styles.statTile}>
-                <Text style={styles.statNumber}>{stats[t.key] ?? 0}</Text>
-                <Text style={[styles.statLabel, { color: t.accent }]}>{t.label}</Text>
+              <View key={t.key} style={[styles.statBannerSingle, { borderColor: t.accent }]}>
+                <View style={[styles.statBannerIconWrap, { backgroundColor: t.accent + '22' }]}>
+                  <Icon name="visibility-off" size={20} color={t.accent} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={[styles.statBannerLabel, { color: t.accent }]}>{t.label}</Text>
+                  <Text style={styles.statBannerSub}>Hidden for this user</Text>
+                </View>
+                <Text style={[styles.statBannerNumber, { color: t.accent }]}>
+                  {stats[t.key] ?? 0}
+                </Text>
               </View>
             ))}
           </View>
         ) : null}
 
         {selectedUser ? (
-          <Text style={styles.hint}>Changes apply on the user's next login.</Text>
+          <Text style={styles.hint}>Visibility changes apply on the user's next login.</Text>
+        ) : null}
+
+        {/* ── Bulk action row (mirrors Module Privileges header) ── */}
+        {selectedUser ? (
+          <View style={styles.bulkActionRow}>
+            <TouchableOpacity
+              style={[styles.bulkActionBtn, styles.bulkActionBtnDangerFilled, saving && { opacity: 0.6 }]}
+              onPress={handleHideAll}
+              disabled={saving}
+              activeOpacity={0.85}
+            >
+              <Icon name="visibility-off" size={16} color="#fff" />
+              <Text style={styles.bulkActionBtnTextPrimary}>Hide All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bulkActionBtn, styles.bulkActionBtnDanger, saving && { opacity: 0.6 }]}
+              onPress={handleResetAll}
+              disabled={saving}
+              activeOpacity={0.85}
+            >
+              <Icon name="restart-alt" size={16} color="#dc2626" />
+              <Text style={styles.bulkActionBtnTextDanger}>Reset All</Text>
+            </TouchableOpacity>
+          </View>
         ) : null}
 
         {/* ── Feature list / empty state ── */}
@@ -656,6 +778,18 @@ const AppFeaturesScreen = ({ navigation }) => {
           )}
         </View>
       </RNModal>
+
+      {/* ── Generic confirm popup (shared by Hide All / Reset All / Discard / Back) ── */}
+      <ConfirmModal
+        isVisible={!!confirmModal}
+        title={confirmModal?.title}
+        message={confirmModal?.message}
+        confirmLabel={confirmModal?.confirmLabel}
+        cancelLabel={confirmModal?.cancelLabel}
+        destructive={confirmModal?.destructive}
+        onConfirm={confirmModal?.onConfirm}
+        onCancel={closeConfirm}
+      />
     </SafeAreaView>
   );
 };
@@ -695,28 +829,65 @@ const styles = StyleSheet.create({
   pickerEmptyTitle: { fontSize: 15, color: '#0f172a', fontFamily: FONT_FAMILY.semiBold },
   pickerEmptySub: { fontSize: 12, color: MUTED, marginTop: 2, fontFamily: FONT_FAMILY.regular },
 
-  // ── Stat tiles row ────────────────────────────────────────────────
+  // ── Stat banner (single tile since this admin only shows hidden_features) ──
   statsRow: {
     flexDirection: 'row',
     marginHorizontal: 12, marginTop: 10,
     gap: 8,
   },
-  statTile: {
+  statBannerSingle: {
     flex: 1,
+    flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 12, paddingHorizontal: 8,
-    alignItems: 'center',
-    borderWidth: 1, borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingVertical: 14, paddingHorizontal: 14,
+    borderWidth: 1.5,
+    elevation: 2,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+  },
+  statBannerIconWrap: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  statBannerLabel: {
+    fontSize: 11, fontFamily: FONT_FAMILY.semiBold, letterSpacing: 0.4,
+  },
+  statBannerSub: {
+    fontSize: 11, color: MUTED, marginTop: 2, fontFamily: FONT_FAMILY.regular,
+  },
+  statBannerNumber: {
+    fontSize: 28, fontFamily: FONT_FAMILY.semiBold, marginLeft: 8,
+  },
+
+  // ── Bulk action row (Full Permission / Reset All) ─────────────────
+  bulkActionRow: {
+    flexDirection: 'row',
+    marginHorizontal: 12, marginTop: 10, marginBottom: 4,
+    gap: 8,
+  },
+  bulkActionBtn: {
+    flex: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, paddingHorizontal: 12,
+    borderRadius: 10,
+    gap: 6,
+    borderWidth: 1,
     elevation: 1,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 3, shadowOffset: { width: 0, height: 1 },
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, shadowOffset: { width: 0, height: 1 },
   },
-  statNumber: {
-    fontSize: 22, color: '#0f172a', fontFamily: FONT_FAMILY.semiBold,
+  bulkActionBtnDangerFilled: {
+    backgroundColor: '#dc2626',
+    borderColor: '#b91c1c',
   },
-  statLabel: {
-    fontSize: 9, fontFamily: FONT_FAMILY.semiBold, letterSpacing: 0.4,
-    marginTop: 4, textAlign: 'center',
+  bulkActionBtnTextPrimary: {
+    color: '#fff', fontSize: 13, fontFamily: FONT_FAMILY.semiBold, letterSpacing: 0.2,
+  },
+  bulkActionBtnDanger: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#fca5a5',
+  },
+  bulkActionBtnTextDanger: {
+    color: '#dc2626', fontSize: 13, fontFamily: FONT_FAMILY.semiBold, letterSpacing: 0.2,
   },
 
   hint: {

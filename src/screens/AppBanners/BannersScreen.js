@@ -13,6 +13,7 @@ import useDataFetching from '@hooks/useDataFetching';
 import { fetchAllAppBannersOdoo } from '@api/services/generalApi';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const MUTED = '#8896ab';
@@ -142,14 +143,16 @@ const BannersScreen = ({ navigation }) => {
     <SafeAreaView backgroundColor={SOFT_BG}>
       <NavigationHeader title="App Banners" onBackPress={() => navigation.goBack()} />
       <View style={{ flex: 1 }}>{renderList()}</View>
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate('BannerDetails', { mode: 'create' })}
-        activeOpacity={0.85}
-      >
-        <Icon name="add-photo-alternate" size={22} color="#fff" />
-        <Text style={styles.fabText}>New Banner</Text>
-      </TouchableOpacity>
+      <FeatureGate featureKey="app_banners.add">
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => navigation.navigate('BannerDetails', { mode: 'create' })}
+          activeOpacity={0.85}
+        >
+          <Icon name="add-photo-alternate" size={22} color="#fff" />
+          <Text style={styles.fabText}>New Banner</Text>
+        </TouchableOpacity>
+      </FeatureGate>
       <OverlayLoader visible={loading} />
     </SafeAreaView>
   );

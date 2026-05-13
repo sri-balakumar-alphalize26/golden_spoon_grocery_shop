@@ -14,6 +14,7 @@ import {
   fetchVendors, fetchPurchaseProducts, fetchPaymentMethods, fetchWarehouses,
   fetchPaymentTerms, fetchPurchaseTaxes, createEasyPurchase, confirmEasyPurchase,
 } from '@api/services/easyPurchaseApi';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -656,18 +657,20 @@ const EasyPurchaseFormScreen = ({ navigation }) => {
 
       {/* Confirm CTA */}
       <View style={styles.bottomBar}>
-        <TouchableOpacity
-          style={[styles.btn, styles.btnConfirm, submitting && { opacity: 0.6 }]}
-          disabled={submitting}
-          onPress={submit}
-        >
-          {submitting ? <ActivityIndicator color="#fff" /> : (
-            <>
-              <MaterialIcons name="check-circle" size={20} color="#fff" />
-              <Text style={styles.btnConfirmText}>Confirm Purchase</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        <FeatureGate featureKey="easy_purchase.save">
+          <TouchableOpacity
+            style={[styles.btn, styles.btnConfirm, submitting && { opacity: 0.6 }]}
+            disabled={submitting}
+            onPress={submit}
+          >
+            {submitting ? <ActivityIndicator color="#fff" /> : (
+              <>
+                <MaterialIcons name="check-circle" size={20} color="#fff" />
+                <Text style={styles.btnConfirmText}>Confirm Purchase</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
 
       {/* Pickers */}

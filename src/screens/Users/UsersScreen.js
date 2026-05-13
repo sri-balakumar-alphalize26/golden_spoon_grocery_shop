@@ -14,6 +14,7 @@ import Toast from 'react-native-toast-message';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const MUTED = '#8896ab';
@@ -225,14 +226,16 @@ const UsersScreen = ({ navigation }) => {
       ) : null}
       <View style={{ flex: 1 }}>{renderUsers()}</View>
 
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate('UserDetails', { mode: 'create' })}
-        activeOpacity={0.85}
-      >
-        <Icon name="person-add-alt-1" size={22} color="#fff" />
-        <Text style={styles.fabText}>New User</Text>
-      </TouchableOpacity>
+      <FeatureGate featureKey="users.add">
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => navigation.navigate('UserDetails', { mode: 'create' })}
+          activeOpacity={0.85}
+        >
+          <Icon name="person-add-alt-1" size={22} color="#fff" />
+          <Text style={styles.fabText}>New User</Text>
+        </TouchableOpacity>
+      </FeatureGate>
 
       <OverlayLoader visible={loading} />
     </SafeAreaView>

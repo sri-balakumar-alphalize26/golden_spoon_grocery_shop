@@ -27,6 +27,7 @@ import {
 } from '@api/services/generalApi';
 import useAuthStore from '@stores/auth/useAuthStore';
 import { formatCurrency } from '@utils/currency';
+import { FeatureGate } from '@components/FeatureGate';
 
 // 3D Animated card wrapper — matches the Restaurantnexgenn reference
 const Card3D = ({ children, style, delay = 0 }) => {
@@ -325,13 +326,15 @@ const POSRegister = ({ navigation }) => {
           >
             <Text style={s.btnContinueText}>Continue Selling</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={s.btnClose}
-            activeOpacity={0.8}
-            onPress={() => handleCloseRegisterSession(item.id)}
-          >
-            <Text style={s.btnCloseText}>Close</Text>
-          </TouchableOpacity>
+          <FeatureGate featureKey="pos.close_register">
+            <TouchableOpacity
+              style={s.btnClose}
+              activeOpacity={0.8}
+              onPress={() => handleCloseRegisterSession(item.id)}
+            >
+              <Text style={s.btnCloseText}>Close</Text>
+            </TouchableOpacity>
+          </FeatureGate>
         </View>
       </View>
     </Card3D>
@@ -362,13 +365,15 @@ const POSRegister = ({ navigation }) => {
         <Text style={s.registerDesc}>Tap below to open this register and start a new session.</Text>
 
         {/* Action button */}
-        <TouchableOpacity
-          style={s.btnOpen}
-          activeOpacity={0.8}
-          onPress={() => handleOpenRegisterSession(item)}
-        >
-          <Text style={s.btnOpenText}>Open Register</Text>
-        </TouchableOpacity>
+        <FeatureGate featureKey="pos.open_register">
+          <TouchableOpacity
+            style={s.btnOpen}
+            activeOpacity={0.8}
+            onPress={() => handleOpenRegisterSession(item)}
+          >
+            <Text style={s.btnOpenText}>Open Register</Text>
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
     </Card3D>
   );

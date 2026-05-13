@@ -6,7 +6,7 @@
         <field name="name">app.feature.list</field>
         <field name="model">app.feature</field>
         <field name="arch" type="xml">
-            <list string="App Features" editable="bottom">
+            <list string="Apps Privileges" editable="bottom">
                 <field name="sequence" widget="handle"/>
                 <field name="feature_key"/>
                 <field name="name"/>
@@ -20,7 +20,7 @@
         <field name="name">app.feature.form</field>
         <field name="model">app.feature</field>
         <field name="arch" type="xml">
-            <form string="App Feature">
+            <form string="Apps Privilege">
                 <sheet>
                     <div class="oe_title">
                         <h1><field name="name" placeholder="e.g. Home Banner Carousel"/></h1>
@@ -51,7 +51,7 @@
     </record>
 
     <record id="action_app_feature" model="ir.actions.act_window">
-        <field name="name">App Features</field>
+        <field name="name">Apps Privileges</field>
         <field name="res_model">app.feature</field>
         <field name="view_mode">list,form</field>
         <field name="help" type="html">
@@ -64,7 +64,7 @@
                 in its <code>&lt;FeatureGate&gt;</code> wrapper. After creating a
                 feature here, hide it for individual users via
                 <b>Hide App Feature</b> or for whole groups via the
-                <b>App Features</b> tab on a Group.
+                <b>Apps Privileges</b> tab on a Group.
             </p>
         </field>
     </record>
@@ -151,7 +151,7 @@
                 Pick a <b>User</b> and an <b>App Feature</b>; the feature will
                 disappear from that user's React Native app on their next login.<br/><br/>
                 For group-wide hiding, edit the <b>Group</b> and use the
-                <b>App Features</b> tab there.
+                <b>Apps Privileges</b> tab there.
             </p>
         </field>
     </record>
@@ -165,7 +165,7 @@
         <field name="inherit_id" ref="view_privilege_role_form"/>
         <field name="arch" type="xml">
             <xpath expr="//page[@name='module_visibility']" position="after">
-                <page string="App Features" name="app_feature_visibility">
+                <page string="Apps Privileges" name="app_feature_visibility">
                     <div class="alert alert-info" role="alert">
                         <strong>Hide React Native App Features:</strong>
                         Add features below; every user in this group will have

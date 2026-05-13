@@ -34,6 +34,7 @@ import {
   fetchGroupCategoriesOdoo,
   fetchCompaniesOdoo,
 } from '@api/services/generalApi';
+import { useFeatureHidden, FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const MUTED = '#8896ab';
@@ -168,6 +169,8 @@ const UserDetailsScreen = ({ navigation, route }) => {
   const mode = route?.params?.mode === 'edit' ? 'edit' : 'create';
   const seedUser = route?.params?.user || null;
   const userId = seedUser?.id || null;
+  // Defense-in-depth: mode-aware Save gate.
+  const saveOpHidden = useFeatureHidden(mode === 'edit' ? 'users.edit' : 'users.add');
 
   const [bootstrapping, setBootstrapping] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -460,8 +463,8 @@ const UserDetailsScreen = ({ navigation, route }) => {
         <NavigationHeader
           title={mode === 'edit' ? 'Edit User' : 'Create User'}
           onBackPress={() => navigation.goBack()}
-          saveLabel={saving ? 'Saving…' : 'Save'}
-          onSavePress={saving ? () => {} : handleSave}
+          saveLabel={saveOpHidden ? undefined : (saving ? 'Saving…' : 'Save')}
+          onSavePress={saveOpHidden ? undefined : (saving ? () => {} : handleSave)}
         />
         <KeyboardAvoidingView
           style={{ flex: 1 }}
@@ -621,17 +624,19 @@ const UserDetailsScreen = ({ navigation, route }) => {
                     onChangeText={setConfirmPassword}
                     password
                   />
-                  <TouchableOpacity
-                    style={[styles.secondaryBtn, changingPwd && { opacity: 0.6 }]}
-                    onPress={handleChangePassword}
-                    disabled={changingPwd}
-                    activeOpacity={0.85}
-                  >
-                    <MaterialIcons name="key" size={18} color={NAVY} />
-                    <Text style={styles.secondaryBtnText}>
-                      {changingPwd ? 'Updating…' : 'Change Password'}
-                    </Text>
-                  </TouchableOpacity>
+                  <FeatureGate featureKey="users.change_password">
+                    <TouchableOpacity
+                      style={[styles.secondaryBtn, changingPwd && { opacity: 0.6 }]}
+                      onPress={handleChangePassword}
+                      disabled={changingPwd}
+                      activeOpacity={0.85}
+                    >
+                      <MaterialIcons name="key" size={18} color={NAVY} />
+                      <Text style={styles.secondaryBtnText}>
+                        {changingPwd ? 'Updating…' : 'Change Password'}
+                      </Text>
+                    </TouchableOpacity>
+                  </FeatureGate>
                 </>
               )}
             </View>

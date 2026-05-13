@@ -15,6 +15,7 @@ import { RoundedContainer, SafeAreaView, SearchContainer } from '@components/con
 import { EmptyState } from '@components/common/empty';
 import { OverlayLoader } from '@components/Loader';
 import { FABButton } from '@components/common/Button';
+import { FeatureGate } from '@components/FeatureGate';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
@@ -299,7 +300,9 @@ const ExpensesScreen = ({ navigation }) => {
           </View>
         ) : null}
         {employee ? (
-          <FABButton onPress={() => navigation.navigate('ExpenseForm')} />
+          <FeatureGate featureKey="expenses.create">
+            <FABButton onPress={() => navigation.navigate('ExpenseForm')} />
+          </FeatureGate>
         ) : null}
       </RoundedContainer>
       <OverlayLoader visible={loading && (!data || data.length === 0)} />

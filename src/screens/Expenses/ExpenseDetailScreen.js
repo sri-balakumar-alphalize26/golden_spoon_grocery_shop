@@ -23,6 +23,7 @@ import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { FeatureGate } from '@components/FeatureGate';
 import { useAuthStore } from '@stores/auth';
 import { formatCurrency } from '@utils/currency';
 import {
@@ -360,13 +361,18 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
         </TouchableOpacity>
         <Text style={styles.topTitle} numberOfLines={1}>{expense.name || 'Expense'}</Text>
         {expense.state === 'draft' ? (
-          <TouchableOpacity
-            onPress={() => navigation.navigate('ExpenseForm', { expenseId: expense.id })}
-            style={styles.editBtn}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          <FeatureGate
+            featureKey="expenses.edit"
+            fallback={<View style={{ width: 36 }} />}
           >
-            <MaterialIcons name="edit" size={20} color="#fff" />
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('ExpenseForm', { expenseId: expense.id })}
+              style={styles.editBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <MaterialIcons name="edit" size={20} color="#fff" />
+            </TouchableOpacity>
+          </FeatureGate>
         ) : (
           <View style={{ width: 36 }} />
         )}
@@ -477,24 +483,28 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
 
         {expense.state === 'reported' || expense.state === 'submitted' ? (
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={[styles.approveBtn, acting && { opacity: 0.6 }]}
-              activeOpacity={0.85}
-              disabled={acting}
-              onPress={handleApprove}
-            >
-              <MaterialIcons name="check" size={18} color="#fff" />
-              <Text style={styles.approveBtnText}>Approve</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.refuseBtn, acting && { opacity: 0.6 }]}
-              activeOpacity={0.85}
-              disabled={acting}
-              onPress={() => setRefuseModalVisible(true)}
-            >
-              <MaterialIcons name="close" size={18} color="#fff" />
-              <Text style={styles.refuseBtnText}>Refuse</Text>
-            </TouchableOpacity>
+            <FeatureGate featureKey="expenses.approve">
+              <TouchableOpacity
+                style={[styles.approveBtn, acting && { opacity: 0.6 }]}
+                activeOpacity={0.85}
+                disabled={acting}
+                onPress={handleApprove}
+              >
+                <MaterialIcons name="check" size={18} color="#fff" />
+                <Text style={styles.approveBtnText}>Approve</Text>
+              </TouchableOpacity>
+            </FeatureGate>
+            <FeatureGate featureKey="expenses.refuse">
+              <TouchableOpacity
+                style={[styles.refuseBtn, acting && { opacity: 0.6 }]}
+                activeOpacity={0.85}
+                disabled={acting}
+                onPress={() => setRefuseModalVisible(true)}
+              >
+                <MaterialIcons name="close" size={18} color="#fff" />
+                <Text style={styles.refuseBtnText}>Refuse</Text>
+              </TouchableOpacity>
+            </FeatureGate>
           </View>
         ) : null}
 
@@ -511,15 +521,17 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
               <MaterialIcons name="receipt-long" size={18} color="#fff" />
               <Text style={styles.postBtnText}>Post Journal Entries</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.refuseBtn, acting && { opacity: 0.6 }]}
-              activeOpacity={0.85}
-              disabled={acting}
-              onPress={() => setRefuseModalVisible(true)}
-            >
-              <MaterialIcons name="close" size={18} color="#fff" />
-              <Text style={styles.refuseBtnText}>Refuse</Text>
-            </TouchableOpacity>
+            <FeatureGate featureKey="expenses.refuse">
+              <TouchableOpacity
+                style={[styles.refuseBtn, acting && { opacity: 0.6 }]}
+                activeOpacity={0.85}
+                disabled={acting}
+                onPress={() => setRefuseModalVisible(true)}
+              >
+                <MaterialIcons name="close" size={18} color="#fff" />
+                <Text style={styles.refuseBtnText}>Refuse</Text>
+              </TouchableOpacity>
+            </FeatureGate>
             <TouchableOpacity
               style={[styles.splitBtn, acting && { opacity: 0.6 }]}
               activeOpacity={0.85}

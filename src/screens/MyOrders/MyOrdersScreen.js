@@ -14,12 +14,14 @@ import useAuthStore from '@stores/auth/useAuthStore';
 import { useProductStore } from '@stores/product';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
+import { useFeatureHidden } from '@components/FeatureGate';
 
 const MyOrdersScreen = ({ navigation }) => {
   const currency = useAuthStore((state) => state.currency);
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchOrdersOdoo);
   const { addProduct, clearProducts } = useProductStore();
   const [tapBusy, setTapBusy] = useState(false);
+  const resumeDraftHidden = useFeatureHidden('orders.resume_draft');
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text }),
@@ -110,6 +112,10 @@ const MyOrdersScreen = ({ navigation }) => {
         navigation.navigate('OrderDetail', { orderId: item.id });
         return;
       }
+      if (resumeDraftHidden) {
+        Toast.show({ type: 'info', text1: 'Resume draft is disabled for your user', position: 'bottom' });
+        return;
+      }
       // Draft → reload into cart
       const detail = await fetchPosOrderDetailOdoo(item.id);
       if (!detail || detail.error) {
@@ -146,7 +152,7 @@ const MyOrdersScreen = ({ navigation }) => {
     } finally {
       setTapBusy(false);
     }
-  }, [tapBusy, navigation, addProduct, clearProducts]);
+  }, [tapBusy, navigation, addProduct, clearProducts, resumeDraftHidden]);
 
   const renderOrderItem = useCallback(({ item }) => {
     const partnerName = Array.isArray(item.partner_id) ? item.partner_id[1] : item.partner_id || '—';

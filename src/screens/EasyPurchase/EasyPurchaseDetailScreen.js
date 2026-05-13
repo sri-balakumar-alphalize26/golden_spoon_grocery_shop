@@ -11,6 +11,7 @@ import {
   readPurchaseOrder, readStockPicking, readVendorBill, readPayments,
   fetchPurchaseTaxes, readProduct,
 } from '@api/services/easyPurchaseApi';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -312,15 +313,19 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
       {/* Action footer */}
       <View style={styles.bottomBar}>
         {data.state === 'draft' ? (
-          <TouchableOpacity style={[styles.btn, styles.btnDanger, busy && { opacity: 0.6 }]} disabled={busy} onPress={onCancel}>
-            <MaterialIcons name="cancel" size={18} color="#fff" />
-            <Text style={styles.btnDangerText}>Cancel Purchase</Text>
-          </TouchableOpacity>
+          <FeatureGate featureKey="easy_purchase.cancel">
+            <TouchableOpacity style={[styles.btn, styles.btnDanger, busy && { opacity: 0.6 }]} disabled={busy} onPress={onCancel}>
+              <MaterialIcons name="cancel" size={18} color="#fff" />
+              <Text style={styles.btnDangerText}>Cancel Purchase</Text>
+            </TouchableOpacity>
+          </FeatureGate>
         ) : data.state === 'cancelled' ? (
-          <TouchableOpacity style={[styles.btn, styles.btnPrimary, busy && { opacity: 0.6 }]} disabled={busy} onPress={onDraft}>
-            <MaterialIcons name="restore" size={18} color="#fff" />
-            <Text style={styles.btnPrimaryText}>Reset to Draft</Text>
-          </TouchableOpacity>
+          <FeatureGate featureKey="easy_purchase.cancel">
+            <TouchableOpacity style={[styles.btn, styles.btnPrimary, busy && { opacity: 0.6 }]} disabled={busy} onPress={onDraft}>
+              <MaterialIcons name="restore" size={18} color="#fff" />
+              <Text style={styles.btnPrimaryText}>Reset to Draft</Text>
+            </TouchableOpacity>
+          </FeatureGate>
         ) : (
           <View style={styles.donePill}>
             <MaterialIcons name="check-circle" size={18} color="#15803d" />

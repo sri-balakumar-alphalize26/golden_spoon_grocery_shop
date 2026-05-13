@@ -52,7 +52,7 @@
               sequence="25"/>
 
     <menuitem id="menu_app_feature_list"
-              name="App Features"
+              name="Apps Privileges"
               parent="menu_privilege_config"
               action="action_app_feature"
               sequence="30"/>

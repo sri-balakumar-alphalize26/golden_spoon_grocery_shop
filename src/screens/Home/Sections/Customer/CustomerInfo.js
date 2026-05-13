@@ -32,6 +32,7 @@ import {
 } from '@api/services/customerCache';
 import { IdProofCards } from '@components/IdProof';
 import Toast from 'react-native-toast-message';
+import { useFeatureHidden } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -163,6 +164,9 @@ const CustomerInfo = ({ navigation, route }) => {
   // mode: 'view' = read-only with Edit button, otherwise editable.
   // New contacts (no partnerId) always render in edit mode.
   const isView = mode === 'view' && !isNew;
+  // Defense-in-depth: mode-aware gate so Save is hidden if the matching
+  // App Features key is off for the current user.
+  const saveOpHidden = useFeatureHidden(isNew ? 'customers.add' : 'customers.edit');
 
   // No initial loading gate — we hydrate the form from route.params
   // (which already has name/email/phone/address from the customer-list
@@ -549,6 +553,8 @@ const CustomerInfo = ({ navigation, route }) => {
           >
             <Text style={s.headerSaveBtn}>Edit</Text>
           </TouchableOpacity>
+        ) : saveOpHidden ? (
+          <View style={{ width: 40 }} />
         ) : (
           <TouchableOpacity onPress={handleSave} disabled={saving} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={s.headerSaveBtn}>{saving ? 'Saving…' : 'Save'}</Text>

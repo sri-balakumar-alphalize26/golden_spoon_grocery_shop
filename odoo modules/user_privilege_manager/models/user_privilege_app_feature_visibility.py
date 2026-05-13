@@ -160,6 +160,65 @@ class AppFeatureVisibility(models.Model):
         return False
 
     @api.model
+    def hide_all_features_for_user(self, user_id):
+        """Bulk-hide every active app.feature for `user_id`.
+
+        Powers the in-app Apps Privileges admin's "Hide All" button: one
+        tap creates (or reactivates) a visibility row for every defined
+        feature so the user sees nothing gated on next login.
+        Idempotent: if a row already exists active=True, it's a no-op for
+        that pair. Returns the count of rows that ended up active=True
+        across the whole catalog.
+        """
+        if not user_id:
+            return 0
+        uid = int(user_id)
+        features = self.env['app.feature'].sudo().search([])
+        existing_rows = self.sudo().search([('user_id', '=', uid)])
+        existing_by_feat = {r.feature_id.id: r for r in existing_rows}
+        created = 0
+        reactivated = 0
+        for feat in features:
+            row = existing_by_feat.get(feat.id)
+            if row is None:
+                self.sudo().create({
+                    'user_id': uid,
+                    'feature_id': feat.id,
+                    'active': True,
+                })
+                created += 1
+            elif not row.active:
+                row.write({'active': True})
+                reactivated += 1
+        total_active = self.sudo().search_count([
+            ('user_id', '=', uid), ('active', '=', True),
+        ])
+        _logger.info(
+            '[FeatureAdmin] hide_all_features_for_user uid=%s '
+            'created=%s reactivated=%s total_active=%s',
+            uid, created, reactivated, total_active,
+        )
+        return total_active
+
+    @api.model
+    def clear_all_hides_for_user(self, user_id):
+        """Bulk-unlink every per-user app.feature.visibility row for `user_id`.
+
+        Powers the in-app Apps Privileges admin's "Full Permission" button:
+        one tap removes every hide so the user sees every feature on next
+        login. Returns the number of rows removed (0 if there were none).
+        """
+        if not user_id:
+            return 0
+        rows = self.sudo().search([('user_id', '=', int(user_id))])
+        count = len(rows)
+        if count:
+            rows.unlink()
+        _logger.info('[FeatureAdmin] clear_all_hides_for_user uid=%s removed=%s',
+                     user_id, count)
+        return count
+
+    @api.model
     def get_privilege_stats_for_user(self, user_id):
         """Return the four counts shown on the OWL Privilege Manager
         dashboard's top stat tiles, plus a bonus app-feature count.

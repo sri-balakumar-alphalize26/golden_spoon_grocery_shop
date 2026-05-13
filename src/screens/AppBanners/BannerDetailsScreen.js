@@ -29,6 +29,7 @@ import {
   deleteAppBannerOdoo,
   fetchAppBannerByIdOdoo,
 } from '@api/services/generalApi';
+import { useFeatureHidden, FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const MUTED = '#8896ab';
@@ -39,6 +40,8 @@ const BannerDetailsScreen = ({ navigation, route }) => {
   const seedBanner = route?.params?.banner || null;
   const autoCrop = !!route?.params?.autoCrop;
   const bannerId = seedBanner?.id || null;
+  // Defense-in-depth: mode-aware Save gate.
+  const saveOpHidden = useFeatureHidden(mode === 'edit' ? 'app_banners.edit' : 'app_banners.add');
 
   const [bootstrapping, setBootstrapping] = useState(mode === 'edit' && !!bannerId);
   const [saving, setSaving] = useState(false);
@@ -286,8 +289,8 @@ const BannerDetailsScreen = ({ navigation, route }) => {
       <NavigationHeader
         title={mode === 'edit' ? 'Edit Banner' : 'Create Banner'}
         onBackPress={() => navigation.goBack()}
-        saveLabel={saving ? 'Saving…' : 'Save'}
-        onSavePress={saving ? () => {} : handleSave}
+        saveLabel={saveOpHidden ? undefined : (saving ? 'Saving…' : 'Save')}
+        onSavePress={saveOpHidden ? undefined : (saving ? () => {} : handleSave)}
       />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -386,17 +389,19 @@ const BannerDetailsScreen = ({ navigation, route }) => {
 
           {/* DELETE — edit mode only */}
           {mode === 'edit' ? (
-            <TouchableOpacity
-              style={[styles.deleteBtn, deleting && { opacity: 0.6 }]}
-              onPress={handleDelete}
-              disabled={deleting}
-              activeOpacity={0.85}
-            >
-              <MaterialIcons name="delete-outline" size={18} color="#DC2626" />
-              <Text style={styles.deleteBtnText}>
-                {deleting ? 'Deleting…' : 'Delete banner'}
-              </Text>
-            </TouchableOpacity>
+            <FeatureGate featureKey="app_banners.delete">
+              <TouchableOpacity
+                style={[styles.deleteBtn, deleting && { opacity: 0.6 }]}
+                onPress={handleDelete}
+                disabled={deleting}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons name="delete-outline" size={18} color="#DC2626" />
+                <Text style={styles.deleteBtnText}>
+                  {deleting ? 'Deleting…' : 'Delete banner'}
+                </Text>
+              </TouchableOpacity>
+            </FeatureGate>
           ) : null}
 
           {saving ? (
