@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import SourcePickerModal from '@components/Modal/SourcePickerModal';
+import InAppCameraModal from '@components/IdProof/InAppCameraModal';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
@@ -81,6 +82,9 @@ const ExpenseFormScreen = ({ navigation, route }) => {
   // because ir.attachment requires res_id.
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [cameraVisible, setCameraVisible] = useState(false);
+  const [replaceTargetId, setReplaceTargetId] = useState(null);
+  const [viewerId, setViewerId] = useState(null);
 
   // Resolve current employee. Required for create.
   const [employeeId, setEmployeeId] = useState(null);
@@ -124,20 +128,48 @@ const ExpenseFormScreen = ({ navigation, route }) => {
     !pickerSearch || (c.name || '').toLowerCase().includes(pickerSearch.toLowerCase())
   );
 
-  const stageAttachment = (att) =>
-    setPendingAttachments((prev) => [
-      ...prev,
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...att },
-    ]);
+  // Stage a new attachment OR swap an existing row when `replaceTargetId`
+  // is set (from a Replace tap). Either way the target is cleared after.
+  const stageAttachment = (att) => {
+    setPendingAttachments((prev) => {
+      if (replaceTargetId) {
+        const idx = prev.findIndex((a) => a.id === replaceTargetId);
+        if (idx >= 0) {
+          const next = prev.slice();
+          next[idx] = { ...att, id: replaceTargetId };
+          return next;
+        }
+      }
+      return [
+        ...prev,
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...att },
+      ];
+    });
+    setReplaceTargetId(null);
+  };
 
   const removeAttachment = (id) =>
     setPendingAttachments((prev) => prev.filter((a) => a.id !== id));
 
-  const pickFromImage = async (mode) => {
-    const opts = { mediaTypes: ImagePicker.MediaTypeOptions.Images, base64: true, quality: 0.7 };
-    const res = mode === 'camera'
-      ? await ImagePicker.launchCameraAsync(opts)
-      : await ImagePicker.launchImageLibraryAsync(opts);
+  const requestReplace = (id) => {
+    if (saving) return;
+    setReplaceTargetId(id);
+    setSourcePickerOpen(true);
+  };
+
+  const closeSourcePicker = () => {
+    setSourcePickerOpen(false);
+    setReplaceTargetId(null);
+  };
+
+  // Gallery only — system gallery picker is safe (no OOM-prone OS camera
+  // intent). Camera capture goes through InAppCameraModal instead.
+  const pickFromGallery = async () => {
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true,
+      quality: 0.7,
+    });
     if (res.canceled) return;
     const asset = res.assets?.[0];
     if (!asset?.base64) return;
@@ -149,6 +181,20 @@ const ExpenseFormScreen = ({ navigation, route }) => {
       filename: `receipt-${Date.now()}.${ext}`,
       size: asset.fileSize || Math.ceil((asset.base64.length * 3) / 4),
       previewUri: asset.uri,
+    });
+  };
+
+  const openCamera = () => setCameraVisible(true);
+
+  const handleCameraCapture = (base64) => {
+    setCameraVisible(false);
+    if (!base64) return;
+    stageAttachment({
+      base64,
+      mimetype: 'image/jpeg',
+      filename: `receipt-${Date.now()}.jpg`,
+      size: Math.ceil((base64.length * 3) / 4),
+      previewUri: `data:image/jpeg;base64,${base64}`,
     });
   };
 
@@ -362,33 +408,50 @@ const ExpenseFormScreen = ({ navigation, route }) => {
 
               {pendingAttachments.length > 0 ? (
                 <View style={styles.attachList}>
-                  {pendingAttachments.map((att) => (
-                    <View key={att.id} style={styles.attachRow}>
-                      {att.previewUri ? (
-                        <Image source={{ uri: att.previewUri }} style={styles.attachThumb} />
-                      ) : (
-                        <View style={[styles.attachThumb, styles.attachIconBox]}>
-                          <MaterialIcons
-                            name={att.mimetype === 'application/pdf' ? 'picture-as-pdf' : 'insert-drive-file'}
-                            size={22}
-                            color={NAVY}
-                          />
+                  {pendingAttachments.map((att) => {
+                    const isImage = (att.mimetype || '').startsWith('image/');
+                    const ThumbWrap = isImage ? TouchableOpacity : View;
+                    const thumbProps = isImage
+                      ? { activeOpacity: 0.85, onPress: () => setViewerId(att.id) }
+                      : {};
+                    return (
+                      <View key={att.id} style={styles.attachRow}>
+                        <ThumbWrap {...thumbProps}>
+                          {att.previewUri ? (
+                            <Image source={{ uri: att.previewUri }} style={styles.attachThumb} />
+                          ) : (
+                            <View style={[styles.attachThumb, styles.attachIconBox]}>
+                              <MaterialIcons
+                                name={att.mimetype === 'application/pdf' ? 'picture-as-pdf' : 'insert-drive-file'}
+                                size={22}
+                                color={NAVY}
+                              />
+                            </View>
+                          )}
+                        </ThumbWrap>
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                          <Text style={styles.attachName} numberOfLines={1}>{att.filename}</Text>
+                          <Text style={styles.attachMeta}>{formatBytes(att.size)}</Text>
                         </View>
-                      )}
-                      <View style={{ flex: 1, marginLeft: 10 }}>
-                        <Text style={styles.attachName} numberOfLines={1}>{att.filename}</Text>
-                        <Text style={styles.attachMeta}>{formatBytes(att.size)}</Text>
+                        <TouchableOpacity
+                          onPress={() => requestReplace(att.id)}
+                          disabled={saving}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          style={styles.attachReplaceBtn}
+                        >
+                          <MaterialIcons name="cached" size={20} color={NAVY} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => removeAttachment(att.id)}
+                          disabled={saving}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          style={styles.attachRemoveBtn}
+                        >
+                          <MaterialIcons name="delete-outline" size={20} color="#B91C1C" />
+                        </TouchableOpacity>
                       </View>
-                      <TouchableOpacity
-                        onPress={() => removeAttachment(att.id)}
-                        disabled={saving}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        style={styles.attachRemoveBtn}
-                      >
-                        <MaterialIcons name="delete-outline" size={20} color="#B91C1C" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               ) : null}
             </View>
@@ -467,11 +530,48 @@ const ExpenseFormScreen = ({ navigation, route }) => {
 
       <SourcePickerModal
         isVisible={sourcePickerOpen}
-        onClose={() => setSourcePickerOpen(false)}
-        onPickCamera={() => pickFromImage('camera')}
-        onPickGallery={() => pickFromImage('gallery')}
-        onPickFile={() => pickFromDocument()}
+        onClose={closeSourcePicker}
+        onPickCamera={openCamera}
+        onPickGallery={pickFromGallery}
+        onPickFile={pickFromDocument}
       />
+
+      <InAppCameraModal
+        visible={cameraVisible}
+        onCapture={handleCameraCapture}
+        onClose={() => setCameraVisible(false)}
+      />
+
+      <Modal
+        visible={!!viewerId}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setViewerId(null)}
+      >
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <TouchableOpacity
+          style={styles.viewerBg}
+          activeOpacity={1}
+          onPress={() => setViewerId(null)}
+        >
+          {(() => {
+            const item = pendingAttachments.find((a) => a.id === viewerId);
+            return item?.previewUri ? (
+              <Image source={{ uri: item.previewUri }} style={styles.viewerImg} />
+            ) : null;
+          })()}
+          <TouchableOpacity
+            style={styles.viewerClose}
+            onPress={() => setViewerId(null)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <MaterialIcons name="close" size={26} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.viewerLabel} numberOfLines={1}>
+            {pendingAttachments.find((a) => a.id === viewerId)?.filename || ''}
+          </Text>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -608,11 +708,50 @@ const styles = StyleSheet.create({
   attachIconBox: { alignItems: 'center', justifyContent: 'center' },
   attachName: { fontSize: 13, color: '#1f2937', fontFamily: FONT_FAMILY.urbanistBold },
   attachMeta: { fontSize: 11, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 2 },
+  attachReplaceBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#E0E7FF',
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 8,
+  },
   attachRemoveBtn: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: '#FEE2E2',
     alignItems: 'center', justifyContent: 'center',
     marginLeft: 8,
+  },
+
+  viewerBg: {
+    flex: 1,
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerImg: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  viewerClose: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 20,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerLabel: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 56 : 28,
+    left: 18,
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+    maxWidth: '70%',
   },
 
   saveBtn: {

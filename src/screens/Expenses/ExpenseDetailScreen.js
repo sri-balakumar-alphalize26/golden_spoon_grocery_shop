@@ -20,6 +20,7 @@ import { WebView } from 'react-native-webview';
 import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
 import SourcePickerModal from '@components/Modal/SourcePickerModal';
+import InAppCameraModal from '@components/IdProof/InAppCameraModal';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { FeatureGate } from '@components/FeatureGate';
@@ -78,6 +79,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
   const [refuseModalVisible, setRefuseModalVisible] = useState(false);
   const [refuseReason, setRefuseReason] = useState('');
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [cameraVisible, setCameraVisible] = useState(false);
 
   // Receipts attached to this expense — fetched as ir.attachment rows.
   // The viewer modal flips through them with prev/next arrows like Odoo.
@@ -216,11 +218,14 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
     }
   };
 
-  const pickFromImage = async (mode) => {
-    const opts = { mediaTypes: ImagePicker.MediaTypeOptions.Images, base64: true, quality: 0.7 };
-    const res = mode === 'camera'
-      ? await ImagePicker.launchCameraAsync(opts)
-      : await ImagePicker.launchImageLibraryAsync(opts);
+  // Gallery only — system gallery picker is safe (no OOM-prone OS camera
+  // intent). Camera capture goes through InAppCameraModal instead.
+  const pickFromGallery = async () => {
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true,
+      quality: 0.7,
+    });
     if (res.canceled) return;
     const asset = res.assets?.[0];
     if (!asset) return;
@@ -230,6 +235,18 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
       base64: asset.base64,
       mimetype: mime,
       filename: `receipt-${Date.now()}.${ext}`,
+    });
+  };
+
+  const openCamera = () => setCameraVisible(true);
+
+  const handleCameraCapture = async (base64) => {
+    setCameraVisible(false);
+    if (!base64) return;
+    await uploadBase64({
+      base64,
+      mimetype: 'image/jpeg',
+      filename: `receipt-${Date.now()}.jpg`,
     });
   };
 
@@ -617,9 +634,15 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
       <SourcePickerModal
         isVisible={sourcePickerOpen}
         onClose={() => setSourcePickerOpen(false)}
-        onPickCamera={() => pickFromImage('camera')}
-        onPickGallery={() => pickFromImage('gallery')}
-        onPickFile={() => pickFromDocument()}
+        onPickCamera={openCamera}
+        onPickGallery={pickFromGallery}
+        onPickFile={pickFromDocument}
+      />
+
+      <InAppCameraModal
+        visible={cameraVisible}
+        onCapture={handleCameraCapture}
+        onClose={() => setCameraVisible(false)}
       />
     </SafeAreaView>
   );
@@ -1474,17 +1497,29 @@ const styles = StyleSheet.create({
       android: { elevation: 8 },
     }),
   },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  modalCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   modalTitle: {
     fontSize: 17,
     color: NAVY,
     fontFamily: FONT_FAMILY.urbanistBold,
-    textAlign: 'center',
   },
   modalSubtitle: {
     fontSize: 13,
     color: MUTED,
-    textAlign: 'center',
-    marginTop: 6,
+    marginTop: 4,
     fontFamily: FONT_FAMILY.urbanistMedium,
     lineHeight: 18,
   },
@@ -1527,13 +1562,9 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 13,
     borderRadius: 10,
-    backgroundColor: '#DC2626',
+    backgroundColor: NAVY,
     alignItems: 'center',
     justifyContent: 'center',
-    ...Platform.select({
-      ios: { shadowColor: '#DC2626', shadowOpacity: 0.32, shadowRadius: 10, shadowOffset: { width: 0, height: 6 } },
-      android: { elevation: 7 },
-    }),
   },
   modalConfirmText: {
     color: '#fff',
