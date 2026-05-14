@@ -13,9 +13,12 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { post } from "@api/services/utils";
 import { showToast } from '@utils/common';
 import DeliveryNoteCreationDetailList from './DeliveryNoteCreationDetailList';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const DeliveryNoteCreation = ({ navigation, route }) => {
   const { id: deliveryNoteId } = route?.params || {};
+  const currency = useAuthStore((s) => s.currency);
   const [details, setDetails] = useState({});
   console.log("🚀 ~ DeliveryNoteCreation ~ details:", JSON.stringify(details, null, 3));
   const [isLoading, setIsLoading] = useState(false);
@@ -146,15 +149,15 @@ const DeliveryNoteCreation = ({ navigation, route }) => {
           <View style={styles.totalSectionContainer}>
             <View style={styles.totalSection}>
               <Text style={styles.totalLabel}>Untaxed Amount: </Text>
-              <Text style={styles.totalValue}>{untaxedTotal}</Text>
+              <Text style={styles.totalValue}>{formatCurrency(Number(untaxedTotal) || 0, currency)}</Text>
             </View>
             <View style={styles.totalSection}>
               <Text style={styles.totalLabel}>Taxes: </Text>
-              <Text style={styles.totalValue}>{taxTotal}</Text>
+              <Text style={styles.totalValue}>{formatCurrency(Number(taxTotal) || 0, currency)}</Text>
             </View>
             <View style={styles.totalSection}>
               <Text style={styles.totalLabel}>Total: </Text>
-              <Text style={styles.totalValue}>{grandTotal}</Text>
+              <Text style={styles.totalValue}>{formatCurrency(Number(grandTotal) || 0, currency)}</Text>
             </View>
           </View>  
           </>

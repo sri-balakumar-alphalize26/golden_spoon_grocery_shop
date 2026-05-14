@@ -22,6 +22,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import SourcePickerModal from '@components/Modal/SourcePickerModal';
 import InAppCameraModal from '@components/IdProof/InAppCameraModal';
+import ReceiptHeaderBranding from '@components/common/Receipt/ReceiptHeaderBranding';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
@@ -63,6 +64,7 @@ const ExpenseFormScreen = ({ navigation, route }) => {
   const editId = route?.params?.expenseId || null;
   const isEdit = !!editId;
   const authUser = useAuthStore((state) => state.user);
+  const companyProfile = useAuthStore((state) => state.companyProfile);
 
   const [saving, setSaving] = useState(false);
   const [prefilling, setPrefilling] = useState(isEdit);
@@ -567,9 +569,9 @@ const ExpenseFormScreen = ({ navigation, route }) => {
           >
             <MaterialIcons name="close" size={26} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.viewerLabel} numberOfLines={1}>
-            {pendingAttachments.find((a) => a.id === viewerId)?.filename || ''}
-          </Text>
+          <View style={styles.viewerBrandingWrap} pointerEvents="none">
+            <ReceiptHeaderBranding companyProfile={companyProfile} tint="#fff" />
+          </View>
         </TouchableOpacity>
       </Modal>
     </SafeAreaView>
@@ -743,15 +745,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  viewerLabel: {
+  viewerBrandingWrap: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 56 : 28,
-    left: 18,
-    color: '#fff',
-    fontSize: 12,
-    fontFamily: FONT_FAMILY.urbanistBold,
-    letterSpacing: 0.6,
-    maxWidth: '70%',
+    top: Platform.OS === 'ios' ? 50 : 20,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
 
   saveBtn: {

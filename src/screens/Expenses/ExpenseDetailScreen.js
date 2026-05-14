@@ -21,6 +21,7 @@ import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
 import SourcePickerModal from '@components/Modal/SourcePickerModal';
 import InAppCameraModal from '@components/IdProof/InAppCameraModal';
+import ReceiptHeaderBranding from '@components/common/Receipt/ReceiptHeaderBranding';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { FeatureGate } from '@components/FeatureGate';
@@ -69,6 +70,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
   const authUser = useAuthStore((state) => state.user);
   const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  const companyProfile = useAuthStore((state) => state.companyProfile);
   useEffect(() => { console.log('[CURRENCY:RENDER] ExpenseDetailScreen', currency); }, [currency]);
   useEffect(() => { console.log('[CURRENCY:RENDER] ExpenseDetailScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
 
@@ -575,6 +577,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
         visible={viewerVisible}
         attachments={attachments}
         index={viewerIndex}
+        companyProfile={companyProfile}
         onClose={() => setViewerVisible(false)}
         onPrev={() => setViewerIndex((i) => (i - 1 + attachments.length) % attachments.length)}
         onNext={() => setViewerIndex((i) => (i + 1) % attachments.length)}
@@ -802,7 +805,7 @@ const ReceiptBody = ({ attachment }) => {
   );
 };
 
-const ReceiptViewer = ({ visible, attachments, index, onClose, onPrev, onNext }) => {
+const ReceiptViewer = ({ visible, attachments, index, companyProfile, onClose, onPrev, onNext }) => {
   const total = attachments?.length || 0;
   const current = total > 0 ? attachments[index] : null;
   const [downloading, setDownloading] = useState(false);
@@ -824,11 +827,13 @@ const ReceiptViewer = ({ visible, attachments, index, onClose, onPrev, onNext })
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={styles.viewerContainer}>
         <View style={styles.viewerHeader}>
-          <Text style={styles.viewerTitle} numberOfLines={1}>{current?.name || 'Receipt'}</Text>
-          <Text style={styles.viewerCounter}>{total > 0 ? `${index + 1} of ${total}` : '—'}</Text>
-          <TouchableOpacity onPress={onClose} style={styles.viewerClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <MaterialIcons name="close" size={22} color="#fff" />
-          </TouchableOpacity>
+          <View style={styles.viewerHeaderTopRow}>
+            <Text style={styles.viewerCounter}>{total > 0 ? `${index + 1} of ${total}` : '—'}</Text>
+            <TouchableOpacity onPress={onClose} style={styles.viewerClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <MaterialIcons name="close" size={22} color="#fff" />
+            </TouchableOpacity>
+          </View>
+          <ReceiptHeaderBranding companyProfile={companyProfile} tint="#fff" />
         </View>
         <View style={styles.viewerBody}>
           <ReceiptBody attachment={current} />
@@ -1230,25 +1235,20 @@ const styles = StyleSheet.create({
   // Receipt viewer modal — full-screen WebView/Image with prev/next nav
   viewerContainer: { flex: 1, backgroundColor: '#000' },
   viewerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingTop: Platform.OS === 'ios' ? 50 : 14,
     backgroundColor: NAVY,
   },
-  viewerTitle: {
-    flex: 1,
-    color: '#fff',
-    fontSize: 14,
-    fontFamily: FONT_FAMILY.urbanistBold,
-    letterSpacing: 0.3,
+  viewerHeaderTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   viewerCounter: {
     color: 'rgba(255,255,255,0.85)',
     fontSize: 12,
     fontFamily: FONT_FAMILY.urbanistBold,
-    marginRight: 12,
   },
   viewerClose: {
     width: 32,

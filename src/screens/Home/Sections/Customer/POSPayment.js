@@ -22,6 +22,8 @@ import RNModal from 'react-native-modal';
 import axios from 'axios';
 import { getOdooUrl, getOdooDb } from '@api/config/odooConfig';
 import { useProductStore } from '@stores/product';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 
 // The default export from odooConfig is an empty string (runtime URL is only
@@ -39,12 +41,8 @@ const NAVY = COLORS.primaryThemeColor;
 const NAVY_LIGHT = '#3d3768';
 const ORANGE = '#F47B20';
 
-// Helper to display numbers cleanly without floating point artifacts
-const displayNum = (n) => {
-  const num = Number(n);
-  if (isNaN(num)) return '0';
-  return parseFloat(num.toPrecision(12)).toString();
-};
+// Render a money value with the Odoo-configured company currency.
+const displayNum = (n) => formatCurrency(n);
 
 // Helper to fetch all payment methods from Odoo
 const fetchAllPaymentMethods = async () => {
@@ -99,6 +97,8 @@ const fetchPaymentMethodId = async (journalId) => {
 };
 
 const POSPayment = ({ navigation, route }) => {
+  // Subscribe so the screen re-renders when the currency hydrates / changes.
+  useAuthStore((s) => s.currency);
   // Pre-warm the OS location cache on mount so by the time the cashier
   // taps Validate Payment a few seconds later, getLastKnownPositionAsync
   // returns a fresh fix synchronously (no GPS lock delay). Fire-and-

@@ -8,8 +8,10 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
+import { useAuthStore } from '@stores/auth';
 import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
+import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 import LocationModal from '@components/Modal/LocationModal';
 import PaperSizeModal from '@components/Modal/PaperSizeModal';
@@ -17,16 +19,14 @@ import PaperSizeModal from '@components/Modal/PaperSizeModal';
 const NAVY = '#2E294E';
 const ORANGE = '#F47B20';
 
-// Helper to display numbers cleanly without floating point artifacts
-const displayNum = (n) => {
-  const num = Number(n);
-  if (isNaN(num)) return '0';
-  return parseFloat(num.toPrecision(12)).toString();
-};
+// Render a money value with the Odoo-configured company currency.
+const displayNum = (n) => formatCurrency(n);
 
 const CreateInvoicePreview = ({ navigation, route }) => {
   const params = route?.params || {};
   const { clearProducts } = useProductStore();
+  // Subscribe so the screen re-renders when the currency hydrates / changes.
+  useAuthStore((s) => s.currency);
 
   // Action states for the receipt-action buttons
   const [previewVisible, setPreviewVisible] = useState(false);
@@ -362,7 +362,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
                       <Text style={[s.paperPlain, { flex: 0.6, textAlign: 'center' }]}>{item.qty}</Text>
                       <Text style={[s.paperPlain, { flex: 0.9, textAlign: 'right' }]}>{displayNum(item.price)}</Text>
                       <Text style={[s.paperPlain, { flex: 0.9, textAlign: 'right' }]}>
-                        {item.discount_amount > 0 ? `-${displayNum(item.discount_amount)}` : '0'}
+                        {item.discount_amount > 0 ? `-${displayNum(item.discount_amount)}` : displayNum(0)}
                       </Text>
                       <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>{displayNum(itemTotal)}</Text>
                     </View>

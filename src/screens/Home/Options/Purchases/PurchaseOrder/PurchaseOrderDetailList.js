@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { View, StyleSheet, Platform, TouchableOpacity } from 'react-native';
 import Text from '@components/Text';
 import { FONT_FAMILY } from '@constants/theme';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const PurchaseOrderDetailList = ({ item, onPress }) => {
+  const currency = useAuthStore((s) => s.currency);
 
   const {
     product = { product_name: '-'},
@@ -26,7 +29,7 @@ const PurchaseOrderDetailList = ({ item, onPress }) => {
         <View style={styles.rightColumn}> 
           <Text style={styles.content}>{scheduled_date}</Text>
           <Text style={styles.contentRight}>{quantity}</Text>
-          <Text style={styles.content}>Sub : {sub_total || '-'}</Text>
+          <Text style={styles.content}>Sub : {sub_total === '-' || sub_total == null ? '-' : formatCurrency(sub_total, currency)}</Text>
         </View>
       <View style={styles.rightColumn}>
         <Text style={styles.content}>Des : {description || '-'}</Text>
@@ -37,7 +40,7 @@ const PurchaseOrderDetailList = ({ item, onPress }) => {
         <Text style={styles.contentRight}>UOM : {product_unit_of_measure || '-'}</Text>
       </View>
       <View style={styles.rightColumn}>
-        <Text style={styles.content}>UP : {unit_price}</Text>
+        <Text style={styles.content}>UP : {unit_price === '-' || unit_price == null ? '-' : formatCurrency(unit_price, currency)}</Text>
         <Text style={styles.content}>TX : {taxes.taxes_name || '-'}</Text>
       </View>
       </View>

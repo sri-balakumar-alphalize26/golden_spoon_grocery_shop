@@ -17,10 +17,12 @@ import { useAuthStore } from '@stores/auth';
 import { showToast } from '@utils/common';
 import { TextInput as FormInput } from '@components/common/TextInput';
 import { TitleWithButton } from '@components/Header';
+import { formatCurrency } from '@utils/currency';
 
 const QuickServiceUpdateDetails = ({ route, navigation }) => {
   const { id } = route.params || {};
   const currentUser = useAuthStore((state) => state.user);
+  const currency = useAuthStore((state) => state.currency);
   const [details, setDetails] = useState({});
   console.log("🚀 ~ file: ~ Details :", JSON.stringify(details, null, 2))
   const [isLoading, setIsLoading] = useState(false);
@@ -281,15 +283,15 @@ const QuickServiceUpdateDetails = ({ route, navigation }) => {
         {sparePartsItems.length > 0 && <>
         <View style={styles.totalSection}>
           <Text style={styles.totalLabel}>Sub Total : </Text>
-          <Text style={styles.totalValue}>{subTotal.toFixed(2)}</Text>
+          <Text style={styles.totalValue}>{formatCurrency(subTotal, currency)}</Text>
         </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Tax : </Text>
-            <Text style={styles.totalValue}>{calculatedTax.toFixed(2)}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(calculatedTax, currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Total : </Text>
-            <Text style={styles.totalValue}>{total.toFixed(2)}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(total, currency)}</Text>
           </View>
         </>
         }

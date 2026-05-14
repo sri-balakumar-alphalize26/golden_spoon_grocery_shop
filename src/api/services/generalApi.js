@@ -5279,6 +5279,49 @@ export const fetchCompanyCurrency = async () => {
   }
 };
 
+// Letterhead fields from res.company — used by the receipt viewer header
+// (Expense screens) so attached receipts show the company name + address
+// instead of the auto-generated filename. Cached at login; refreshed on
+// next login if the admin edits the company record.
+export const fetchCompanyProfileOdoo = async (companyId) => {
+  if (!companyId) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.company',
+        method: 'read',
+        args: [[Number(companyId)], [
+          'name', 'street', 'street2', 'city',
+          'state_id', 'zip', 'country_id', 'phone', 'email',
+        ]],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data?.error) {
+      console.warn('fetchCompanyProfileOdoo error:', resp.data.error?.data?.message);
+      return null;
+    }
+    const c = resp.data?.result?.[0];
+    if (!c) return null;
+    return {
+      name: c.name || '',
+      street: c.street || '',
+      street2: c.street2 || '',
+      city: c.city || '',
+      state: Array.isArray(c.state_id) ? c.state_id[1] : '',
+      zip: c.zip || '',
+      country: Array.isArray(c.country_id) ? c.country_id[1] : '',
+      phone: c.phone || '',
+      email: c.email || '',
+    };
+  } catch (e) {
+    console.warn('fetchCompanyProfileOdoo failed:', e?.message);
+    return null;
+  }
+};
+
 // Banner CRUD against the custom `app.banner` Odoo module
 // ([odoo modules/app_banner/]). Mirrors the working pattern from
 // employee_attendance — every call has an explicit axios timeout so a

@@ -8,6 +8,8 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchEasyPurchases } from '@api/services/easyPurchaseApi';
 import { showToastMessage } from '@components/Toast';
 import { FeatureGate } from '@components/FeatureGate';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -25,6 +27,7 @@ const PAY_STATE_STYLE = {
 };
 
 const EasyPurchaseListScreen = ({ navigation }) => {
+  const currency = useAuthStore((s) => s.currency);
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -67,7 +70,7 @@ const EasyPurchaseListScreen = ({ navigation }) => {
           <View style={[styles.payChip, { backgroundColor: pay.bg }]}>
             <Text style={[styles.payChipText, { color: pay.fg }]}>{pay.label}</Text>
           </View>
-          <Text style={styles.totalText}>{Number(item.amount_total || 0).toFixed(3)}</Text>
+          <Text style={styles.totalText}>{formatCurrency(Number(item.amount_total || 0), currency)}</Text>
         </View>
       </TouchableOpacity>
     );

@@ -25,6 +25,7 @@ import { showToastMessage } from "@components/Toast";
 
 import { setRuntimeBaseUrl, setRuntimeDb } from "@api/config/odooConfig";
 import { fetchCompanyCurrency, fetchUserCompanyId, fetchDecimalAccuracy } from "@api/services/currencyApi";
+import { fetchCompanyProfileOdoo } from "@api/services/generalApi";
 import { saveCurrencyConfig } from "@utils/currency";
 import { useCurrencyStore } from "@stores/currency";
 
@@ -288,6 +289,19 @@ const LoginScreenOdoo = () => {
                 console.log('[CURRENCY:LOGIN] saved + pushed to both stores =', cfg);
               } else {
                 console.warn('[CURRENCY:LOGIN] cfg missing symbol/name — not persisted. cfg=', cfg);
+              }
+
+              // Letterhead (name + address + phone + email) for the receipt
+              // viewer header. Best-effort; viewer falls back to nothing if
+              // this fails.
+              try {
+                const profile = await fetchCompanyProfileOdoo(companyId);
+                if (profile) {
+                  useAuthStore.getState().setCompanyProfile(profile);
+                  console.log('[LOGIN] company profile cached =', profile);
+                }
+              } catch (e) {
+                console.warn('[LOGIN] company profile fetch failed:', e?.message || e);
               }
             } catch (e) {
               console.warn('[CURRENCY:LOGIN] fetch after login failed:', e?.message || e);

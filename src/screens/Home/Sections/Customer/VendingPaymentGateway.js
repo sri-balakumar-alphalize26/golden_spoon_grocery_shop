@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 import {
   View,
   Text,
@@ -169,6 +170,7 @@ const QRCodeDisplay = ({ value, size = 150 }) => {
 const PaymentScreen = (props) => {
   const { route = {}, navigation } = props;
   const params = route.params || {};
+  const currency = useAuthStore((s) => s.currency);
 
   // Resolve initial values from either direct props (for unit tests) or navigation params
   const initialAmount = props.amount ?? params.amount ?? 1799;
@@ -372,10 +374,8 @@ const PaymentScreen = (props) => {
     }
   };
 
-  // Format amount with currency
-  const formatAmount = (value) => {
-    return `₹${value.toLocaleString('en-IN')}`;
-  };
+  // Format amount with the Odoo-configured company currency.
+  const formatAmount = (value) => formatCurrency(value, currency);
 
   // Render UPI App Button
   const renderUPIApp = (app) => {

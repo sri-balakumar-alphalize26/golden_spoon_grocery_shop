@@ -3,18 +3,21 @@ import React, { useMemo, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, SafeAreaView, Image, ActivityIndicator, Alert } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
+import { useAuthStore } from '@stores/auth';
 import { COLORS } from '@constants/theme';
 import { createInvoiceOdoo, linkInvoiceToPosOrderOdoo, fetchFieldSelectionOdoo } from '@api/services/generalApi';
+import { formatCurrency } from '@utils/currency';
 
-// Helper to display numbers cleanly without floating point artifacts
-const displayNum = (n) => {
-  const num = Number(n);
-  if (isNaN(num)) return '0';
-  return parseFloat(num.toPrecision(12)).toString();
-};
+// Render a money value using the Odoo-configured company currency.
+// Reads from the formatCurrency module cache (kept in sync by setActiveCurrency
+// at login) — components below subscribe to the auth-store currency so
+// React re-renders when the cache changes.
+const displayNum = (n) => formatCurrency(n);
 
 const CreateInvoice = ({ navigation, route }) => {
   const cart = useProductStore((s) => s.getCurrentCart()) || [];
+  // Subscribe so the screen re-renders when the currency hydrates / changes.
+  useAuthStore((s) => s.currency);
   const [loading, setLoading] = useState(false);
 
   const items = useMemo(() => cart.map(it => {

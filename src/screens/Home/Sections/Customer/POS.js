@@ -4,6 +4,8 @@ import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { Button } from '@components/common/Button';
 import { useProductStore } from '@stores/product';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 import { createPosOrderOdoo } from '@api/services/generalApi';
 import { fetchPaymentJournalsOdoo, createAccountPaymentOdoo } from '@api/services/generalApi';
@@ -13,6 +15,8 @@ const POS = ({ navigation, route }) => {
   const { customer } = route?.params || {};
   const { getCurrentCart, clearProducts } = useProductStore();
   const products = getCurrentCart();
+  // Subscribe so the screen re-renders when the currency hydrates / changes.
+  const currency = useAuthStore((s) => s.currency);
   const [loading, setLoading] = useState(false);
   const [journals, setJournals] = useState([]);
   const [selectedJournal, setSelectedJournal] = useState(null);
@@ -164,9 +168,9 @@ const POS = ({ navigation, route }) => {
                   <View key={p.id} style={styles.lineItem}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.productName}>{p.name || p.product_name}</Text>
-                      <Text style={styles.productMeta}>{(p.quantity || p.qty || 0)} × {(p.price || 0).toFixed(2)}</Text>
+                      <Text style={styles.productMeta}>{(p.quantity || p.qty || 0)} × {formatCurrency(p.price || 0, currency)}</Text>
                     </View>
-                    <Text style={styles.lineTotal}>{((p.price || 0) * (p.quantity || p.qty || 0)).toFixed(2)}</Text>
+                    <Text style={styles.lineTotal}>{formatCurrency((p.price || 0) * (p.quantity || p.qty || 0), currency)}</Text>
                   </View>
                 ))}
               </ScrollView>
@@ -176,7 +180,7 @@ const POS = ({ navigation, route }) => {
 
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total</Text>
-              <Text style={styles.totalValue}>{computeTotal().toFixed(2)}</Text>
+              <Text style={styles.totalValue}>{formatCurrency(computeTotal(), currency)}</Text>
             </View>
 
             <Text style={styles.customerText}>Customer: {customer?.name || '—'}</Text>

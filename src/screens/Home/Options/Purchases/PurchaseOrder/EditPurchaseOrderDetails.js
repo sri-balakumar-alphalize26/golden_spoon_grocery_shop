@@ -18,10 +18,13 @@ import { Button } from '@components/common/Button';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { put } from '@api/services/utils';
 import { showToast } from '@utils/common';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const EditPurchaseOrderDetails = ({ navigation, route }) => {
   const { id: purchaseOrderId } = route?.params || {};
   console.log("Purchase Order ID:", purchaseOrderId)
+  const currency = useAuthStore((s) => s.currency);
   const [details, setDetails] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -436,15 +439,15 @@ const EditPurchaseOrderDetails = ({ navigation, route }) => {
         <View style={{ marginVertical: 2 }}>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Untaxed Amount : </Text>
-            <Text style={styles.totalValue}>{untaxedTotal}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(untaxedTotal) || 0, currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Taxes : </Text>
-            <Text style={styles.totalValue}>{taxTotal}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(taxTotal) || 0, currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Total : </Text>
-            <Text style={styles.totalValue}>{grandTotal}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(grandTotal) || 0, currency)}</Text>
           </View>
         </View>
         {renderBottomSheet()}

@@ -20,6 +20,8 @@ const useAuthStore = create((set, get) => ({
     user: null,
     currency: FALLBACK_CURRENCY,
     decimalAccuracy: {},
+    companyProfile: null,
+    setCompanyProfile: (profile) => set({ companyProfile: profile && typeof profile === 'object' ? profile : null }),
 
     // Set the active currency (called from the post-login Odoo fetch and
     // from boot-time AsyncStorage hydration). Keeps the formatCurrency()

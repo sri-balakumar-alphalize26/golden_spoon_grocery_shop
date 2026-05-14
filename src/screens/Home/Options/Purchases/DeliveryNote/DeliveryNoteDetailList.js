@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { View, StyleSheet, Platform, TouchableOpacity } from 'react-native';
 import Text from '@components/Text';
 import { FONT_FAMILY } from '@constants/theme';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const DeliveryNoteDetailList = ({ item, onPress }) => {
+  const currency = useAuthStore((s) => s.currency);
 
   // Destructure the fields for easier access
   const {
@@ -32,8 +35,8 @@ const DeliveryNoteDetailList = ({ item, onPress }) => {
       </View>
       <View style={styles.rightColumn}>
         <Text style={styles.content}>{taxes.taxes_name}</Text>
-        <Text style={styles.content}>{unit_price.toFixed(2)}</Text>
-        <Text style={styles.content}>{sub_total.toFixed(2)}</Text> 
+        <Text style={styles.content}>{formatCurrency(Number(unit_price) || 0, currency)}</Text>
+        <Text style={styles.content}>{formatCurrency(Number(sub_total) || 0, currency)}</Text>
       </View>
       </View>
     </TouchableOpacity>

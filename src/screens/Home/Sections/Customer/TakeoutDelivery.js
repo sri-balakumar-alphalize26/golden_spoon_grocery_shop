@@ -9,18 +9,16 @@ import { createPosOrderOdoo, fetchDiscountsOdoo, updatePosOrderOdoo } from '@api
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '@components/containers';
+import { formatCurrency } from '@utils/currency';
 
-// Helper to display numbers cleanly without floating point artifacts
-const displayNum = (n) => {
-  const num = Number(n);
-  if (isNaN(num)) return '0';
-  return parseFloat(num.toPrecision(12)).toString();
-};
+// Render a money value with the Odoo-configured company currency.
+const displayNum = (n) => formatCurrency(n);
 
 const TakeoutDelivery = ({ navigation, route }) => {
   const cart = useProductStore((s) => s.getCurrentCart()) || [];
   const { addProduct, removeProduct, clearProducts, setProductDiscount } = useProductStore();
-  const currencyName = useAuthStore((s) => s.currency?.name) || '';
+  const currency = useAuthStore((s) => s.currency);
+  const currencyName = currency?.symbol || currency?.name || '';
   const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);

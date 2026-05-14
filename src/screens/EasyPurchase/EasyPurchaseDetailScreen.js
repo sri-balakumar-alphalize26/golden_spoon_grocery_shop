@@ -11,6 +11,8 @@ import {
   readPurchaseOrder, readStockPicking, readVendorBill, readPayments,
   fetchPurchaseTaxes, readProduct,
 } from '@api/services/easyPurchaseApi';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
@@ -22,7 +24,8 @@ const STATE_STYLE = {
   cancelled: { bg: '#fee2e2', fg: '#b91c1c', label: 'CANCELLED' },
 };
 
-const fmt = (v) => Number(v || 0).toFixed(3);
+// Render a money value with the Odoo-configured company currency.
+const fmt = (v) => formatCurrency(v);
 
 const Section = ({ title, children, right }) => (
   <View style={styles.card}>
@@ -44,6 +47,8 @@ const Row = ({ label, value, color }) => (
 
 const EasyPurchaseDetailScreen = ({ navigation, route }) => {
   const id = route?.params?.id;
+  // Subscribe so the screen re-renders when the currency hydrates / changes.
+  useAuthStore((s) => s.currency);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);

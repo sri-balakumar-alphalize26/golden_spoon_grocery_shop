@@ -12,9 +12,12 @@ import VendorBillDetailList from './VendorBillDetailList';
 import { OverlayLoader } from '@components/Loader';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { VendorModal } from '@components/Modal';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const VendorBillDetails = ({ navigation, route }) => {
   const { id: vendorBillId } = route?.params || {};
+  const currency = useAuthStore((s) => s.currency);
   const [details, setDetails] = useState({});
   // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // // console.log("🚀 ~ submit ~ vendorData:", JSON.stringify(details, null, 2));
   const [isLoading, setIsLoading] = useState(false);
@@ -90,15 +93,15 @@ const VendorBillDetails = ({ navigation, route }) => {
         <View style={{ marginVertical: 2, marginBottom: 15 }}>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Sub Total : </Text>
-            <Text style={styles.totalValue}>{details.untaxed_total_amount}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(details.untaxed_total_amount) || 0, currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Taxes : </Text>
-            <Text style={styles.totalValue}>{((details.total_amount)-(details.untaxed_total_amount)).toFixed(2)}</Text>
+            <Text style={styles.totalValue}>{formatCurrency((Number(details.total_amount) || 0) - (Number(details.untaxed_total_amount) || 0), currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Total : </Text>
-            <Text style={styles.totalValue}>{details.total_amount}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(details.total_amount) || 0, currency)}</Text>
           </View>
         </View>
 

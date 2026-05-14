@@ -14,9 +14,12 @@ import { Button } from '@components/common/Button';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { put, deleteRequest } from '@api/services/utils';
 import { ConfirmationModal, MenuModal } from '@components/Modal';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const PurchaseOrderDetails = ({ navigation, route }) => {
     const { id: purchaseOrderId } = route?.params || {};
+    const currency = useAuthStore((s) => s.currency);
     const [details, setDetails] = useState({});
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -140,19 +143,21 @@ const PurchaseOrderDetails = ({ navigation, route }) => {
                 <View style={styles.totalSection}>
                     <Text style={styles.totalLabel}>Untaxed Amount : </Text>
                     <Text style={styles.totalValue}>
-                    {details.untaxed_total_amount 
-                    ? details.untaxed_total_amount 
-                    : details?.products_lines?.reduce((total, line) => total + (line?.sub_total || 0), 0)}
+                    {formatCurrency(
+                      details.untaxed_total_amount
+                        ? details.untaxed_total_amount
+                        : details?.products_lines?.reduce((total, line) => total + (line?.sub_total || 0), 0) || 0,
+                      currency,
+                    )}
                     </Text>
                 </View>
                 <View style={styles.totalSection}>
                     <Text style={styles.totalLabel}>Taxes : </Text>
-                    <Text style={styles.totalValue}>{(details.total_amount)-(details.untaxed_total_amount) || 0}</Text>
-                    {/* <Text style={styles.totalValue}>{taxTotal}</Text> */}
+                    <Text style={styles.totalValue}>{formatCurrency((details.total_amount || 0) - (details.untaxed_total_amount || 0), currency)}</Text>
                 </View>
                 <View style={styles.totalSection}>
                     <Text style={styles.totalLabel}>Total : </Text>
-                    <Text style={styles.totalValue}>{details.total_amount}</Text>
+                    <Text style={styles.totalValue}>{formatCurrency(details.total_amount || 0, currency)}</Text>
                 </View>
             </View>
 

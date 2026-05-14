@@ -14,6 +14,8 @@ import {
   fetchVendors, fetchPurchaseProducts, fetchPaymentMethods, fetchWarehouses,
   fetchPaymentTerms, fetchPurchaseTaxes, createEasyPurchase, confirmEasyPurchase,
 } from '@api/services/easyPurchaseApi';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
@@ -28,7 +30,8 @@ const today = () => {
 };
 
 const num = (v) => Number(v || 0);
-const fmt = (v) => num(v).toFixed(3);
+// Render a money value with the Odoo-configured company currency.
+const fmt = (v) => formatCurrency(v);
 
 // Reusable picker modal — searchable list of {id, label, sub}
 const PickerModal = ({ visible, title, options, onSelect, onClose, searchPlaceholder = 'Search…' }) => {
@@ -240,6 +243,8 @@ const LineEditor = ({ visible, line, taxes, onSave, onClose, onPickProduct }) =>
 };
 
 const EasyPurchaseFormScreen = ({ navigation }) => {
+  // Subscribe so the screen re-renders when the currency hydrates / changes.
+  useAuthStore((s) => s.currency);
   // Header
   const [date, setDate] = useState(today());
   const [showDatePicker, setShowDatePicker] = useState(false);

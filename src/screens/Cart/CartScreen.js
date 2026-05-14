@@ -10,9 +10,11 @@ import { showToastMessage } from '@components/Toast';
 import { useState } from 'react';
 import { useAuthStore } from '@stores/auth';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { formatCurrency } from '@utils/currency';
 
 const CartScreen = ({ navigation }) => {
   const { getCurrentCart, addProduct, removeProduct, clearProducts } = useProductStore();
+  const currency = useAuthStore((s) => s.currency);
   const cart = getCurrentCart() || [];
   const [creatingOrder, setCreatingOrder] = useState(false);
   const subtotal = cart.reduce((sum, item) => {
@@ -42,13 +44,13 @@ const CartScreen = ({ navigation }) => {
           <View style={styles.itemText}>
             <Text style={styles.name}>{item.product_name || item.name}</Text>
             {item.product_code ? <Text style={styles.code}>{item.product_code}</Text> : null}
-            <Text style={styles.unitPrice}>{unit.toFixed(3)} OMR</Text>
+            <Text style={styles.unitPrice}>{formatCurrency(unit, currency)}</Text>
           </View>
         </View>
         <View style={styles.cardRight}>
           <Text style={styles.qtyText}>Qty: {item.quantity ?? item.qty ?? 1}</Text>
-          {discountAmt > 0 && <Text style={{ fontSize: 12, color: '#ff5722' }}>-{discountAmt.toFixed(3)} disc</Text>}
-          <Text style={styles.lineTotal}>{lineTotal.toFixed(3)} OMR</Text>
+          {discountAmt > 0 && <Text style={{ fontSize: 12, color: '#ff5722' }}>{`-${formatCurrency(discountAmt, currency)} disc`}</Text>}
+          <Text style={styles.lineTotal}>{formatCurrency(lineTotal, currency)}</Text>
         </View>
       </View>
     );
@@ -69,7 +71,7 @@ const CartScreen = ({ navigation }) => {
           <View style={styles.footer}>
             <View>
               <Text style={styles.subtotalLabel}>Subtotal</Text>
-              <Text style={styles.subtotalValue}>{subtotal.toFixed(3)} OMR</Text>
+              <Text style={styles.subtotalValue}>{formatCurrency(subtotal, currency)}</Text>
             </View>
             <TouchableOpacity
               style={styles.checkoutBtn}

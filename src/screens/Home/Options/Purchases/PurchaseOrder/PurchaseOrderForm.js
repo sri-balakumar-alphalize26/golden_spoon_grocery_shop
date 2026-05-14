@@ -17,9 +17,11 @@ import { validateFields } from '@utils/validation';
 import { showToast } from '@utils/common';
 import { showToastMessage } from '@components/Toast';
 import { COLORS, FONT_FAMILY } from "@constants/theme";
+import { formatCurrency } from '@utils/currency';
 
 const PurchaseOrderForm = ({ route, navigation }) => {
   const currentUser = useAuthStore((state) => state.user);
+  const currency = useAuthStore((state) => state.currency);
   const [isVisible, setIsVisible] = useState(false);
   const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
   const [selectedType, setSelectedType] = useState(null);
@@ -384,15 +386,15 @@ const PurchaseOrderForm = ({ route, navigation }) => {
         {productLines.length > 0 && <>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Untaxed Amount : </Text>
-            <Text style={styles.totalValue}>{formData.untaxedAmount}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(formData.untaxedAmount) || 0, currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Taxes : </Text>
-            <Text style={styles.totalValue}>{formData.taxTotal}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(formData.taxTotal) || 0, currency)}</Text>
           </View>
           <View style={styles.totalSection}>
             <Text style={styles.totalLabel}>Total : </Text>
-            <Text style={styles.totalValue}>{formData.totalAmount}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(Number(formData.totalAmount) || 0, currency)}</Text>
           </View>
         </>
         }

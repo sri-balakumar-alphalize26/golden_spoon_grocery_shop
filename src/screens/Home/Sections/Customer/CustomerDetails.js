@@ -18,6 +18,7 @@ import { post } from '@api/services/utils';
 import { fetchCustomerDetailsOdoo } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
 import { useCurrencyStore } from '@stores/currency';
+import { formatCurrency } from '@utils/currency';
 
 const CustomerDetails = ({ navigation, route }) => {
   const { details } = route?.params || {};
@@ -340,15 +341,15 @@ const CustomerDetails = ({ navigation, route }) => {
                 <View style={styles.totalPriceContainer}>
                   <View style={styles.footerRow}>
                     <Text style={styles.footerLabel}>Untaxed Amount:</Text>
-                    <Text style={styles.footerLabel}>{untaxedAmount.toFixed(2)} {currency}</Text>
+                    <Text style={styles.footerLabel}>{formatCurrency(untaxedAmount, currencyCfg)}</Text>
                   </View>
                   <View style={styles.footerRow}>
                     <Text style={styles.footerLabel}>Taxed Amount:</Text>
-                    <Text style={styles.footerLabel}>{taxedAmount.toFixed(2)} {currency}</Text>
+                    <Text style={styles.footerLabel}>{formatCurrency(taxedAmount, currencyCfg)}</Text>
                   </View>
                   <View style={styles.footerRow}>
                     <Text style={styles.totalPriceLabel}>Total Amount:</Text>
-                    <Text style={styles.totalPriceLabel}>{totalAmount.toFixed(2)} {currency}</Text>
+                    <Text style={styles.totalPriceLabel}>{formatCurrency(totalAmount, currencyCfg)}</Text>
                   </View>
                 </View>
                 <Button backgroundColor={COLORS.primaryThemeColor} title={'Place Order'} onPress={placeOrder} />

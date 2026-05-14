@@ -10,9 +10,12 @@ import { formatDate } from '@utils/common/date';
 import { fetchAuditingDetails } from '@api/details/detailApi';
 import { OverlayLoader } from '@components/Loader';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
+import { useAuthStore } from '@stores/auth';
+import { formatCurrency } from '@utils/currency';
 
 const AuditDetails = ({ navigation, route }) => {
     const { id: auditId } = route?.params || {};
+    const currency = useAuthStore((s) => s.currency);
     const [details, setDetails] = useState({});
     const [isLoading, setIsLoading] = useState(false);
     const [selectedImageIndex, setSelectedImageIndex] = useState(false);
@@ -108,9 +111,9 @@ const AuditDetails = ({ navigation, route }) => {
                     textAlignVertical={'top'}
                 />
                 <DetailField label="Date" value={formatDate(details?.date)} />
-                <DetailField label="Amount" value={details?.amount?.toFixed(2) || '-'} />
-                <DetailField label="Tax" value={((details?.taxed_amount - details?.amount)?.toFixed(2)) || '-'} />
-                <DetailField label="Total" value={details?.taxed_amount?.toFixed(2) || '-'} />
+                <DetailField label="Amount" value={details?.amount != null ? formatCurrency(details.amount, currency) : '-'} />
+                <DetailField label="Tax" value={(details?.taxed_amount != null && details?.amount != null) ? formatCurrency(details.taxed_amount - details.amount, currency) : '-'} />
+                <DetailField label="Total" value={details?.taxed_amount != null ? formatCurrency(details.taxed_amount, currency) : '-'} />
                 <DetailField label="Sales Person" value={details?.sales_person_name || '-'} />
                 <DetailField label="Warehouse" value={details?.warehouse_name || '-'} />
                 <DetailField label="Company" value={details?.company_name || '-'} />
