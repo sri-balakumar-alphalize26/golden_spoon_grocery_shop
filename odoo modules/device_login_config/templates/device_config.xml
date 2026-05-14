@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        Device Configuration Page
+        =========================
+        Rendered by DeviceController.device_config_page() at GET /device/config.
+
+        Context variables available:
+          databases        – list of available DB names (str)
+          default_base_url – pre-filled server URL
+          csrf_token       – Odoo CSRF token for the POST form
+    -->
+    <template id="device_config_template" name="Device Configuration">
+        <t t-call="web.layout">
+            <t t-set="head">
+                <title>Device Setup — Odoo</title>
+                <style>
+                    /* Reset &amp; base */
+                    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+                    body {
+                        font-family: 'Roboto', 'Segoe UI', Arial, sans-serif;
+                        background: #f0f2f5;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 24px;
+                    }
+
+                    /* Card */
+                    .dc-card {
+                        background: #ffffff;
+                        border-radius: 10px;
+                        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.10);
+                        padding: 40px 48px;
+                        width: 100%;
+                        max-width: 460px;
+                    }
+
+                    /* Logo area */
+                    .dc-logo {
+                        text-align: center;
+                        margin-bottom: 28px;
+                    }
+                    .dc-logo img {
+                        height: 48px;
+                    }
+
+                    /* Heading */
+                    .dc-card h1 {
+                        font-size: 22px;
+                        font-weight: 700;
+                        color: #212529;
+                        margin-bottom: 6px;
+                        text-align: center;
+                    }
+                    .dc-subtitle {
+                        font-size: 13px;
+                        color: #6c757d;
+                        text-align: center;
+                        margin-bottom: 32px;
+                        line-height: 1.5;
+                    }
+
+                    /* Form fields */
+                    .dc-field {
+                        margin-bottom: 20px;
+                    }
+                    .dc-field label {
+                        display: block;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #495057;
+                        margin-bottom: 6px;
+                    }
+                    .dc-field input,
+                    .dc-field select {
+                        width: 100%;
+                        padding: 10px 14px;
+                        font-size: 14px;
+                        border: 1px solid #ced4da;
+                        border-radius: 6px;
+                        background: #fff;
+                        color: #212529;
+                        outline: none;
+                        transition: border-color 0.2s, box-shadow 0.2s;
+                    }
+                    .dc-field input:focus,
+                    .dc-field select:focus {
+                        border-color: #875a7b;
+                        box-shadow: 0 0 0 3px rgba(135, 90, 123, 0.15);
+                    }
+
+                    /* Submit button */
+                    .dc-btn {
+                        display: block;
+                        width: 100%;
+                        padding: 12px;
+                        margin-top: 28px;
+                        background: #875a7b;
+                        color: #ffffff;
+                        font-size: 15px;
+                        font-weight: 600;
+                        border: none;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        transition: background 0.2s;
+                    }
+                    .dc-btn:hover  { background: #714966; }
+                    .dc-btn:active { background: #5d3b55; }
+
+                    /* Info note */
+                    .dc-note {
+                        font-size: 11px;
+                        color: #adb5bd;
+                        text-align: center;
+                        margin-top: 20px;
+                        line-height: 1.5;
+                    }
+
+                    /* Responsive */
+                    @media (max-width: 500px) {
+                        .dc-card { padding: 28px 20px; }
+                    }
+                </style>
+            </t>
+
+            <div class="dc-card">
+                <!-- Odoo brand logo (served from core web assets) -->
+                <div class="dc-logo">
+                    <img src="/web/static/img/logo2.png"
+                         alt="Odoo"
+                         onerror="this.style.display='none'"/>
+                </div>
+
+                <h1>Device Setup</h1>
+                <p class="dc-subtitle">
+                    This device is not yet registered.<br/>
+                    Please enter the connection details below to continue.
+                </p>
+
+                <form id="device-config-form"
+                      method="post"
+                      action="/device/register"
+                      autocomplete="off">
+
+                    <!-- CSRF protection -->
+                    <input type="hidden" name="csrf_token"
+                           t-att-value="csrf_token"/>
+
+                    <!-- Populated by device_config.js before submit -->
+                    <input type="hidden" name="device_id"   id="device_id_field"/>
+                    <input type="hidden" name="device_name" id="device_name_field"/>
+
+                    <!-- Base URL -->
+                    <div class="dc-field">
+                        <label for="base_url">Server Base URL</label>
+                        <input type="url"
+                               name="base_url"
+                               id="base_url"
+                               t-att-value="default_base_url"
+                               placeholder="https://your-odoo-server.com"
+                               required="required"/>
+                    </div>
+
+                    <!-- Database selector (dropdown when DBs are available, text otherwise) -->
+                    <div class="dc-field">
+                        <label for="database_name">Database Name</label>
+                        <t t-if="databases">
+                            <select name="database_name" id="database_name" required="required">
+                                <option value="">&#8212; Select a database &#8212;</option>
+                                <t t-foreach="databases" t-as="db_name">
+                                    <option t-att-value="db_name">
+                                        <t t-out="db_name"/>
+                                    </option>
+                                </t>
+                            </select>
+                        </t>
+                        <t t-else="">
+                            <input type="text"
+                                   name="database_name"
+                                   id="database_name"
+                                   placeholder="my_database"
+                                   required="required"/>
+                        </t>
+                    </div>
+
+                    <button type="submit" class="dc-btn">
+                        Register Device &amp; Continue
+                    </button>
+                </form>
+
+                <p class="dc-note">
+                    A unique Device ID will be stored in this browser.<br/>
+                    This setup screen appears only once per device.
+                </p>
+            </div>
+        </t>
+    </template>
+</odoo>

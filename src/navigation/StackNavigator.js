@@ -12,6 +12,8 @@ import { TaskManagerScreen } from "@screens/Home/Options/TaskManager";
 import { AuditDetails, AuditForm, AuditScreen } from "@screens/Home/Options/Audit";
 import { PrivacyPolicy } from "@screens/Auth";
 import LoginScreenOdoo from "@screens/Auth/LoginScreenOdoo";
+import DeviceSetupScreen from "@screens/DeviceSetup/DeviceSetupScreen";
+import DeviceQRScannerScreen from "@screens/DeviceSetup/DeviceQRScannerScreen";
 import CategoriesScreen from "@screens";
 import Scanner from "@components/Scanner";
 // import Barcode from "@components/Scanner"; // Uncomment and fix if Barcode is a named export or separate file
@@ -186,6 +188,17 @@ const StackNavigator = () => {
       <Stack.Screen
         name="MapViewScreen"
         component={MapViewScreen}
+        options={{ headerShown: false }}
+      />
+      {/* Device Setup (gating screens — shown before Login on first launch) */}
+      <Stack.Screen
+        name="DeviceSetup"
+        component={DeviceSetupScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="DeviceQRScanner"
+        component={DeviceQRScannerScreen}
         options={{ headerShown: false }}
       />
       {/* Login Screen */}

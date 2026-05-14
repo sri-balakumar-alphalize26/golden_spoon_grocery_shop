@@ -7,6 +7,7 @@ import { useAuthStore } from '@stores/auth';
 import Constants from 'expo-constants';
 import { getConfig } from '@utils/config';
 import { useCurrencyStore } from '@stores/currency';
+import * as deviceApi from '@api/services/deviceApi';
 
 const SplashScreen = () => {
     const navigation = useNavigation();
@@ -26,6 +27,47 @@ const SplashScreen = () => {
                 console.warn('[SPLASH] currency init failed:', e);
             }
 
+            // Step 1: check device config in AsyncStorage
+            let deviceUuid = null;
+            let deviceServerUrl = null;
+            let deviceDbName = null;
+            let deviceRegistered = null;
+            try {
+                const pairs = await AsyncStorage.multiGet([
+                    'device_uuid',
+                    'device_server_url',
+                    'device_db_name',
+                    'device_registered',
+                ]);
+                deviceUuid = pairs[0][1];
+                deviceServerUrl = pairs[1][1];
+                deviceDbName = pairs[2][1];
+                deviceRegistered = pairs[3][1];
+            } catch (e) {
+                console.warn('[SPLASH] AsyncStorage device read failed:', e);
+            }
+
+            if (cancelled) return;
+
+            // First launch or device not configured → DeviceSetup
+            if (!deviceServerUrl || !deviceDbName || deviceRegistered !== 'true') {
+                try {
+                    navigation.reset({ index: 0, routes: [{ name: 'DeviceSetup' }] });
+                } catch (_) {}
+                return;
+            }
+
+            // Fire-and-forget last_login refresh — never block boot on it.
+            if (deviceUuid) {
+                deviceApi.initDevice({
+                    baseUrl: deviceServerUrl,
+                    databaseName: deviceDbName,
+                    deviceId: deviceUuid,
+                    deviceName: 'Golden Spoon Vegetables',
+                }).catch(() => {});
+            }
+
+            // Step 2: device approved — restore user session if any, else go to Login
             let userData = null;
             try {
                 const storedUserData = await AsyncStorage.getItem('userData');
@@ -34,15 +76,13 @@ const SplashScreen = () => {
                     try { userData = JSON.parse(storedUserData); } catch (_) { userData = null; }
                 }
             } catch (e) {
-                console.warn('[SPLASH] AsyncStorage read failed:', e);
+                console.warn('[SPLASH] AsyncStorage userData read failed:', e);
             }
 
             if (cancelled) return;
 
             try {
                 if (userData) {
-                    // Fire-and-forget; do not await — login() runs a network call
-                    // that must not block navigation.
                     try { setLoggedInUser(userData); } catch (_) {}
                     navigation.reset({ index: 0, routes: [{ name: 'AppNavigator' }] });
                 } else {

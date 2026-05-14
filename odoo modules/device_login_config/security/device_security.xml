@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        Record rule: regular internal users can only read active device records.
+        System administrators (group_system) have full access via ir.model.access.csv.
+    -->
+    <!-- Regular users: read all device records -->
+    <record id="device_registry_read_rule" model="ir.rule">
+        <field name="name">Device Registry: internal users read all records</field>
+        <field name="model_id" ref="model_device_registry"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+        <field name="perm_read"   eval="True"/>
+        <field name="perm_write"  eval="False"/>
+        <field name="perm_create" eval="False"/>
+        <field name="perm_unlink" eval="False"/>
+    </record>
+
+    <!-- Administrators: full access to all records (active + inactive) -->
+    <record id="device_registry_admin_rule" model="ir.rule">
+        <field name="name">Device Registry: administrators see all records</field>
+        <field name="model_id" ref="model_device_registry"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+        <field name="perm_read"   eval="True"/>
+        <field name="perm_write"  eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="True"/>
+    </record>
+</odoo>

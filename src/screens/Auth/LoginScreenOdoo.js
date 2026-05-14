@@ -1,5 +1,5 @@
 // src/screens/Auth/LoginScreenOdoo.js
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Keyboard,
@@ -7,8 +7,6 @@ import {
   Image,
   TouchableWithoutFeedback,
   TouchableOpacity,
-  ActivityIndicator,
-  ScrollView,
   LogBox,
 } from "react-native";
 import { COLORS, FONT_FAMILY } from "@constants/theme";
@@ -79,50 +77,48 @@ const LoginScreenOdoo = () => {
 
   LogBox.ignoreLogs(["Non-serializable values were found in the navigation state"]);
 
-  // Defaults — local Odoo running on the same machine. Auto-filled on cold
-  // start so the user only needs to tap Login. `savedCredentials` (if any)
-  // overrides these in the restore effect below.
-  const DEFAULT_BASE_URL = "http://localhost:8069";
-  const DEFAULT_USERNAME = "admin";
-  const DEFAULT_PASSWORD = "admin";
-
+  // Server URL and database come from the device config (set in DeviceSetup),
+  // not from user input on the Login screen. Username/password are the only
+  // editable inputs here.
   const [inputs, setInputs] = useState({
-    baseUrl: DEFAULT_BASE_URL,
-    username: DEFAULT_USERNAME,
-    password: DEFAULT_PASSWORD,
+    baseUrl: "",
+    username: "",
+    password: "",
   });
+  const [selectedDb, setSelectedDb] = useState("");
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
-
-  // DB dropdown state
-  const [dbList, setDbList] = useState([]);
-  const [selectedDb, setSelectedDb] = useState("");
-  const [dbOpen, setDbOpen] = useState(false);
-  const [dbFetchState, setDbFetchState] = useState("idle"); // idle | loading | ok | empty | error
 
   // Auto-fill credentials toggle. When ON, username + password auto-populate
   // from the saved-credentials map keyed by the current URL+DB.
   const [autoCredentials, setAutoCredentials] = useState(false);
 
-  const debounceRef = useRef(null);
-  const lastFetchedUrlRef = useRef("");
-
-  // Restore saved credentials. If nothing has been saved yet, the form keeps
-  // the localhost / admin defaults seeded above. Also migrate the legacy
-  // single-blob `savedCredentials` into the new per-(URL+DB) `saved_credentials`
-  // map so the Auto Fill toggle works without forcing a fresh login.
+  // Hydrate URL + DB from device config, and migrate legacy `savedCredentials`
+  // username/password into the per-(URL+DB) `saved_credentials` map.
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem("savedCredentials");
-        if (raw) {
-          const c = JSON.parse(raw);
-          setInputs({
-            baseUrl: c.baseUrl || DEFAULT_BASE_URL,
-            username: c.username || DEFAULT_USERNAME,
-            password: c.password || DEFAULT_PASSWORD,
-          });
-          if (c.db) setSelectedDb(c.db);
+        const pairs = await AsyncStorage.multiGet([
+          "device_server_url",
+          "device_db_name",
+          "savedCredentials",
+        ]);
+        const deviceUrl = pairs[0][1] || "";
+        const deviceDb = pairs[1][1] || "";
+        const rawSaved = pairs[2][1];
+
+        setInputs((prev) => ({ ...prev, baseUrl: deviceUrl }));
+        if (deviceDb) setSelectedDb(deviceDb);
+
+        if (rawSaved) {
+          const c = JSON.parse(rawSaved);
+          if (c.username || c.password) {
+            setInputs((prev) => ({
+              ...prev,
+              username: c.username || "",
+              password: c.password || "",
+            }));
+          }
           // One-time migration into the new map. Idempotent.
           if (c.baseUrl && c.db && (c.username || c.password)) {
             const key = _credKey(c.baseUrl, c.db);
@@ -179,64 +175,7 @@ const LoginScreenOdoo = () => {
     // The effect above fills the fields.
   };
 
-  // Auto-fetch DB list when URL changes (debounced)
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    const url = inputs.baseUrl.trim();
-    if (!url || !isOdooUrl(url)) {
-      setDbList([]);
-      setDbFetchState("idle");
-      lastFetchedUrlRef.current = "";
-      return;
-    }
-    debounceRef.current = setTimeout(() => fetchDatabases(url), 700);
-    return () => debounceRef.current && clearTimeout(debounceRef.current);
-  }, [inputs.baseUrl]);
-
-  const fetchDatabases = async (rawUrl) => {
-    const normalized = normalizeUrl(rawUrl);
-    if (!normalized || lastFetchedUrlRef.current === normalized) return;
-    lastFetchedUrlRef.current = normalized;
-    setDbFetchState("loading");
-    try {
-      const res = await axios.post(
-        `${normalized}/web/database/list`,
-        { jsonrpc: "2.0", method: "call", params: {} },
-        { headers: { "Content-Type": "application/json" }, timeout: 8000 }
-      );
-      const list = Array.isArray(res?.data?.result) ? res.data.result : [];
-      if (list.length > 0) {
-        setDbList(list);
-        setDbFetchState("ok");
-        // Don't auto-pick the first database — keep "Select a database" as
-        // the placeholder so the user explicitly chooses. Only preserve a
-        // previously-set value if it still exists in the fetched list.
-        setSelectedDb((prev) => (prev && list.includes(prev) ? prev : ""));
-      } else {
-        setDbList([]);
-        setDbFetchState("empty");
-      }
-    } catch (_) {
-      setDbList([]);
-      setDbFetchState("error");
-    }
-  };
-
   const handleOnchange = (text, input) => {
-    if (input === "baseUrl") {
-      // URL is being edited — credentials and DB belong to the previous
-      // server, so wipe them so the user doesn't accidentally submit a
-      // stale combo. Doesn't fire on the initial restore effect since that
-      // calls setInputs directly, not via this handler.
-      setInputs((prev) => {
-        if (prev.baseUrl === text) return prev;
-        return { ...prev, baseUrl: text, username: "", password: "" };
-      });
-      setSelectedDb("");
-      setDbList([]);
-      setDbFetchState("idle");
-      return;
-    }
     setInputs((prev) => ({ ...prev, [input]: text }));
   };
 
@@ -360,22 +299,20 @@ const LoginScreenOdoo = () => {
     }
   };
 
-  const dbPlaceholder = () => {
-    if (!inputs.baseUrl.trim()) return "Enter Server URL above to load databases";
-    if (dbFetchState === "loading") return "Fetching databases…";
-    if (dbFetchState === "error") return "Couldn't reach server — check URL";
-    if (dbFetchState === "empty") return "No databases found on this server";
-    return "Select a database";
-  };
-
-  const canOpenDb = dbFetchState === "ok" && dbList.length > 0;
-
   return (
     <TouchableWithoutFeedback onPress={() => Keyboard.dismiss()}>
       <SafeAreaView backgroundColor={COLORS.white}>
         {/* Loader removed during login per UX requirement; submit button has its own disabled state. */}
 
         <View style={styles.imageContainer}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate("DeviceSetup")}
+            style={styles.gearBtn}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={styles.gearIcon}>⚙</Text>
+          </TouchableOpacity>
           <View style={styles.logoWrapper}>
             <Image
               source={require("@assets/images/header/logo_header.png")}
@@ -398,95 +335,7 @@ const LoginScreenOdoo = () => {
                 <Text style={styles.subtitleText}>Login to continue to your store</Text>
               </View>
 
-              <Text style={styles.sectionLabel}>SERVER</Text>
-
-              {/* Server URL */}
-              <TextInput
-                value={inputs.baseUrl}
-                onChangeText={(text) => handleOnchange(text, "baseUrl")}
-                onFocus={() => handleError(null, "baseUrl")}
-                label="Server URL"
-                placeholder="Enter Server URL"
-                column={true}
-                login={true}
-              />
-
-              {/* Database dropdown (styled as a field) */}
-              <View style={styles.dbFieldWrap}>
-                <Text style={styles.dbLabel}>Database</Text>
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  disabled={!canOpenDb}
-                  onPress={() => canOpenDb && setDbOpen((o) => !o)}
-                  style={[styles.dbSelector, !canOpenDb && styles.dbSelectorDisabled]}
-                >
-                  {dbFetchState === "loading" ? (
-                    <>
-                      <ActivityIndicator size="small" color={COLORS.orange} />
-                      <Text style={[styles.dbSelectorText, { color: COLORS.gray, marginLeft: 8 }]}>
-                        {dbPlaceholder()}
-                      </Text>
-                    </>
-                  ) : (
-                    <Text
-                      style={[
-                        styles.dbSelectorText,
-                        !selectedDb && { color: "#bbb" },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {selectedDb || dbPlaceholder()}
-                    </Text>
-                  )}
-                  {canOpenDb && (
-                    <Text style={styles.chevron}>{dbOpen ? "▲" : "▼"}</Text>
-                  )}
-                </TouchableOpacity>
-
-                {dbOpen && canOpenDb && (
-                  <View style={styles.dropdown}>
-                    <ScrollView
-                      nestedScrollEnabled
-                      keyboardShouldPersistTaps="handled"
-                      showsVerticalScrollIndicator
-                      style={styles.dropdownScroll}
-                    >
-                      {dbList.map((item) => {
-                        const active = item === selectedDb;
-                        return (
-                          <TouchableOpacity
-                            key={item}
-                            style={[styles.dropdownItem, active && styles.dropdownItemActive]}
-                            onPress={() => {
-                              // Wipe whatever is typed for the previous DB
-                              // when switching to a different one. The
-                              // auto-fill effect, if ON, then refills with
-                              // the saved combo for the new (URL+DB) key.
-                              if (selectedDb !== item) {
-                                setInputs((prev) => ({ ...prev, username: "", password: "" }));
-                              }
-                              setSelectedDb(item);
-                              setDbOpen(false);
-                            }}
-                          >
-                            <Text
-                              style={[
-                                styles.dropdownItemText,
-                                active && styles.dropdownItemTextActive,
-                              ]}
-                            >
-                              {item}
-                            </Text>
-                            {active && <Text style={styles.checkmark}>✓</Text>}
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  </View>
-                )}
-              </View>
-
-              <Text style={[styles.sectionLabel, { marginTop: 14 }]}>ACCOUNT</Text>
+              <Text style={styles.sectionLabel}>ACCOUNT</Text>
 
               {/* Username */}
               <TextInput
@@ -556,6 +405,23 @@ const styles = StyleSheet.create({
   imageContainer: {
     alignItems: "center",
     marginBottom: "4%",
+    position: "relative",
+  },
+  gearBtn: {
+    position: "absolute",
+    top: 12,
+    right: 16,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.05)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  gearIcon: {
+    fontSize: 20,
+    color: "#555",
   },
   logoWrapper: {
     backgroundColor: COLORS.white,
@@ -619,84 +485,6 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     backgroundColor: "#fff",
-  },
-  // DB field (mimics TextInput look)
-  dbFieldWrap: {
-    marginTop: 4,
-    marginBottom: 12,
-  },
-  dbLabel: {
-    fontSize: 13,
-    color: COLORS.gray,
-    fontFamily: FONT_FAMILY.urbanistBold,
-    marginBottom: 6,
-    marginLeft: 2,
-  },
-  dbSelector: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderWidth: 1,
-    borderColor: COLORS.lightGray,
-    borderRadius: 12,
-    backgroundColor: COLORS.white,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
-  dbSelectorDisabled: {
-    backgroundColor: "#fafafa",
-  },
-  dbSelectorText: {
-    flex: 1,
-    fontSize: 14,
-    color: "#222",
-    fontFamily: FONT_FAMILY.urbanistBold,
-  },
-  chevron: {
-    color: COLORS.gray,
-    fontSize: 11,
-    marginLeft: 6,
-  },
-  dropdown: {
-    borderWidth: 1,
-    borderColor: COLORS.lightGray,
-    borderRadius: 10,
-    backgroundColor: COLORS.white,
-    marginTop: 6,
-    elevation: 6,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    maxHeight: 220,
-  },
-  dropdownScroll: {
-    maxHeight: 220,
-  },
-  dropdownItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f4f4f4",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  dropdownItemActive: {
-    backgroundColor: COLORS.orange + "15",
-  },
-  dropdownItemText: {
-    fontSize: 14,
-    color: "#333",
-  },
-  dropdownItemTextActive: {
-    color: COLORS.orange,
-    fontFamily: FONT_FAMILY.urbanistBold,
-  },
-  checkmark: {
-    color: COLORS.orange,
-    fontSize: 14,
-    fontFamily: FONT_FAMILY.urbanistBold,
   },
 });
 
