@@ -24,6 +24,9 @@ import { useAuthStore } from "@stores/auth";
 import { showToastMessage } from "@components/Toast";
 
 import { setRuntimeBaseUrl, setRuntimeDb } from "@api/config/odooConfig";
+import { fetchCompanyCurrency, fetchUserCompanyId, fetchDecimalAccuracy } from "@api/services/currencyApi";
+import { saveCurrencyConfig } from "@utils/currency";
+import { useCurrencyStore } from "@stores/currency";
 
 LogBox.ignoreLogs(["new NativeEventEmitter"]);
 LogBox.ignoreAllLogs();
@@ -253,6 +256,56 @@ const LoginScreenOdoo = () => {
           } catch (_) {}
 
           setUser(userData);
+
+          // Refresh currency from the connected Odoo company so the UI
+          // renders the right symbol/name. Fire-and-forget — never delays
+          // navigation. If it fails, the last cached currency stays in use.
+          (async () => {
+            try {
+              let companyId = Array.isArray(userData?.company_id)
+                ? userData.company_id[0]
+                : (userData?.company_id || null);
+              console.log('[CURRENCY:LOGIN] post-login fetch begin companyId=', companyId, 'userData.company_id=', userData?.company_id);
+              if (!companyId) {
+                // Odoo 17+ omits company_id from /web/session/authenticate;
+                // resolve it via res.users.read.
+                try {
+                  companyId = await fetchUserCompanyId(finalOdooUrl, dbNameUsed, userData.uid, password);
+                  console.log('[CURRENCY:LOGIN] resolved companyId via res.users.read =', companyId);
+                } catch (e) {
+                  console.warn('[CURRENCY:LOGIN] could not resolve companyId:', e?.message || e);
+                  return;
+                }
+              }
+              const cfg = await fetchCompanyCurrency(
+                finalOdooUrl, dbNameUsed, userData.uid, password, companyId
+              );
+              console.log('[CURRENCY:LOGIN] fetchCompanyCurrency returned cfg=', cfg);
+              if (cfg && (cfg.symbol || cfg.name)) {
+                await saveCurrencyConfig(cfg);
+                useCurrencyStore.getState().setCurrencyConfig(cfg);
+                useAuthStore.getState().setCurrency(cfg);
+                console.log('[CURRENCY:LOGIN] saved + pushed to both stores =', cfg);
+              } else {
+                console.warn('[CURRENCY:LOGIN] cfg missing symbol/name — not persisted. cfg=', cfg);
+              }
+            } catch (e) {
+              console.warn('[CURRENCY:LOGIN] fetch after login failed:', e?.message || e);
+            }
+
+            // Independent of currency: fetch decimal.precision so the app
+            // mirrors Odoo's Settings → Technical → Decimal Accuracy.
+            try {
+              const digitsMap = await fetchDecimalAccuracy(
+                finalOdooUrl, dbNameUsed, userData.uid, password
+              );
+              await AsyncStorage.setItem('decimalAccuracy', JSON.stringify(digitsMap));
+              useAuthStore.getState().setDecimalAccuracy(digitsMap);
+              console.log('[CURRENCY:LOGIN] saved + pushed decimalAccuracy =', digitsMap);
+            } catch (e) {
+              console.warn('[CURRENCY:LOGIN] decimal.precision fetch failed:', e?.message || e);
+            }
+          })();
 
           // Eagerly preload POS registers + open sessions right after login
           // so the [POSRegister] logs surface immediately (instead of when

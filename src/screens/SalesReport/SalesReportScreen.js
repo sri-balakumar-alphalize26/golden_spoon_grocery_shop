@@ -70,7 +70,10 @@ const prettyDateLabel = (iso) => {
 
 const SalesReportScreen = ({ navigation }) => {
   const currency = useAuthStore((state) => state.currency);
-  const fallbackCurrency = { symbol: 'ر.ع.', position: 'before' };
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] SalesReportScreen', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] SalesReportScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
+  const fallbackCurrency = { symbol: '', name: '', position: 'before' };
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

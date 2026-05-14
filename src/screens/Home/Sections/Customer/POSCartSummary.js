@@ -10,6 +10,9 @@ import { formatCurrency } from '@utils/currency';
 
 const POSCartSummary = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency);
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] POSCartSummary', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] POSCartSummary decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const {
     openingAmount,
     sessionId,
@@ -135,7 +138,7 @@ const POSCartSummary = ({ navigation, route }) => {
                     />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.name}>{item.name}</Text>
-                    <Text style={styles.qty}>{qty} × {formatCurrency(price, currency || { symbol: 'ر.ع.', position: 'before' })}</Text>
+                    <Text style={styles.qty}>{qty} × {formatCurrency(price, currency || { symbol: '', name: '', position: 'before' })}</Text>
                   </View>
                   <View style={styles.controls}>
                     <TouchableOpacity style={styles.qtyBtn} onPress={decrease}>
@@ -146,7 +149,7 @@ const POSCartSummary = ({ navigation, route }) => {
                       <Text style={styles.qtyBtnText}>+</Text>
                     </TouchableOpacity>
                   </View>
-                  <Text style={styles.lineTotal}>{formatCurrency(lineTotal, currency || { symbol: 'ر.ع.', position: 'before' })}</Text>
+                  <Text style={styles.lineTotal}>{formatCurrency(lineTotal, currency || { symbol: '', name: '', position: 'before' })}</Text>
                 </View>
               );
             }}
@@ -157,7 +160,7 @@ const POSCartSummary = ({ navigation, route }) => {
 
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalValue}>{formatCurrency(computeTotal(), currency || { symbol: 'ر.ع.', position: 'before' })}</Text>
+          <Text style={styles.totalValue}>{formatCurrency(computeTotal(), currency || { symbol: '', name: '', position: 'before' })}</Text>
         </View>
 
         {/* Customer selection removed from cart page. Now only available in payment page. */}

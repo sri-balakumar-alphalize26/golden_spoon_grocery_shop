@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Image, TouchableOpacity, Platform } from 'react-native';
 import Text from '@components/Text';
 import { FONT_FAMILY, COLORS } from '@constants/theme';
+import { formatCurrency } from '@utils/currency';
 
 const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
     const url = typeof item?.image_url === 'string' ? item.image_url : '';
@@ -48,7 +49,7 @@ const ProductsList = ({ item, onPress, showQuickAdd, onQuickAdd }) => {
             </View>
             <View style={styles.textContainer}>
                 <Text style={styles.name} numberOfLines={2}>{productName}</Text>
-                <Text style={styles.price}>{priceValue.toFixed(2)}</Text>
+                <Text style={styles.price}>{formatCurrency(priceValue)}</Text>
             </View>
         </TouchableOpacity>
     );

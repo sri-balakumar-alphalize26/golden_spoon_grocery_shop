@@ -26,6 +26,7 @@ import {
   fetchExpenseTotalsOdoo,
   fetchCurrentEmployeeIdOdoo,
 } from '@api/services/generalApi';
+import { refreshCurrencyFromStorage } from '@api/services/currencyApi';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -68,7 +69,19 @@ const formatDate = (s) => {
 
 const ExpensesScreen = ({ navigation }) => {
   const authUser = useAuthStore((state) => state.user);
-  const currency = useAuthStore((state) => state.currency) || { symbol: 'ر.ع.', position: 'before' };
+  const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] ExpensesScreen', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] ExpensesScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
+
+  // FORCE-refresh currency from Odoo every time this screen receives focus
+  // (independent of App boot — survives Fast Refresh and back-navigation).
+  useFocusEffect(useCallback(() => {
+    console.log('[CURRENCY:RENDER] ExpensesScreen focus — forcing refresh');
+    refreshCurrencyFromStorage().then((cfg) => {
+      if (cfg) useAuthStore.getState().setCurrency(cfg);
+    }).catch(() => {});
+  }, []));
 
   const [employee, setEmployee] = useState(null);
   const [data, setData] = useState([]);

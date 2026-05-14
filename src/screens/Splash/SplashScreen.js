@@ -4,27 +4,39 @@ import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
-import Constants from 'expo-constants';
-import { getConfig } from '@utils/config';
 import { useCurrencyStore } from '@stores/currency';
 import * as deviceApi from '@api/services/deviceApi';
+import { refreshCurrencyFromStorage } from '@api/services/currencyApi';
 
 const SplashScreen = () => {
     const navigation = useNavigation();
     const setLoggedInUser = useAuthStore(state => state.login);
-    const setCurrency = useCurrencyStore((state) => state.setCurrency);
+    const setCurrencyConfig = useCurrencyStore((state) => state.setCurrencyConfig);
 
     useEffect(() => {
         let cancelled = false;
 
         const boot = async () => {
-            // Currency init is best-effort; never block the navigation on it.
+            // Hydrate currency from AsyncStorage (saved after the last successful
+            // login). Never blocks navigation. If absent, UI renders without a
+            // symbol until the user logs in and the post-login fetch populates it.
             try {
-                const appName = Constants?.expoConfig?.name || '';
-                const config = getConfig(appName);
-                setCurrency(config.packageName);
+                const raw = await AsyncStorage.getItem('currencyConfig');
+                console.log('[CURRENCY:SPLASH] AsyncStorage currencyConfig raw=', raw);
+                if (raw) {
+                    const cfg = JSON.parse(raw);
+                    console.log('[CURRENCY:SPLASH] parsed cfg=', cfg);
+                    if (cfg && typeof cfg === 'object') {
+                        setCurrencyConfig(cfg);
+                        console.log('[CURRENCY:SPLASH] pushed to useCurrencyStore');
+                    } else {
+                        console.warn('[CURRENCY:SPLASH] parsed cfg is not an object — ignored');
+                    }
+                } else {
+                    console.log('[CURRENCY:SPLASH] no AsyncStorage entry — currency stays empty until login');
+                }
             } catch (e) {
-                console.warn('[SPLASH] currency init failed:', e);
+                console.warn('[CURRENCY:SPLASH] hydrate failed:', e?.message || e);
             }
 
             // Step 1: check device config in AsyncStorage
@@ -77,6 +89,36 @@ const SplashScreen = () => {
                 }
             } catch (e) {
                 console.warn('[SPLASH] AsyncStorage userData read failed:', e);
+            }
+
+            if (cancelled) return;
+
+            // FORCE a fresh currency fetch from Odoo BEFORE leaving Splash
+            // so the very first paint of AppNavigator (or Login) already
+            // uses the right symbol. Bounded by a 6s timeout so a slow/dead
+            // server can't strand the user on the splash screen.
+            if (userData) {
+                try {
+                    const fresh = await Promise.race([
+                        refreshCurrencyFromStorage(),
+                        new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
+                    ]);
+                    if (fresh && !cancelled) {
+                        console.log('[CURRENCY:SPLASH] forced refresh applied:', fresh);
+                        if (fresh.symbol || fresh.name) {
+                            setCurrencyConfig(fresh);
+                            useAuthStore.getState().setCurrency(fresh);
+                        }
+                        if (fresh._digitsMap) {
+                            useAuthStore.getState().setDecimalAccuracy(fresh._digitsMap);
+                            console.log('[CURRENCY:SPLASH] forced refresh digits applied:', fresh._digitsMap);
+                        }
+                    } else if (!fresh) {
+                        console.log('[CURRENCY:SPLASH] forced refresh returned null or timed out');
+                    }
+                } catch (e) {
+                    console.warn('[CURRENCY:SPLASH] forced refresh threw:', e?.message || e);
+                }
             }
 
             if (cancelled) return;

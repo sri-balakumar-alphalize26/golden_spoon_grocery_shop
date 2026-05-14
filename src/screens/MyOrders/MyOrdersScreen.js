@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { fetchOrdersOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
@@ -18,6 +18,9 @@ import { useFeatureHidden } from '@components/FeatureGate';
 
 const MyOrdersScreen = ({ navigation }) => {
   const currency = useAuthStore((state) => state.currency);
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] MyOrdersScreen', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] MyOrdersScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchOrdersOdoo);
   const { addProduct, clearProducts } = useProductStore();
   const [tapBusy, setTapBusy] = useState(false);
@@ -177,7 +180,7 @@ const MyOrdersScreen = ({ navigation }) => {
               </Text>
             </View>
           </View>
-          <Text style={styles.orderAmount}>{formatCurrency(item.amount_total, currency || { symbol: 'ر.ع.', position: 'before' })}</Text>
+          <Text style={styles.orderAmount}>{formatCurrency(item.amount_total, currency || { symbol: '', name: '', position: 'before' })}</Text>
         </View>
 
         <View style={styles.orderDetails}>

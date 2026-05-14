@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, StyleSheet, ScrollView, Dimensions, Platform } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
@@ -42,9 +42,12 @@ const stateMeta = (s) => STATE_META[s] || STATE_META.draft;
 
 const OrdersAnalysisScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency);
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] OrdersAnalysisScreen', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] OrdersAnalysisScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const { period = 'today', ordersData } = route?.params || {};
 
-  const fmtMoney = (amount) => formatCurrencyUtil(amount, currency || { symbol: 'ر.ع.', position: 'before' });
+  const fmtMoney = (amount) => formatCurrencyUtil(amount, currency || { symbol: '', name: '', position: 'before' });
 
   const periodLabel = (() => {
     switch (period) {

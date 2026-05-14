@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, Modal, TextInput, Pressable } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
+import { useAuthStore } from '@stores/auth';
 import { COLORS } from '@constants/theme';
 import { createPosOrderOdoo, fetchDiscountsOdoo, updatePosOrderOdoo } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
@@ -19,6 +20,10 @@ const displayNum = (n) => {
 const TakeoutDelivery = ({ navigation, route }) => {
   const cart = useProductStore((s) => s.getCurrentCart()) || [];
   const { addProduct, removeProduct, clearProducts, setProductDiscount } = useProductStore();
+  const currencyName = useAuthStore((s) => s.currency?.name) || '';
+  const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
@@ -860,7 +865,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
                 style={{ flex:1, fontSize:22, textAlign:'center', padding:6, fontWeight:'700' }}
               />
               <Text style={{ fontSize:16, fontWeight:'800', color:'#666', marginLeft:8 }}>
-                {lineDiscountFormat === 'amount' ? 'OMR' : '%'}
+                {lineDiscountFormat === 'amount' ? currencyName : '%'}
               </Text>
             </View>
 

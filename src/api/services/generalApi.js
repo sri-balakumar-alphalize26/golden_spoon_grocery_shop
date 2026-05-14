@@ -5018,13 +5018,13 @@ export const fetchCompanyCurrency = async () => {
 
     if (response.data && response.data.error) {
       console.error('[FETCH CURRENCY] Odoo error:', response.data.error);
-      return { symbol: 'ر.ع.', name: 'OMR', position: 'before' }; // Fallback
+      return { symbol: '', name: '', position: 'before' }; // Fallback
     }
 
     const companies = response.data.result || [];
     if (companies.length === 0) {
       console.warn('[FETCH CURRENCY] No company found, using fallback');
-      return { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
+      return { symbol: '', name: '', position: 'before' };
     }
 
     const currencyId = Array.isArray(companies[0].currency_id)
@@ -5048,13 +5048,13 @@ export const fetchCompanyCurrency = async () => {
 
     if (currencyResponse.data && currencyResponse.data.error) {
       console.error('[FETCH CURRENCY] Currency read error:', currencyResponse.data.error);
-      return { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
+      return { symbol: '', name: '', position: 'before' };
     }
 
     const currencyData = currencyResponse.data.result[0];
     const currencyInfo = {
-      symbol: currencyData.symbol || 'ر.ع.',
-      name: currencyData.name || 'OMR',
+      symbol: currencyData.symbol || currencyData.name || '',
+      name: currencyData.name || '',
       position: currencyData.position || 'before', // 'before' or 'after'
     };
 
@@ -5062,7 +5062,7 @@ export const fetchCompanyCurrency = async () => {
     return currencyInfo;
   } catch (error) {
     console.error('fetchCompanyCurrency error:', error);
-    return { symbol: 'ر.ع.', name: 'OMR', position: 'before' }; // Fallback
+    return { symbol: '', name: '', position: 'before' }; // Fallback
   }
 };
 

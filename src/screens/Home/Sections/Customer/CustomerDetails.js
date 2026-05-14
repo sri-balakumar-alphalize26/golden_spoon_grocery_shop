@@ -30,7 +30,11 @@ const CustomerDetails = ({ navigation, route }) => {
     addProduct, 
     clearProducts 
   } = useProductStore();
-  const currency = useCurrencyStore((state) => state.currency) || '';
+  const currencyCfg = useCurrencyStore((state) => state.currency);
+  const currency = currencyCfg?.name || currencyCfg?.symbol || '';
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] CustomerDetails', currencyCfg); }, [currencyCfg]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] CustomerDetails decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   
   // Set current customer and load their cart when component mounts
   useEffect(() => {

@@ -1,12 +1,14 @@
 // stores/auth/login
 import { create } from 'zustand';
 import { fetchUserApiToken, fetchHiddenAppFeatures } from '@api/services/generalApi';
+import { refreshCurrencyFromStorage } from '@api/services/currencyApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { saveCurrencyConfig } from '@utils/currency';
+import { setActiveCurrency, setActiveDigits } from '@utils/currency';
 import * as Location from 'expo-location';
 
-// App is locked to Omani Rial regardless of the Odoo company currency.
-const APP_CURRENCY = { symbol: 'ر.ع.', name: 'OMR', position: 'before' };
+// Neutral fallback used until a currency is hydrated from AsyncStorage
+// (set on boot) or fetched from Odoo (set after login).
+const FALLBACK_CURRENCY = { symbol: '', name: '', position: 'before' };
 
 // AsyncStorage key for the cached set of hidden app feature keys. Persisting
 // it lets the UI render correctly on the very first paint after an app
@@ -16,7 +18,24 @@ const HIDDEN_FEATURES_KEY = 'hiddenAppFeatures';
 const useAuthStore = create((set, get) => ({
     isLoggedIn: false,
     user: null,
-    currency: null,
+    currency: FALLBACK_CURRENCY,
+    decimalAccuracy: {},
+
+    // Set the active currency (called from the post-login Odoo fetch and
+    // from boot-time AsyncStorage hydration). Keeps the formatCurrency()
+    // module cache in sync so unhooked render paths also pick it up.
+    setCurrency: (cfg) => {
+        const next = cfg && typeof cfg === 'object' ? { ...FALLBACK_CURRENCY, ...cfg } : FALLBACK_CURRENCY;
+        console.log('[CURRENCY:STORE-AUTH] setCurrency input=', cfg, 'next=', next);
+        setActiveCurrency(next);
+        set({ currency: next });
+    },
+    setDecimalAccuracy: (map) => {
+        const next = map && typeof map === 'object' ? { ...map } : {};
+        console.log('[CURRENCY:STORE-AUTH] setDecimalAccuracy input=', map, 'next=', next);
+        setActiveDigits(next);
+        set({ decimalAccuracy: next });
+    },
     // Set of app feature_key strings hidden for the current user. Empty Set
     // means everything is visible. Read by <FeatureGate> via a selector.
     hiddenFeatures: new Set(),
@@ -44,6 +63,7 @@ const useAuthStore = create((set, get) => ({
 
     // Initialize store by loading persisted user data
     initializeAuth: async () => {
+        console.log('[CURRENCY:STORE-AUTH] initializeAuth called');
         try {
             const userData = await AsyncStorage.getItem('userData');
             // Hydrate the hidden-features cache eagerly so gated UI doesn't
@@ -58,10 +78,38 @@ const useAuthStore = create((set, get) => ({
             } catch (e) {
                 // Ignore — defaults to empty set (everything visible).
             }
-            // Ignore any persisted currency — the app is locked to OMR.
+            // Hydrate currency from AsyncStorage (saved after the last
+            // successful login by LoginScreenOdoo). Falls back to the
+            // empty currency if nothing has been saved yet.
+            try {
+                const rawCurrency = await AsyncStorage.getItem('currencyConfig');
+                console.log('[CURRENCY:STORE-AUTH] initializeAuth AsyncStorage currencyConfig raw=', rawCurrency);
+                if (rawCurrency) {
+                    const cfg = JSON.parse(rawCurrency);
+                    console.log('[CURRENCY:STORE-AUTH] initializeAuth hydrating cfg=', cfg);
+                    get().setCurrency(cfg);
+                } else {
+                    console.log('[CURRENCY:STORE-AUTH] initializeAuth no AsyncStorage entry — staying on FALLBACK');
+                }
+            } catch (e) {
+                console.warn('[CURRENCY:STORE-AUTH] initializeAuth hydrate error:', e?.message || e);
+            }
+            // Hydrate decimal.precision map (saved alongside currencyConfig
+            // on the most recent refresh / login). Falls back to {} on miss.
+            try {
+                const rawDigits = await AsyncStorage.getItem('decimalAccuracy');
+                console.log('[CURRENCY:STORE-AUTH] initializeAuth AsyncStorage decimalAccuracy raw=', rawDigits);
+                if (rawDigits) {
+                    const map = JSON.parse(rawDigits);
+                    if (map && typeof map === 'object') get().setDecimalAccuracy(map);
+                }
+            } catch (e) {
+                console.warn('[CURRENCY:STORE-AUTH] initializeAuth digits hydrate error:', e?.message || e);
+            }
+
             if (userData) {
                 const user = JSON.parse(userData);
-                set({ isLoggedIn: true, user, currency: APP_CURRENCY });
+                set({ isLoggedIn: true, user });
                 console.log('[AUTH] Restored user session:', user.uid || user.id);
                 // Fire-and-forget refresh so any role/feature changes made in
                 // Odoo since the last login take effect on this app launch.
@@ -69,12 +117,15 @@ const useAuthStore = create((set, get) => ({
                 if (uid) {
                     get().refreshHiddenFeatures(uid).catch(() => {});
                 }
-            } else {
-                set({ currency: APP_CURRENCY });
+                // Refresh currency from Odoo so server-side changes (e.g.
+                // switching the company currency) propagate without
+                // requiring a logout + re-login. Fire-and-forget.
+                refreshCurrencyFromStorage()
+                    .then((cfg) => { if (cfg) get().setCurrency(cfg); })
+                    .catch(() => {});
             }
         } catch (error) {
             console.error('[AUTH] Failed to restore session:', error);
-            set({ currency: APP_CURRENCY });
         }
     },
     // login: accepts a user object (from Odoo or admin) and enriches it with API token(s)
@@ -85,10 +136,11 @@ const useAuthStore = create((set, get) => ({
             const enrichedUser = { ...userData };
             set({ user: enrichedUser });
 
-            // App-wide currency is locked to OMR — skip the Odoo fetch.
-            set({ currency: APP_CURRENCY });
-            await saveCurrencyConfig(APP_CURRENCY);
-            console.log('[AUTH] Currency locked to OMR:', APP_CURRENCY);
+            // Currency is fetched from Odoo by LoginScreenOdoo after a
+            // successful authenticate (see fetchCompanyCurrency). The
+            // result is persisted to AsyncStorage `currencyConfig` and
+            // pushed into this store via setCurrency(). Don't override
+            // it here.
 
             try {
                 await AsyncStorage.setItem('userData', JSON.stringify(enrichedUser));

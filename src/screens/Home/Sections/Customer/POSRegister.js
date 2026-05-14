@@ -60,6 +60,9 @@ const Card3D = ({ children, style, delay = 0 }) => {
 
 const POSRegister = ({ navigation }) => {
   const currency = useAuthStore((state) => state.currency);
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] POSRegister', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] POSRegister decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [registers, setRegisters] = useState([]);
   const [openSessions, setOpenSessions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -309,7 +312,7 @@ const POSRegister = ({ navigation }) => {
                 {typeof item.cash_register_balance_start === 'number'
                   ? formatCurrency(
                       item.cash_register_balance_start,
-                      currency || { symbol: 'ر.ع.', position: 'before' }
+                      currency || { symbol: '', name: '', position: 'before' }
                     )
                   : '—'}
               </Text>

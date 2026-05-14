@@ -69,7 +69,10 @@ const formatDate = (s) => {
 
 const OrderDetailScreen = ({ navigation, route }) => {
   const { orderId } = route?.params || {};
-  const currency = useAuthStore((state) => state.currency) || { symbol: 'ر.ع.', position: 'before' };
+  const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] OrderDetailScreen', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] OrderDetailScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [loading, setLoading] = useState(true);
   const [order, setOrder] = useState(null);
   const [locationModalVisible, setLocationModalVisible] = useState(false);

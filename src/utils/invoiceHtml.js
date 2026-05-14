@@ -12,6 +12,8 @@
 // separators) — DO NOT restructure without verifying it still prints
 // correctly on the shop's existing receipt printer setup.
 
+import { getActiveCurrency } from './currency';
+
 export const escapeHtml = (unsafe) => {
   return String(unsafe).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
@@ -52,14 +54,17 @@ export const generateInvoiceHtml = ({
   const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
   const receiptWidth = Math.max(10, pageWidth - 8);  // 4mm margin × 2
   const orderRef = extractOrderRef(orderName, orderId);
-  // OMR receipts: prefix the rial-omani Arabic abbreviation. Decimals
-  // are kept at 2 to match what the rest of the app shows on screen
+  // Use the active currency (set by post-login fetch and boot-time hydration
+  // from AsyncStorage). Decimals are kept at 2 to match the rest of the app
   // (formatCurrency uses .toFixed(2)).
-  const CURRENCY_SYMBOL = 'ر.ع.';
+  const _cur = getActiveCurrency();
+  const CURRENCY_SYMBOL = _cur.symbol || _cur.name || '';
   const formatCurrencyHtml = (amount) => {
     const num = Number(amount);
-    if (isNaN(num)) return `${CURRENCY_SYMBOL} 0.00`;
-    return `${CURRENCY_SYMBOL} ${num.toFixed(2)}`;
+    const safe = isNaN(num) ? 0 : num;
+    return CURRENCY_SYMBOL
+      ? `${CURRENCY_SYMBOL} ${safe.toFixed(2)}`
+      : safe.toFixed(2);
   };
 
   const rows = items.map((item, idx) => {

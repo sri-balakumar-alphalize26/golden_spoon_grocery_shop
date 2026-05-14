@@ -1,16 +1,16 @@
-// src/store/currency/useCurrencyStore.js
+// src/stores/currency/useCurrencyStore.js
 import { create } from 'zustand';
+import { setActiveCurrency } from '@utils/currency';
+
+const FALLBACK = { symbol: '', name: '', position: 'before' };
 
 const useCurrencyStore = create((set) => ({
-    currency: 'AED',
-    setCurrency: (packageName) => {
-        let newCurrency = 'AED'; 
-
-        if (packageName === process.env.EXPO_PUBLIC_PACKAGE_NAME_OMAN) {
-            newCurrency = 'OMR';
-        }
-
-        set({ currency: newCurrency });
+    currency: FALLBACK,
+    setCurrencyConfig: (cfg) => {
+        const next = cfg && typeof cfg === 'object' ? { ...FALLBACK, ...cfg } : FALLBACK;
+        console.log('[CURRENCY:STORE-CUR] setCurrencyConfig input=', cfg, 'next=', next);
+        setActiveCurrency(next);
+        set({ currency: next });
     },
 }));
 

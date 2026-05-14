@@ -67,7 +67,10 @@ const formatDate = (s) => {
 const ExpenseDetailScreen = ({ navigation, route }) => {
   const { expenseId } = route?.params || {};
   const authUser = useAuthStore((state) => state.user);
-  const currency = useAuthStore((state) => state.currency) || { symbol: 'ر.ع.', position: 'before' };
+  const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
+  const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  useEffect(() => { console.log('[CURRENCY:RENDER] ExpenseDetailScreen', currency); }, [currency]);
+  useEffect(() => { console.log('[CURRENCY:RENDER] ExpenseDetailScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
