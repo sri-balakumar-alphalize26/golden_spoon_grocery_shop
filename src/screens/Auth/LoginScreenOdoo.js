@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   LogBox,
 } from "react-native";
-import { COLORS, FONT_FAMILY } from "@constants/theme";
+import { COLORS, FONT_FAMILY, BORDER_RADIUS } from "@constants/theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { useNavigation } from "@react-navigation/native";
@@ -27,6 +27,8 @@ import { setRuntimeBaseUrl, setRuntimeDb } from "@api/config/odooConfig";
 
 LogBox.ignoreLogs(["new NativeEventEmitter"]);
 LogBox.ignoreAllLogs();
+
+const LOGIN_BG = "#FFF8F1";
 
 const isOdooUrl = (url = "") => {
   const lower = url.toLowerCase().trim();
@@ -301,7 +303,7 @@ const LoginScreenOdoo = () => {
 
   return (
     <TouchableWithoutFeedback onPress={() => Keyboard.dismiss()}>
-      <SafeAreaView backgroundColor={COLORS.white}>
+      <SafeAreaView backgroundColor={LOGIN_BG}>
         {/* Loader removed during login per UX requirement; submit button has its own disabled state. */}
 
         <View style={styles.imageContainer}>
@@ -323,18 +325,18 @@ const LoginScreenOdoo = () => {
         </View>
 
         <RoundedScrollContainer
-          backgroundColor={COLORS.white}
+          backgroundColor={LOGIN_BG}
           paddingHorizontal={15}
           borderTopLeftRadius={40}
           borderTopRightRadius={40}
         >
           <View style={{ paddingTop: 12 }}>
-            <View style={{ marginVertical: 5, marginHorizontal: 10 }}>
-              <View style={styles.titleBlock}>
-                <Text style={styles.titleText}>Welcome back</Text>
-                <Text style={styles.subtitleText}>Login to continue to your store</Text>
-              </View>
+            <View style={styles.titleBlock}>
+              <Text style={styles.titleText}>Welcome back</Text>
+              <Text style={styles.subtitleText}>Login to continue to your store</Text>
+            </View>
 
+            <View style={styles.formCard}>
               <Text style={styles.sectionLabel}>ACCOUNT</Text>
 
               {/* Username */}
@@ -424,14 +426,30 @@ const styles = StyleSheet.create({
     color: "#555",
   },
   logoWrapper: {
-    backgroundColor: COLORS.white,
+    backgroundColor: "transparent",
     borderRadius: 12,
     padding: 8,
   },
   titleBlock: {
     alignItems: "center",
     marginTop: 4,
-    marginBottom: 18,
+    marginBottom: 10,
+  },
+  formCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: BORDER_RADIUS.large,
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: "#EFEFEF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.10,
+    shadowRadius: 16,
+    elevation: 6,
   },
   titleText: {
     fontSize: 26,
