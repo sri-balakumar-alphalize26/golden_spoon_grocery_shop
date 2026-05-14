@@ -3,7 +3,12 @@ import { View, ScrollView, Text, TouchableOpacity, StyleSheet, Platform } from '
 import { MaterialIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
-import { fetchProductsOdoo, fetchPosCategoriesOdoo } from '@api/services/generalApi';
+import {
+  fetchProductsByTemplateOdoo,
+  fetchPosCategoriesOdoo,
+  fetchPosCategoryCountsOdoo,
+  fetchProductTemplateCountOdoo,
+} from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -63,13 +68,15 @@ const productTemplateKey = (item) => {
 
 const POSProducts = ({ navigation }) => {
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(
-    fetchProductsOdoo,
+    fetchProductsByTemplateOdoo,
     { getDedupeKey: productTemplateKey }
   );
   const { addProduct, setCurrentCustomer } = useProductStore();
 
   const [posCategories, setPosCategories] = useState([]);
   const [selectedPosCategory, setSelectedPosCategory] = useState(null);
+  const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
+  const [totalCount, setTotalCount] = useState(0);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text, posCategoryId: selectedPosCategory, posOnly: true }),
@@ -95,12 +102,22 @@ const POSProducts = ({ navigation }) => {
         lastCategoryRef.current = selectedPosCategory;
       }
 
-      // Refresh POS category chips on focus so newly added/edited categories
-      // show up without requiring an app restart.
+      // Total templates matching the current filter — drives "Showing X / Y".
+      fetchProductTemplateCountOdoo({
+        searchText,
+        posCategoryId: selectedPosCategory,
+        posOnly: true,
+      }).then((total) => setTotalCount(total)).catch(() => setTotalCount(0));
+
+      // Refresh POS category chips + their per-category counts on focus so
+      // newly added/edited categories show up without requiring an app restart.
       (async () => {
         try {
           const cats = await fetchPosCategoriesOdoo();
+          const ids = (cats || []).map((c) => c.id).filter(Boolean);
+          const counts = await fetchPosCategoryCountsOdoo(ids);
           setPosCategories(cats || []);
+          setCategoryCounts(counts || { all: 0 });
         } catch (e) {
           // best-effort; chip bar simply hides if it fails
         }
@@ -231,14 +248,14 @@ const POSProducts = ({ navigation }) => {
           contentContainerStyle={chipStyles.scroll}
         >
           <Chip
-            label="All"
+            label={`All (${categoryCounts.all ?? 0})`}
             active={!selectedPosCategory}
             onPress={() => setSelectedPosCategory(null)}
           />
           {posCategories.map((c) => (
             <Chip
               key={c.id}
-              label={c.name}
+              label={`${c.name} (${categoryCounts[c.id] ?? 0})`}
               active={selectedPosCategory === c.id}
               tint={colorFor(c.color)}
               onPress={() => setSelectedPosCategory(c.id)}
@@ -258,6 +275,11 @@ const POSProducts = ({ navigation }) => {
         value={searchText}
       />
       {renderCategoryBar()}
+      <View style={countStripStyles.strip}>
+        <Text style={countStripStyles.text}>
+          {`Showing ${data.length}${totalCount ? ` of ${totalCount}` : ''}${loading ? ' · loading…' : ''}`}
+        </Text>
+      </View>
       <RoundedContainer>
         {renderProducts()}
       </RoundedContainer>
@@ -337,6 +359,19 @@ const chipStyles = StyleSheet.create({
     color: NAVY,
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.3,
+  },
+});
+
+const countStripStyles = StyleSheet.create({
+  strip: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    backgroundColor: '#fff',
+  },
+  text: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
   },
 });
 

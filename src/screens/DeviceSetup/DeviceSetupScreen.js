@@ -8,7 +8,6 @@ import {
   Keyboard,
   TouchableWithoutFeedback,
   ActivityIndicator,
-  Alert,
   TextInput as TextInputNative,
 } from 'react-native';
 import * as Device from 'expo-device';
@@ -21,7 +20,7 @@ import { showToastMessage } from '@components/Toast';
 import { FONT_FAMILY } from '@constants/theme';
 import * as deviceApi from '@api/services/deviceApi';
 import { generateUUIDv4 } from '@utils/uuid';
-import ConfirmModal from '@components/Modal/ConfirmModal';
+import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
 
 const getDeviceModel = () =>
   Device.deviceName || Device.modelName || 'Unknown Device';
@@ -50,8 +49,8 @@ const DeviceSetupScreen = () => {
   const [loadingConfigure, setLoadingConfigure] = useState(false);
   const [dbDropdownOpen, setDbDropdownOpen] = useState(false);
   const [errors, setErrors] = useState({});
-  const [notRegisteredOpen, setNotRegisteredOpen] = useState(false);
-  const [ipChangedOpen, setIpChangedOpen] = useState(false);
+  const [moduleMissingOpen, setModuleMissingOpen] = useState(false);
+  const [scanPromptOpen, setScanPromptOpen] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -154,60 +153,17 @@ const DeviceSetupScreen = () => {
         base, selectedDb, session.uid, password, 'device_login_config'
       );
       if (!moduleInstalled) {
-        Alert.alert(
-          'Device Module Not Installed',
-          'The "device_login_config" module is not installed on this Odoo server.\n\nPlease ask your admin to install it before configuring this device.',
-          [{ text: 'OK' }]
-        );
+        setModuleMissingOpen(true);
         return;
       }
 
-      // Step 3 — Lookup device
-      const lookup = await deviceApi.lookupDevice(base, deviceUUID, selectedDb);
-
-      if (lookup.status === 'not_found') {
-        const prevRegistered = await AsyncStorage.getItem('device_registered');
-        if (prevRegistered === 'true') {
-          setIpChangedOpen(true);
-        } else {
-          setNotRegisteredOpen(true);
-        }
-        return;
-      }
-
-      if (lookup.status === 'blocked' || lookup.device_status === 'blocked') {
-        Alert.alert(
-          'Device Blocked',
-          'This device has been blocked by the administrator.\nContact your Odoo admin to unblock it.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-
-      if (lookup.status === 'error') {
-        showToastMessage(lookup.message || 'Server error during lookup. Check URL and database.');
-        return;
-      }
-
-      // Step 4 — Activate
-      const activate = await deviceApi.activateDevice(base, deviceUUID, selectedDb);
-
-      if (activate.status === 'activated' || activate.status === 'already_active') {
-        await AsyncStorage.multiSet([
-          ['device_server_url', base],
-          ['device_db_name', selectedDb],
-          ['device_registered', 'true'],
-        ]);
-        navigation.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] });
-        return;
-      }
-
-      if (activate.status === 'blocked') {
-        Alert.alert('Device Blocked', 'This device has been blocked by the administrator.', [{ text: 'OK' }]);
-        return;
-      }
-
-      showToastMessage(activate.message || 'Activation failed. Try again.');
+      // Step 3 — Always show the Scan QR confirmation popup. This pops
+      // every time, including repeat scans of an already-registered
+      // device — the user must hit "Scan QR" before the camera opens.
+      // The scanner's registerFromScan call handles already_registered
+      // and blocked cases, so showing the popup every time is safe.
+      setScanPromptOpen(true);
+      return;
 
     } catch (err) {
       const msg = err.message || '';
@@ -404,38 +360,29 @@ const DeviceSetupScreen = () => {
           </View>
         </ScrollView>
 
-        <ConfirmModal
-          isVisible={notRegisteredOpen}
-          title="Device Not Registered"
-          message={`This device is not registered.\n\nDevice Model: ${getDeviceModel()}\nDevice ID: ${deviceUUID}\n\nAsk your admin to open Device Registry → New Device — a QR code will appear. Then tap Scan QR below.`}
-          confirmLabel="Scan QR"
-          cancelLabel="OK"
-          onCancel={() => setNotRegisteredOpen(false)}
-          onConfirm={() => {
-            setNotRegisteredOpen(false);
-            navigation.navigate('DeviceQRScanner', {
-              deviceUUID,
-              deviceModel: getDeviceModel(),
-              serverUrl: normalizeUrl(serverUrl),
-            });
-          }}
+        <StyledConfirmModal
+          isVisible={moduleMissingOpen}
+          title="Device Module Not Installed"
+          message={'The "device_login_config" module is not installed on this Odoo server.\n\nPlease ask your admin to install it before configuring this device.'}
+          confirmLabel="OK"
+          onConfirm={() => setModuleMissingOpen(false)}
         />
 
-        <ConfirmModal
-          isVisible={ipChangedOpen}
-          title="Server IP Changed?"
-          message={'This device was previously configured but is not found on this server IP.\n\nTap "Scan QR" to re-register this device on the new server.'}
+        <StyledConfirmModal
+          isVisible={scanPromptOpen}
+          title="Ready to scan?"
+          message={`Open Odoo → Device Registry → New Device on the admin screen. A QR code will appear there — scan it next.\n\nDevice Model: ${getDeviceModel()}\nDevice ID: ${deviceUUID}`}
           confirmLabel="Scan QR"
-          cancelLabel="OK"
-          onCancel={() => setIpChangedOpen(false)}
+          cancelLabel="Cancel"
           onConfirm={() => {
-            setIpChangedOpen(false);
+            setScanPromptOpen(false);
             navigation.navigate('DeviceQRScanner', {
               deviceUUID,
               deviceModel: getDeviceModel(),
               serverUrl: normalizeUrl(serverUrl),
             });
           }}
+          onCancel={() => setScanPromptOpen(false)}
         />
       </SafeAreaView>
     </TouchableWithoutFeedback>

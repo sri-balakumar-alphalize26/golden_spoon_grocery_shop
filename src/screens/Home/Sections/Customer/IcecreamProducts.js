@@ -3,10 +3,10 @@ import { View, FlatList } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import ProductsList from '@components/Product/ProductsList';
 import useDataFetching from '@hooks/useDataFetching';
-import { fetchProductsOdoo } from '@api/services/generalApi';
+import { fetchProductsByTemplateOdoo } from '@api/services/generalApi';
 
 const IcecreamProducts = ({ navigation, route }) => {
-  const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsOdoo);
+  const { data, loading, fetchData, fetchMoreData } = useDataFetching(fetchProductsByTemplateOdoo);
 
   useEffect(() => {
     // Initial fetch: search for ice cream related products

@@ -50,7 +50,12 @@ export const generateInvoiceHtml = ({
   // 80mm (the original thermal-receipt size, ≈3.15"). Other supported
   // values from the in-app PaperSizeModal: 50 (2"), 76 (3"), 100 (4").
   paperWidthMm = 80,
+  // Letterhead from Odoo res.company (cached via useAuthStore().companyProfile
+  // at login). When omitted, the header falls back to a generic "Company"
+  // label so the printed receipt never leaks an old hardcoded name.
+  companyProfile = null,
 } = {}) => {
+  console.log('[INVOICE:HTML] injecting company =', companyProfile?.name || '(none)');
   const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
   const receiptWidth = Math.max(10, pageWidth - 8);  // 4mm margin × 2
   const orderRef = extractOrderRef(orderName, orderId);
@@ -123,10 +128,15 @@ export const generateInvoiceHtml = ({
   <body>
     <div class="receipt" style="padding:4mm 4mm;">
       <div class="header">
-        <div class="company">Multaqa Al-Hadhara Trading L.L.C.</div>
-        <div class="meta">CR No: 1202389</div>
-        <div class="meta">Muscat, Oman</div>
-        <div class="meta">99881702, 93686812</div>
+        <div class="company">${escapeHtml(companyProfile?.name || 'Company')}</div>
+        ${companyProfile?.street ? `<div class="meta">${escapeHtml(companyProfile.street)}</div>` : ''}
+        ${companyProfile?.street2 ? `<div class="meta">${escapeHtml(companyProfile.street2)}</div>` : ''}
+        ${[companyProfile?.city, companyProfile?.state, companyProfile?.zip].filter(Boolean).length
+          ? `<div class="meta">${escapeHtml([companyProfile?.city, companyProfile?.state, companyProfile?.zip].filter(Boolean).join(', '))}</div>`
+          : ''}
+        ${companyProfile?.country ? `<div class="meta">${escapeHtml(companyProfile.country)}</div>` : ''}
+        ${companyProfile?.phone ? `<div class="meta">${escapeHtml(companyProfile.phone)}</div>` : ''}
+        ${companyProfile?.email ? `<div class="meta">${escapeHtml(companyProfile.email)}</div>` : ''}
       </div>
 
       <div class="hr"></div>

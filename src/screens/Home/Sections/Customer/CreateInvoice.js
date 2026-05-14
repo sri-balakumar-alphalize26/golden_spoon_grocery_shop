@@ -18,6 +18,7 @@ const CreateInvoice = ({ navigation, route }) => {
   const cart = useProductStore((s) => s.getCurrentCart()) || [];
   // Subscribe so the screen re-renders when the currency hydrates / changes.
   useAuthStore((s) => s.currency);
+  const companyProfile = useAuthStore((s) => s.companyProfile);
   const [loading, setLoading] = useState(false);
 
   const items = useMemo(() => cart.map(it => {
@@ -147,9 +148,14 @@ const CreateInvoice = ({ navigation, route }) => {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Image source={require('@assets/images/logo/logo.png')} style={{ width: 48, height: 48, resizeMode: 'contain', marginRight: 12 }} />
               <View>
-                <Text style={{ fontSize: 18, fontWeight: '800' }}>My Restaurant</Text>
-                <Text style={{ color: '#6b7280' }}>123 Main St, City</Text>
-                <Text style={{ color: '#6b7280' }}>Phone: (123) 456-7890</Text>
+                <Text style={{ fontSize: 18, fontWeight: '800' }}>{companyProfile?.name || 'Company'}</Text>
+                {companyProfile?.street ? <Text style={{ color: '#6b7280' }}>{companyProfile.street}</Text> : null}
+                {[companyProfile?.city, companyProfile?.state, companyProfile?.zip].filter(Boolean).length ? (
+                  <Text style={{ color: '#6b7280' }}>
+                    {[companyProfile?.city, companyProfile?.state, companyProfile?.zip].filter(Boolean).join(', ')}
+                  </Text>
+                ) : null}
+                {companyProfile?.phone ? <Text style={{ color: '#6b7280' }}>{`Phone: ${companyProfile.phone}`}</Text> : null}
               </View>
             </View>
             <View style={{ alignItems: 'flex-end' }}>

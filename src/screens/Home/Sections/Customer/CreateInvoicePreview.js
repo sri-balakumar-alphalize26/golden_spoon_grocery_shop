@@ -9,7 +9,7 @@ import * as FileSystem from 'expo-file-system';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, captureAndStoreOrderLocation } from '@api/services/generalApi';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
@@ -27,6 +27,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const { clearProducts } = useProductStore();
   // Subscribe so the screen re-renders when the currency hydrates / changes.
   useAuthStore((s) => s.currency);
+  // Company letterhead (res.company): used for the receipt header instead
+  // of the old hardcoded "Multaqa Al-Hadhara…" strings. Cached at login.
+  const companyProfile = useAuthStore((s) => s.companyProfile);
+  useEffect(() => {
+    console.log('[INVOICE:PREVIEW] companyProfile snapshot =', companyProfile);
+  }, [companyProfile]);
 
   // Action states for the receipt-action buttons
   const [previewVisible, setPreviewVisible] = useState(false);
@@ -100,9 +106,50 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const discount = typeof params.discount !== 'undefined' ? Number(params.discount) : 0;
   const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + service - discount;
   const orderId = params.orderId || params.id || params.invoiceId || null;
-  // GPS + place name captured at Validate Payment time. Null if permission
-  // was denied or capture failed — receipt skips the line in that case.
-  const capturedLocation = params.capturedLocation || null;
+  // GPS + place name. Seeded from the capture done at Validate Payment time,
+  // but the preview screen also retries on mount and on user tap so a failed
+  // initial capture doesn't permanently hide the location on the receipt.
+  const [capturedLocation, setCapturedLocation] = useState(params.capturedLocation || null);
+  const [locationFetching, setLocationFetching] = useState(false);
+
+  const refreshLocation = useCallback(async () => {
+    if (locationFetching) return;
+    console.log('[INVOICE:PREVIEW] location refresh start orderId=', orderId);
+    setLocationFetching(true);
+    try {
+      const res = await captureAndStoreOrderLocation(orderId);
+      console.log('[INVOICE:PREVIEW] location refresh result =', res);
+      if (res && (res.locationName || res.latitude != null)) {
+        setCapturedLocation(res);
+      } else if (!res) {
+        Toast.show({
+          type: 'error',
+          text1: 'Location unavailable',
+          text2: 'Enable Location in device settings and tap to retry.',
+          position: 'bottom',
+        });
+      }
+    } catch (e) {
+      console.warn('[INVOICE:PREVIEW] location refresh failed:', e?.message || e);
+      Toast.show({
+        type: 'error',
+        text1: 'Location failed',
+        text2: e?.message || 'Could not fetch device location.',
+        position: 'bottom',
+      });
+    } finally {
+      setLocationFetching(false);
+    }
+  }, [orderId, locationFetching]);
+
+  // On mount: if the previous capture didn't deliver coordinates, kick off
+  // another attempt immediately so the cashier doesn't have to tap retry.
+  useEffect(() => {
+    if (!capturedLocation || (capturedLocation.latitude == null && !capturedLocation.locationName)) {
+      refreshLocation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const grandTotal = total;
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
@@ -144,7 +191,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const runPreview = (paperWidthMm) => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -162,7 +209,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -214,7 +261,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -281,32 +328,52 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             </View>
           </View>
 
-          {/* Location strip — only shown when capture succeeded */}
-          {capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null) ? (
-            <View style={[s.metaStrip, { marginTop: 8 }]}>
-              <View style={[s.metaCell, { flex: 1 }]}>
-                <View style={s.metaIconDisk}>
-                  <MaterialIcons name="place" size={16} color={NAVY} />
-                </View>
-                <View style={{ marginLeft: 8, flex: 1 }}>
-                  <Text style={s.metaCaption}>LOCATION</Text>
-                  <Text style={s.metaValue} numberOfLines={2}>
-                    {capturedLocation.locationName || `${Number(capturedLocation.latitude).toFixed(5)}, ${Number(capturedLocation.longitude).toFixed(5)}`}
-                  </Text>
-                </View>
+          {/* Location strip — always rendered. Shows the resolved place
+              name when capture succeeded; "Capturing…" while a fetch is
+              in flight; and a tappable "Location unavailable — tap to
+              retry" otherwise. */}
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => {
+              if (capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null)) {
+                setLocationModalVisible(true);
+              } else {
+                refreshLocation();
+              }
+            }}
+            style={[s.metaStrip, { marginTop: 8 }]}
+          >
+            <View style={[s.metaCell, { flex: 1 }]}>
+              <View style={s.metaIconDisk}>
+                <MaterialIcons name="place" size={16} color={NAVY} />
+              </View>
+              <View style={{ marginLeft: 8, flex: 1 }}>
+                <Text style={s.metaCaption}>LOCATION</Text>
+                <Text style={s.metaValue} numberOfLines={2}>
+                  {capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null)
+                    ? (capturedLocation.locationName || `${Number(capturedLocation.latitude).toFixed(5)}, ${Number(capturedLocation.longitude).toFixed(5)}`)
+                    : (locationFetching ? 'Capturing location…' : 'Location unavailable — tap to retry')}
+                </Text>
               </View>
             </View>
-          ) : null}
+          </TouchableOpacity>
 
           {/* Plain paper-receipt preview — black on white, mirrors the print output */}
           <View style={s.paperOuter}>
             <Text style={s.paperSectionLabel}>RECEIPT PREVIEW</Text>
             <View style={s.paperSheet}>
-              {/* Company header */}
-              <Text style={s.paperCompany}>Multaqa Al-Hadhara Trading L.L.C.</Text>
-              <Text style={s.paperMetaLine}>CR No: 1202389</Text>
-              <Text style={s.paperMetaLine}>Muscat, Oman</Text>
-              <Text style={s.paperMetaLine}>99881702, 93686812</Text>
+              {/* Company header — sourced from Odoo res.company (cached at login). */}
+              <Text style={s.paperCompany}>{companyProfile?.name || 'Company'}</Text>
+              {companyProfile?.street ? <Text style={s.paperMetaLine}>{companyProfile.street}</Text> : null}
+              {companyProfile?.street2 ? <Text style={s.paperMetaLine}>{companyProfile.street2}</Text> : null}
+              {[companyProfile?.city, companyProfile?.state, companyProfile?.zip].filter(Boolean).length ? (
+                <Text style={s.paperMetaLine}>
+                  {[companyProfile?.city, companyProfile?.state, companyProfile?.zip].filter(Boolean).join(', ')}
+                </Text>
+              ) : null}
+              {companyProfile?.country ? <Text style={s.paperMetaLine}>{companyProfile.country}</Text> : null}
+              {companyProfile?.phone ? <Text style={s.paperMetaLine}>{companyProfile.phone}</Text> : null}
+              {companyProfile?.email ? <Text style={s.paperMetaLine}>{companyProfile.email}</Text> : null}
 
               <View style={s.paperRule} />
 
@@ -498,13 +565,22 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => capturedLocation && setLocationModalVisible(true)}
-              disabled={!capturedLocation}
+              onPress={() => {
+                if (capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null)) {
+                  setLocationModalVisible(true);
+                } else {
+                  refreshLocation();
+                }
+              }}
               activeOpacity={0.85}
-              style={[s.actionChip, s.locationChip, !capturedLocation && { opacity: 0.45 }]}
+              style={[s.actionChip, s.locationChip]}
             >
               <View style={s.actionIconDisk}>
-                <MaterialIcons name="place" size={20} color="#9333ea" />
+                {locationFetching ? (
+                  <ActivityIndicator color="#9333ea" size="small" />
+                ) : (
+                  <MaterialIcons name="place" size={20} color="#9333ea" />
+                )}
               </View>
               <Text style={s.actionChipText}>Location</Text>
             </TouchableOpacity>

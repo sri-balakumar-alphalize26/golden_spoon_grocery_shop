@@ -379,7 +379,15 @@ const TakeoutDelivery = ({ navigation, route }) => {
 
   const renderLine = ({ item }) => {
     const isSelected = selectedLine && String(selectedLine.id) === String(item.id);
-    const imgUrl = item.rawItem?.image_url || item.rawItem?.image_128 || null;
+    // Accept either a fully-formed image url (data:/http) from the
+    // template-based fetch, or a raw base64 `image_128` string from legacy
+    // callers. RN's Image can't load Odoo's `/web/image?…` directly because
+    // the JS request has no session cookie.
+    const rawImg = item.rawItem?.image_url || null;
+    const raw128 = item.rawItem?.image_128 || null;
+    const imgUrl = (rawImg && (rawImg.startsWith('data:') || rawImg.startsWith('http')))
+      ? rawImg
+      : (raw128 ? `data:image/png;base64,${raw128}` : null);
     const initial = (item.name || '?').trim().charAt(0).toUpperCase();
     return (
       <TouchableOpacity

@@ -171,8 +171,10 @@ export const captureAndStoreOrderLocation = async (orderId) => {
     console.warn('[POSLocation] expo-location not available:', e?.message || e);
     return null;
   }
+  console.log('[POSLocation] capture start orderId=', orderId);
   try {
     const perm = await Location.requestForegroundPermissionsAsync();
+    console.log('[POSLocation] permission status =', perm?.status);
     if (perm?.status !== 'granted') {
       console.log('[POSLocation] denied — permission not granted');
       return null;
@@ -186,14 +188,16 @@ export const captureAndStoreOrderLocation = async (orderId) => {
         maxAge: 60_000,
         requiredAccuracy: 200,
       });
+      if (pos) console.log('[POSLocation] fast-path lastKnown OK');
     } catch (lastErr) {
       // Some devices reject getLastKnownPositionAsync without options support.
-      // Fall through to the active fetch below.
+      console.warn('[POSLocation] lastKnown failed:', lastErr?.message || lastErr);
     }
     if (!pos) {
+      console.log('[POSLocation] active fetch (timeout 8s)');
       pos = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy?.Low ?? 1,
-        timeout: 2500,
+        timeout: 8000,
       });
     }
     const latitude = pos?.coords?.latitude;
@@ -202,6 +206,7 @@ export const captureAndStoreOrderLocation = async (orderId) => {
       console.warn('[POSLocation] failed — no coords from GPS');
       return null;
     }
+    console.log('[POSLocation] coords resolved', { latitude, longitude });
     let locationName = '';
     try {
       const places = await Location.reverseGeocodeAsync({ latitude, longitude });

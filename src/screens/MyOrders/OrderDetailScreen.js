@@ -71,6 +71,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const { orderId } = route?.params || {};
   const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
+  const companyProfile = useAuthStore((state) => state.companyProfile);
   useEffect(() => { console.log('[CURRENCY:RENDER] OrderDetailScreen', currency); }, [currency]);
   useEffect(() => { console.log('[CURRENCY:RENDER] OrderDetailScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [loading, setLoading] = useState(true);
@@ -143,7 +144,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) return;
-      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm }));
+      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm, companyProfile }));
       setPreviewVisible(true);
     } catch (err) {
       console.error('[OrderDetail] preview error', err);
@@ -157,7 +158,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
       const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
-      const html = generateInvoiceHtml({ ...params, paperWidthMm });
+      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -204,7 +205,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
-      const html = generateInvoiceHtml({ ...params, paperWidthMm });
+      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile });
       await Print.printAsync({ html });
     } catch (err) {
       if (err?.message && !/cancel/i.test(err.message)) {
