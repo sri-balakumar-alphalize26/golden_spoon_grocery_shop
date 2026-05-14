@@ -4,9 +4,10 @@ import Text from '@components/Text';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
 import {
-  fetchProductsOdoo,
+  fetchProductsByTemplateOdoo,
   fetchPosCategoriesOdoo,
   fetchPosCategoryCountsOdoo,
+  fetchProductTemplateCountOdoo,
 } from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
@@ -66,25 +67,17 @@ const ProductsScreen = ({ navigation, route }) => {
 
   const { addProduct, setCurrentCustomer } = useProductStore();
 
-  // ⬇️ CHANGE: hook now uses fetchProductsOdoo
-  // Dedupe by template id so multi-variant products (e.g. a t-shirt with
-  // size S/M/L) render one tile, not one per variant.
+  // Paginate against product.template directly — one server row per tile,
+  // so the page size matches what the user sees and onEndReached fires
+  // reliably.
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(
-    fetchProductsOdoo,
-    {
-      getDedupeKey: (item) => {
-        if (!item) return null;
-        if (Array.isArray(item.product_tmpl_id) && item.product_tmpl_id[0] != null) {
-          return item.product_tmpl_id[0];
-        }
-        return item.id;
-      },
-    }
+    fetchProductsByTemplateOdoo
   );
 
   const [posCategories, setPosCategories] = useState([]);
   const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
   const [selectedPosCategory, setSelectedPosCategory] = useState(null);
+  const [totalCount, setTotalCount] = useState(0);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text, categoryId, posCategoryId: selectedPosCategory }),
@@ -99,6 +92,9 @@ const ProductsScreen = ({ navigation, route }) => {
     useCallback(() => {
       hasAttemptedFetchRef.current = true;
       fetchData({ searchText, categoryId, posCategoryId: selectedPosCategory });
+      // Total templates matching the current filter — drives "Showing X / Y".
+      fetchProductTemplateCountOdoo({ searchText, categoryId, posCategoryId: selectedPosCategory })
+        .then((total) => setTotalCount(total));
       // Re-pull categories + counts so freshly-created products bump their chip count.
       (async () => {
         try {
@@ -113,6 +109,15 @@ const ProductsScreen = ({ navigation, route }) => {
       })();
     }, [categoryId, searchText, selectedPosCategory])
   );
+
+  useEffect(() => {
+    console.log('[Products]', {
+      showing: data.length,
+      total: totalCount,
+      filter: { searchText, categoryId, posCategoryId: selectedPosCategory },
+      loading,
+    });
+  }, [data.length, totalCount, loading, searchText, categoryId, selectedPosCategory]);
 
   // If opened from POS, ensure cart owner is the POS guest so quick-add works
   useEffect(() => {
@@ -175,7 +180,7 @@ const ProductsScreen = ({ navigation, route }) => {
       contentContainerStyle={{ padding: 10, paddingBottom: 50 }}
       onEndReached={handleLoadMore}
       showsVerticalScrollIndicator={false}
-      onEndReachedThreshold={0.5}
+      onEndReachedThreshold={0.8}
       estimatedItemSize={150}
       removeClippedSubviews={true}
       maxToRenderPerBatch={15}
@@ -240,6 +245,11 @@ const ProductsScreen = ({ navigation, route }) => {
         value={searchText}
       />
       {renderCategoryBar()}
+      <View style={countStripStyles.strip}>
+        <Text style={countStripStyles.text}>
+          {`Showing ${data.length}${totalCount ? ` of ${totalCount}` : ''}${loading ? ' · loading…' : ''}`}
+        </Text>
+      </View>
       <RoundedContainer>
         {renderProducts()}
         {!route?.params?.fromPOS && !fromCustomerDetails ? (
@@ -317,6 +327,20 @@ const chipStyles = StyleSheet.create({
   },
   chipTextActive: {
     color: '#fff',
+  },
+});
+
+const countStripStyles = StyleSheet.create({
+  strip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    backgroundColor: '#F3F4F6',
+  },
+  text: {
+    fontSize: 12,
+    color: COLORS.primaryThemeColor,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
   },
 });
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Image,
@@ -23,7 +23,7 @@ import useDataFetching from '@hooks/useDataFetching';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchStockProductsOdoo } from '@api/services/generalApi';
+import { fetchStockProductsByTemplateOdoo, fetchStockProductCountOdoo } from '@api/services/generalApi';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -44,21 +44,11 @@ const stateOf = (qty) => {
   return { bg: '#DCFCE7', fg: '#166534', label: 'In Stock' };
 };
 
-// Stock list shows one row per template (matching Odoo's Inventory → Stock
-// view). product.product is per-variant — a t-shirt with size S/M/L would
-// otherwise produce three rows, all with the same template name and image.
-const productTemplateKey = (item) => {
-  if (!item) return null;
-  if (Array.isArray(item.product_tmpl_id) && item.product_tmpl_id[0] != null) {
-    return item.product_tmpl_id[0];
-  }
-  return item.id;
-};
-
 const StockScreen = ({ navigation }) => {
+  // Paginated against product.template — one row per template, no
+  // client-side dedupe (page size matches what the user sees).
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(
-    fetchStockProductsOdoo,
-    { getDedupeKey: productTemplateKey }
+    fetchStockProductsByTemplateOdoo
   );
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text, filter: filterRef.current }),
@@ -70,6 +60,7 @@ const StockScreen = ({ navigation }) => {
   const hasLoadedRef = useRef(false);
   const lastParamsRef = useRef({ searchText: '', filter: 'all' });
   const [failedImageIds, setFailedImageIds] = useState(() => new Set());
+  const [totalCount, setTotalCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -78,11 +69,21 @@ const StockScreen = ({ navigation }) => {
         lastParamsRef.current.filter !== filter;
       if (!hasLoadedRef.current || changed) {
         fetchData({ searchText, filter });
+        fetchStockProductCountOdoo({ searchText, filter }).then(setTotalCount);
         hasLoadedRef.current = true;
         lastParamsRef.current = { searchText, filter };
       }
     }, [searchText, filter])
   );
+
+  useEffect(() => {
+    console.log('[Stock]', {
+      showing: data.length,
+      total: totalCount,
+      filter: { searchText, filter },
+      loading,
+    });
+  }, [data.length, totalCount, loading, searchText, filter]);
 
   const handleFilterChange = (next) => {
     if (next === filter) return;
@@ -467,7 +468,7 @@ const StockScreen = ({ navigation }) => {
         keyExtractor={keyExtractor}
         contentContainerStyle={{ padding: 8, paddingBottom: 60 }}
         onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.4}
+        onEndReachedThreshold={0.8}
         showsVerticalScrollIndicator={false}
         estimatedItemSize={92}
         ListFooterComponent={loading && data.length > 0 ? (
@@ -487,6 +488,11 @@ const StockScreen = ({ navigation }) => {
       />
       <RoundedContainer>
         {renderFilters()}
+        <View style={styles.countStrip}>
+          <Text style={styles.countStripText}>
+            {`Showing ${data.length}${totalCount ? ` of ${totalCount}` : ''}${loading ? ' · loading…' : ''}`}
+          </Text>
+        </View>
         <View style={{ flex: 1 }}>
           {renderList()}
         </View>
@@ -499,6 +505,17 @@ const StockScreen = ({ navigation }) => {
 export default StockScreen;
 
 const styles = StyleSheet.create({
+  countStrip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    backgroundColor: '#F3F4F6',
+  },
+  countStripText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
   filterBar: {
     height: 48,
     paddingTop: 6,

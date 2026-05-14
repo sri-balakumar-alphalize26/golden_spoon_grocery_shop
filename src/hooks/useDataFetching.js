@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import Toast from 'react-native-toast-message';
 import useLoader from './useLoader';
 
 const defaultGetKey = (item) => (item ? item.id : null);
@@ -28,6 +29,9 @@ const useDataFetching = (fetchDataCallback, options = {}) => {
   const [allDataLoaded, setAllDataLoaded] = useState(false);
   // offset is the item offset (number of items to skip)
   const [offset, setOffset] = useState(0);
+  // After a pagination error we briefly suppress retries so onEndReached
+  // doesn't hammer the network, then the next scroll attempt resumes.
+  const cooldownUntilRef = useRef(0);
 
   const fetchData = useCallback(async (newFilters = {}) => {
     startLoading();
@@ -42,6 +46,12 @@ const useDataFetching = (fetchDataCallback, options = {}) => {
       setOffset(0);
     } catch (error) {
       console.error('Error fetching data:', error);
+      Toast.show({
+        type: 'error',
+        text1: 'Could not load',
+        text2: (error?.message || '').slice(0, 80),
+        position: 'bottom',
+      });
     } finally {
       stopLoading();
     }
@@ -49,6 +59,7 @@ const useDataFetching = (fetchDataCallback, options = {}) => {
 
   const fetchMoreData = async (newFilters = {}) => {
     if (loading || allDataLoaded) return;
+    if (Date.now() < cooldownUntilRef.current) return;
     startLoading();
     try {
       const limit = newFilters.limit ?? 50;
@@ -81,6 +92,15 @@ const useDataFetching = (fetchDataCallback, options = {}) => {
       }
     } catch (error) {
       console.error('Error fetching more data:', error);
+      // Brief cooldown so onEndReached doesn't tight-loop on a transient
+      // error. The next scroll attempt after the window will retry.
+      cooldownUntilRef.current = Date.now() + 1500;
+      Toast.show({
+        type: 'error',
+        text1: 'Could not load more',
+        text2: (error?.message || '').slice(0, 80),
+        position: 'bottom',
+      });
     } finally {
       stopLoading();
     }

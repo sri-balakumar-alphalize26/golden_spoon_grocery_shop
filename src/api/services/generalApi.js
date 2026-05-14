@@ -597,8 +597,9 @@ export const fetchProductsOdoo = async ({
       domain = domain.concat([['available_in_pos', '=', true]]);
     }
 
+    const baseUrl = getOdooUrl();
     const response = await axios.post(
-      `${getOdooUrl()}/web/dataset/call_kw`,
+      `${baseUrl}/web/dataset/call_kw`,
       {
         jsonrpc: "2.0",
         method: "call",
@@ -613,7 +614,6 @@ export const fetchProductsOdoo = async ({
               "default_code",
               "list_price",
               "qty_available",
-              "image_128",
               "categ_id",
               "available_in_pos",
               "product_tmpl_id",
@@ -626,6 +626,7 @@ export const fetchProductsOdoo = async ({
       },
       {
         headers: { "Content-Type": "application/json" },
+        timeout: 25000,
       }
     );
 
@@ -636,20 +637,137 @@ export const fetchProductsOdoo = async ({
 
     const results = response.data.result || [];
 
-    // Use `image_128` inline (carried over the authenticated JSON-RPC call) so
-    // we never have to hit `/web/image` from the React Native Image component
-    // anonymously (which Odoo blocks for non-public users). When image_128 is
-    // missing/false the product genuinely has no image and we leave image_url
-    // empty so the UI shows a "No Image" placeholder.
-    results.forEach(p => {
-      const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
-      p.image_url = hasBase64 ? `data:image/png;base64,${p.image_128}` : '';
+    // Lazy image fetch via Odoo's authenticated `/web/image` endpoint —
+    // RN's <Image> requests each thumbnail only when it scrolls into
+    // view. Keeps the JSON-RPC payload small even for 1000+ products.
+    results.forEach((p) => {
+      p.image_url = `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`;
     });
 
     return results;
   } catch (error) {
     console.error("fetchProductsOdoo error:", error);
     throw error;
+  }
+};
+
+// Paginate the Products grid against product.template directly (instead
+// of product.product + client-side dedupe). One server row = one tile,
+// so onEndReached fires reliably and "Showing X / Y" matches the
+// search_count on product.template exactly. Other callers still use
+// fetchProductsOdoo when they need variant-level rows.
+export const fetchProductsByTemplateOdoo = async ({
+  offset = 0,
+  limit = 50,
+  searchText = '',
+  posCategoryId = null,
+  categoryId = null,
+  posOnly = false,
+} = {}) => {
+  try {
+    let domain = [];
+    if (searchText && String(searchText).trim()) {
+      const term = String(searchText).trim();
+      domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
+    }
+    if (posCategoryId) {
+      domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
+    } else if (categoryId) {
+      domain = domain.concat([['categ_id', '=', Number(categoryId)]]);
+    }
+    if (posOnly) {
+      domain = domain.concat([['available_in_pos', '=', true]]);
+    }
+
+    const baseUrl = getOdooUrl();
+    const response = await axios.post(
+      `${baseUrl}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.template',
+          method: 'search_read',
+          args: [domain],
+          kwargs: {
+            fields: [
+              'id', 'name', 'default_code', 'list_price', 'qty_available',
+              'categ_id', 'available_in_pos',
+              'product_variant_id',
+              'image_128',
+            ],
+            offset, limit, order: 'name asc',
+          },
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 25000 }
+    );
+
+    if (response.data.error) {
+      console.log('Odoo JSON-RPC error (product.template):', response.data.error);
+      throw new Error('Odoo JSON-RPC error');
+    }
+
+    const rows = response.data.result || [];
+    return rows.map((t) => {
+      const variantId = Array.isArray(t.product_variant_id) ? t.product_variant_id[0] : t.id;
+      // Inline base64 from the authenticated JSON-RPC response — RN's <Image>
+      // can't reach /web/image without the Odoo session cookie, so we embed.
+      const hasBase64 = t.image_128 && typeof t.image_128 === 'string' && t.image_128.length > 0;
+      return {
+        // `id` is the default variant id so add-to-cart / quick-add
+        // (which want a product.product id) keep working unchanged.
+        id: variantId,
+        name: t.name,
+        default_code: t.default_code || '',
+        list_price: Number(t.list_price) || 0,
+        qty_available: Number(t.qty_available) || 0,
+        categ_id: t.categ_id || false,
+        available_in_pos: !!t.available_in_pos,
+        product_tmpl_id: [t.id, t.name],
+        image_url: hasBase64 ? `data:image/png;base64,${t.image_128}` : '',
+      };
+    });
+  } catch (error) {
+    console.error('fetchProductsByTemplateOdoo error:', error);
+    throw error;
+  }
+};
+
+// Count distinct product templates matching the same filter the Products
+// screen renders (the screen dedupes by product_tmpl_id, so we count
+// templates not variants to give the user an accurate "Showing X of Y").
+export const fetchProductTemplateCountOdoo = async ({
+  searchText = '',
+  categoryId = null,
+  posCategoryId = null,
+  posOnly = false,
+} = {}) => {
+  const baseUrl = getOdooUrl();
+  let domain = [];
+  if (searchText && String(searchText).trim()) {
+    const term = String(searchText).trim();
+    domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
+  }
+  if (posCategoryId) {
+    domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
+  } else if (categoryId) {
+    domain = domain.concat([['categ_id', '=', Number(categoryId)]]);
+  }
+  if (posOnly) {
+    domain = domain.concat([['available_in_pos', '=', true]]);
+  }
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'product.template', method: 'search_count', args: [domain], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data && resp.data.error) return 0;
+    return Number(resp.data.result) || 0;
+  } catch (e) {
+    console.warn('fetchProductTemplateCountOdoo failed:', e?.message);
+    return 0;
   }
 };
 
@@ -798,7 +916,9 @@ export const fetchPosCategoryCountsOdoo = async (categoryIds = []) => {
       jsonrpc: '2.0',
       method: 'call',
       params: {
-        model: 'product.product',
+        // Count templates (not variants) so chip counts match the list,
+        // which is deduped by product.template.
+        model: 'product.template',
         method: 'search_count',
         args: [domain],
         kwargs: {},
@@ -1062,7 +1182,7 @@ export const fetchStockProductsOdoo = async ({ offset = 0, limit = 50, searchTex
         args: [domain],
         kwargs: { fields, offset, limit, order: 'name asc' },
       },
-    }, { headers: { 'Content-Type': 'application/json' } });
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 25000 });
     if (response.data && response.data.error) {
       const e = new Error('Odoo JSON-RPC error');
       e.payload = response.data.error;
@@ -1075,7 +1195,7 @@ export const fetchStockProductsOdoo = async ({ offset = 0, limit = 50, searchTex
   // of the same template (a t-shirt with size S/M/L should render as one
   // row in the stock list, matching Odoo's Inventory → Stock view which
   // groups by product, not variant).
-  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id', 'product_tmpl_id'];
+  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'categ_id', 'product_tmpl_id'];
   const safeFields = ['id', 'name', 'default_code', 'qty_available', 'product_tmpl_id'];
 
   let raw = [];
@@ -1104,6 +1224,99 @@ export const fetchStockProductsOdoo = async ({ offset = 0, limit = 50, searchTex
     product_tmpl_id: p.product_tmpl_id || null,
     image_url: `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`,
   }));
+};
+
+// Paginate the Stock list against product.template so the fetcher unit
+// matches the displayed unit. Mirrors fetchStockProductsOdoo's row shape
+// (qty/virtual/uom/category/image) so StockScreen renders unchanged.
+export const fetchStockProductsByTemplateOdoo = async ({
+  offset = 0,
+  limit = 50,
+  searchText = '',
+  filter = 'all',
+} = {}) => {
+  const baseUrl = getOdooUrl();
+  let domain = [];
+  if (searchText && searchText.trim()) {
+    const term = searchText.trim();
+    domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
+  }
+  if (filter === 'in_stock') domain = domain.concat([['qty_available', '>', 0]]);
+  else if (filter === 'low_stock') domain = domain.concat([['qty_available', '>', 0], ['qty_available', '<=', 5]]);
+  else if (filter === 'out_of_stock') domain = domain.concat([['qty_available', '<=', 0]]);
+
+  const callRead = async (fields) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.template',
+        method: 'search_read',
+        args: [domain],
+        kwargs: { fields, offset, limit, order: 'name asc' },
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 25000 });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo JSON-RPC error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data.result || [];
+  };
+
+  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'categ_id', 'product_variant_id'];
+  const safeFields = ['id', 'name', 'default_code', 'qty_available', 'product_variant_id'];
+
+  let raw = [];
+  try {
+    raw = await callRead(richFields);
+  } catch (err) {
+    console.warn('fetchStockProductsByTemplateOdoo rich fetch failed, falling back:', err?.payload || err?.message);
+    try { raw = await callRead(safeFields); } catch (err2) { throw err2; }
+  }
+
+  return raw.map((t) => {
+    const variantId = Array.isArray(t.product_variant_id) ? t.product_variant_id[0] : t.id;
+    return {
+      id: variantId,
+      name: t.name || '',
+      default_code: t.default_code || '',
+      list_price: Number(t.list_price) || 0,
+      qty_available: Number(t.qty_available) || 0,
+      virtual_available: typeof t.virtual_available === 'undefined' ? null : Number(t.virtual_available),
+      uom: Array.isArray(t.uom_id) ? { id: t.uom_id[0], name: t.uom_id[1] } : null,
+      category: Array.isArray(t.categ_id) ? { id: t.categ_id[0], name: t.categ_id[1] } : null,
+      product_tmpl_id: [t.id, t.name],
+      image_url: `${baseUrl}/web/image?model=product.template&id=${t.id}&field=image_128`,
+    };
+  });
+};
+
+// Total number of product.template rows matching the Stock screen's
+// current filter — used to show "Showing X of Y".
+export const fetchStockProductCountOdoo = async ({ searchText = '', filter = 'all' } = {}) => {
+  const baseUrl = getOdooUrl();
+  let domain = [];
+  if (searchText && searchText.trim()) {
+    const term = searchText.trim();
+    domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
+  }
+  if (filter === 'in_stock') domain = domain.concat([['qty_available', '>', 0]]);
+  else if (filter === 'low_stock') domain = domain.concat([['qty_available', '>', 0], ['qty_available', '<=', 5]]);
+  else if (filter === 'out_of_stock') domain = domain.concat([['qty_available', '<=', 0]]);
+
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'product.template', method: 'search_count', args: [domain], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data && resp.data.error) return 0;
+    return Number(resp.data.result) || 0;
+  } catch (e) {
+    console.warn('fetchStockProductCountOdoo failed:', e?.message);
+    return 0;
+  }
 };
 
 // Detail for a single product: product info + per-location quants + last move.
