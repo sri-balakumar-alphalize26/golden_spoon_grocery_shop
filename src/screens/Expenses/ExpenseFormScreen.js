@@ -13,9 +13,14 @@ import {
   Modal,
   FlatList,
   Dimensions,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import SourcePickerModal from '@components/Modal/SourcePickerModal';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
@@ -25,6 +30,7 @@ import {
   updateExpenseOdoo,
   fetchExpensesOdoo,
   fetchCurrentEmployeeIdOdoo,
+  attachReceiptToExpenseOdoo,
 } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
 
@@ -36,6 +42,13 @@ const todayIso = () => {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+const formatBytes = (bytes) => {
+  if (!bytes && bytes !== 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
 const formatDateLabel = (iso) => {
@@ -63,6 +76,11 @@ const ExpenseFormScreen = ({ navigation, route }) => {
   const [categories, setCategories] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState('');
+
+  // Receipts staged locally — uploaded after the hr.expense row exists,
+  // because ir.attachment requires res_id.
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
 
   // Resolve current employee. Required for create.
   const [employeeId, setEmployeeId] = useState(null);
@@ -106,6 +124,61 @@ const ExpenseFormScreen = ({ navigation, route }) => {
     !pickerSearch || (c.name || '').toLowerCase().includes(pickerSearch.toLowerCase())
   );
 
+  const stageAttachment = (att) =>
+    setPendingAttachments((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...att },
+    ]);
+
+  const removeAttachment = (id) =>
+    setPendingAttachments((prev) => prev.filter((a) => a.id !== id));
+
+  const pickFromImage = async (mode) => {
+    const opts = { mediaTypes: ImagePicker.MediaTypeOptions.Images, base64: true, quality: 0.7 };
+    const res = mode === 'camera'
+      ? await ImagePicker.launchCameraAsync(opts)
+      : await ImagePicker.launchImageLibraryAsync(opts);
+    if (res.canceled) return;
+    const asset = res.assets?.[0];
+    if (!asset?.base64) return;
+    const ext = (asset.uri?.match(/\.([a-zA-Z0-9]+)(\?|$)/)?.[1] || 'jpg').toLowerCase();
+    const mime = asset.mimeType || (ext === 'png' ? 'image/png' : 'image/jpeg');
+    stageAttachment({
+      base64: asset.base64,
+      mimetype: mime,
+      filename: `receipt-${Date.now()}.${ext}`,
+      size: asset.fileSize || Math.ceil((asset.base64.length * 3) / 4),
+      previewUri: asset.uri,
+    });
+  };
+
+  const pickFromDocument = async () => {
+    const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+    if (res.canceled) return;
+    const asset = res.assets?.[0];
+    if (!asset?.uri) return;
+    let base64;
+    try {
+      base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Attach failed', text2: 'Could not read file', position: 'bottom' });
+      return;
+    }
+    const mime = asset.mimeType || 'application/octet-stream';
+    stageAttachment({
+      base64,
+      mimetype: mime,
+      filename: asset.name || `receipt-${Date.now()}`,
+      size: asset.size || Math.ceil((base64.length * 3) / 4),
+      previewUri: mime.startsWith('image/') ? asset.uri : null,
+    });
+  };
+
+  const handleAttachReceipt = () => {
+    if (saving) return;
+    setSourcePickerOpen(true);
+  };
+
   const handleSubmit = async () => {
     if (!name.trim()) {
       Toast.show({ type: 'error', text1: 'Description is required', position: 'bottom' });
@@ -138,9 +211,38 @@ const ExpenseFormScreen = ({ navigation, route }) => {
         });
         return;
       }
+
+      // Upload any staged receipts now that the hr.expense row exists.
+      // Attachment failures are surfaced per-file but do not roll back the
+      // expense itself.
+      const expenseId = isEdit ? editId : resp.result;
+      let attachFailures = 0;
+      if (expenseId && pendingAttachments.length > 0) {
+        for (const att of pendingAttachments) {
+          const r = await attachReceiptToExpenseOdoo({
+            expenseId,
+            base64: att.base64,
+            mimetype: att.mimetype,
+            filename: att.filename,
+          });
+          if (r?.error) {
+            attachFailures += 1;
+            Toast.show({
+              type: 'error',
+              text1: `Receipt "${att.filename}" failed`,
+              text2: r.error.message || r.error.data?.message || '',
+              position: 'bottom',
+            });
+          }
+        }
+      }
+
       Toast.show({
         type: 'success',
         text1: isEdit ? 'Expense updated' : 'Expense created',
+        text2: pendingAttachments.length > 0
+          ? `${pendingAttachments.length - attachFailures}/${pendingAttachments.length} receipt(s) attached`
+          : undefined,
         position: 'bottom',
       });
       // Pop back to wherever we came from with a stamp so the list refreshes.
@@ -245,6 +347,51 @@ const ExpenseFormScreen = ({ navigation, route }) => {
               placeholder="Optional"
               multiline
             />
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Receipts</Text>
+              <TouchableOpacity
+                style={[styles.attachBtn, saving && { opacity: 0.6 }]}
+                activeOpacity={0.85}
+                disabled={saving}
+                onPress={handleAttachReceipt}
+              >
+                <MaterialIcons name="attach-file" size={18} color={NAVY} />
+                <Text style={styles.attachBtnText}>Attach Receipt</Text>
+              </TouchableOpacity>
+
+              {pendingAttachments.length > 0 ? (
+                <View style={styles.attachList}>
+                  {pendingAttachments.map((att) => (
+                    <View key={att.id} style={styles.attachRow}>
+                      {att.previewUri ? (
+                        <Image source={{ uri: att.previewUri }} style={styles.attachThumb} />
+                      ) : (
+                        <View style={[styles.attachThumb, styles.attachIconBox]}>
+                          <MaterialIcons
+                            name={att.mimetype === 'application/pdf' ? 'picture-as-pdf' : 'insert-drive-file'}
+                            size={22}
+                            color={NAVY}
+                          />
+                        </View>
+                      )}
+                      <View style={{ flex: 1, marginLeft: 10 }}>
+                        <Text style={styles.attachName} numberOfLines={1}>{att.filename}</Text>
+                        <Text style={styles.attachMeta}>{formatBytes(att.size)}</Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => removeAttachment(att.id)}
+                        disabled={saving}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={styles.attachRemoveBtn}
+                      >
+                        <MaterialIcons name="delete-outline" size={20} color="#B91C1C" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </View>
           </View>
 
           <TouchableOpacity
@@ -317,6 +464,14 @@ const ExpenseFormScreen = ({ navigation, route }) => {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      <SourcePickerModal
+        isVisible={sourcePickerOpen}
+        onClose={() => setSourcePickerOpen(false)}
+        onPickCamera={() => pickFromImage('camera')}
+        onPickGallery={() => pickFromImage('gallery')}
+        onPickFile={() => pickFromDocument()}
+      />
     </SafeAreaView>
   );
 };
@@ -418,6 +573,48 @@ const styles = StyleSheet.create({
   },
   segmentTextActive: { color: '#fff' },
 
+  attachBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    borderStyle: 'dashed',
+    paddingVertical: 12,
+    gap: 8,
+  },
+  attachBtnText: {
+    color: NAVY,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  attachList: { marginTop: 10, gap: 8 },
+  attachRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  attachThumb: {
+    width: 44, height: 44,
+    borderRadius: 8,
+    backgroundColor: '#EEF2F7',
+  },
+  attachIconBox: { alignItems: 'center', justifyContent: 'center' },
+  attachName: { fontSize: 13, color: '#1f2937', fontFamily: FONT_FAMILY.urbanistBold },
+  attachMeta: { fontSize: 11, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 2 },
+  attachRemoveBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 8,
+  },
+
   saveBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     backgroundColor: ORANGE, borderRadius: 12,
@@ -441,6 +638,8 @@ const styles = StyleSheet.create({
     maxHeight: Math.min(Dimensions.get('window').height * 0.78, 560),
     backgroundColor: '#fff',
     borderRadius: 16,
+    borderWidth: 2,
+    borderColor: NAVY,
     overflow: 'hidden',
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } },

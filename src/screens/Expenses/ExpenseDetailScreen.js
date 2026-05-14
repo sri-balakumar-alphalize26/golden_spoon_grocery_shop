@@ -10,8 +10,6 @@ import {
   StatusBar,
   Modal,
   TextInput,
-  ActionSheetIOS,
-  Alert,
   Linking,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,6 +19,7 @@ import * as Sharing from 'expo-sharing';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
+import SourcePickerModal from '@components/Modal/SourcePickerModal';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { FeatureGate } from '@components/FeatureGate';
@@ -78,6 +77,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
   const [expense, setExpense] = useState(null);
   const [refuseModalVisible, setRefuseModalVisible] = useState(false);
   const [refuseReason, setRefuseReason] = useState('');
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
 
   // Receipts attached to this expense — fetched as ir.attachment rows.
   // The viewer modal flips through them with prev/next arrows like Odoo.
@@ -260,27 +260,8 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
   };
 
   const handleAttachReceipt = () => {
-    // Action sheet — Camera / Gallery / File. iOS gets the native sheet,
-    // Android falls back to an Alert with the same three options.
-    const options = ['Camera', 'Gallery', 'File (PDF, Excel…)', 'Cancel'];
-    const dispatch = (idx) => {
-      if (idx === 0) pickFromImage('camera');
-      else if (idx === 1) pickFromImage('gallery');
-      else if (idx === 2) pickFromDocument();
-    };
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex: 3, title: 'Attach Receipt' },
-        dispatch
-      );
-    } else {
-      Alert.alert('Attach Receipt', 'Choose a source', [
-        { text: 'Camera', onPress: () => dispatch(0) },
-        { text: 'Gallery', onPress: () => dispatch(1) },
-        { text: 'File (PDF, Excel…)', onPress: () => dispatch(2) },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    if (acting) return;
+    setSourcePickerOpen(true);
   };
 
   // Split Expense — Odoo's split flow launches a multi-line wizard which
@@ -592,7 +573,16 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
       >
         <View style={styles.modalBg}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Refuse Expense</Text>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Refuse Expense</Text>
+              <TouchableOpacity
+                onPress={() => { setRefuseModalVisible(false); setRefuseReason(''); }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.modalCloseBtn}
+              >
+                <MaterialIcons name="close" size={20} color={NAVY} />
+              </TouchableOpacity>
+            </View>
             <Text style={styles.modalSubtitle}>
               Tell the employee why this expense is being refused.
             </Text>
@@ -623,6 +613,14 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
+
+      <SourcePickerModal
+        isVisible={sourcePickerOpen}
+        onClose={() => setSourcePickerOpen(false)}
+        onPickCamera={() => pickFromImage('camera')}
+        onPickGallery={() => pickFromImage('gallery')}
+        onPickFile={() => pickFromDocument()}
+      />
     </SafeAreaView>
   );
 };
