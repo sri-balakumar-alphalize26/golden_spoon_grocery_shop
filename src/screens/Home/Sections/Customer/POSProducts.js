@@ -115,7 +115,7 @@ const POSProducts = ({ navigation }) => {
         try {
           const cats = await fetchPosCategoriesOdoo();
           const ids = (cats || []).map((c) => c.id).filter(Boolean);
-          const counts = await fetchPosCategoryCountsOdoo(ids);
+          const counts = await fetchPosCategoryCountsOdoo(ids, { posOnly: true });
           setPosCategories(cats || []);
           setCategoryCounts(counts || { all: 0 });
         } catch (e) {

@@ -1,6 +1,7 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, SafeAreaView, Image, ActivityIndicator, Alert } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
@@ -19,6 +20,11 @@ const CreateInvoice = ({ navigation, route }) => {
   // Subscribe so the screen re-renders when the currency hydrates / changes.
   useAuthStore((s) => s.currency);
   const companyProfile = useAuthStore((s) => s.companyProfile);
+  // Pull the freshest company letterhead from Odoo on every focus.
+  useFocusEffect(useCallback(() => {
+    try { useAuthStore.getState().refreshCompanyProfile?.(); } catch (_) {}
+    try { useAuthStore.getState().refreshUserProfile?.(); } catch (_) {}
+  }, []));
   const [loading, setLoading] = useState(false);
 
   const items = useMemo(() => cart.map(it => {

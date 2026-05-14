@@ -9,7 +9,7 @@ import * as FileSystem from 'expo-file-system';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, captureAndStoreOrderLocation } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, captureAndStoreOrderLocation, getLocationPromise } from '@api/services/generalApi';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
@@ -30,9 +30,27 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // Company letterhead (res.company): used for the receipt header instead
   // of the old hardcoded "Multaqa Al-Hadhara…" strings. Cached at login.
   const companyProfile = useAuthStore((s) => s.companyProfile);
+  // The currently logged-in Odoo user — used for the "Cashier: …" line on
+  // the receipt. Falls back to login/uid if .name is missing for some reason.
+  const authUser = useAuthStore((s) => s.user);
+  const cashierName = authUser?.name || authUser?.username || authUser?.login || 'Cashier';
   useEffect(() => {
     console.log('[INVOICE:PREVIEW] companyProfile snapshot =', companyProfile);
   }, [companyProfile]);
+  // Pull the freshest company letterhead from Odoo every time the screen
+  // gains focus so an admin edit reflects without a logout.
+  useFocusEffect(useCallback(() => {
+    try { useAuthStore.getState().refreshCompanyProfile?.(); } catch (_) {}
+    try { useAuthStore.getState().refreshUserProfile?.(); } catch (_) {}
+  }, []));
+  useEffect(() => {
+    console.log('[INVOICE:USER] cashier source =', {
+      name: authUser?.name,
+      username: authUser?.username,
+      login: authUser?.login,
+      uid: authUser?.uid,
+    });
+  }, [authUser?.uid]);
 
   // Action states for the receipt-action buttons
   const [previewVisible, setPreviewVisible] = useState(false);
@@ -142,10 +160,34 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     }
   }, [orderId, locationFetching]);
 
-  // On mount: if the previous capture didn't deliver coordinates, kick off
-  // another attempt immediately so the cashier doesn't have to tap retry.
+  // On mount: if POSPayment fired a background location capture and handed
+  // us the in-flight promise, await it (no second GPS round-trip). Otherwise
+  // fall back to a fresh capture so opening this screen directly still works.
   useEffect(() => {
-    if (!capturedLocation || (capturedLocation.latitude == null && !capturedLocation.locationName)) {
+    // Promises can't be serialized through navigation params, so we look
+    // up the in-flight capture promise from a module-level registry keyed
+    // by orderId (POSPayment registered it before navigating here).
+    const promise = getLocationPromise(orderId);
+    if (capturedLocation && (capturedLocation.latitude != null || capturedLocation.locationName)) {
+      return; // already have a fix
+    }
+    if (promise && typeof promise.then === 'function') {
+      console.log('[INVOICE:PREVIEW] awaiting background location promise…');
+      setLocationFetching(true);
+      promise
+        .then((res) => {
+          console.log('[INVOICE:PREVIEW] background location resolved =', res);
+          if (res && (res.locationName || res.latitude != null)) {
+            setCapturedLocation(res);
+          }
+        })
+        .catch((e) => {
+          console.warn('[INVOICE:PREVIEW] background location rejected:', e?.message || e);
+        })
+        .finally(() => setLocationFetching(false));
+    } else if (orderId) {
+      // No promise piggy-backed — direct entry (e.g. re-opened receipt).
+      // Kick a fresh capture so the cashier doesn't have to tap retry.
       refreshLocation();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,7 +233,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const runPreview = (paperWidthMm) => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -209,7 +251,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -261,7 +303,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -407,7 +449,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               <View style={s.paperMetaRow}>
                 <Text style={[s.paperPlain, { flex: 1, textAlign: 'left' }]}>No: {orderNumber}</Text>
                 <Text style={[s.paperPlain, { flex: 1, textAlign: 'center' }]}>Date: {dateStr}</Text>
-                <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>Cashier: Admin</Text>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>{`Cashier: ${cashierName}`}</Text>
               </View>
 
               {/* Items table */}

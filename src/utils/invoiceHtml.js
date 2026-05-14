@@ -54,8 +54,12 @@ export const generateInvoiceHtml = ({
   // at login). When omitted, the header falls back to a generic "Company"
   // label so the printed receipt never leaks an old hardcoded name.
   companyProfile = null,
+  // Display name of the logged-in Odoo user (res.users.name) for the
+  // "Cashier: …" line on the printed receipt. Falls back to "Cashier" so
+  // we never leak the old hardcoded "Admin" literal.
+  cashierName = 'Cashier',
 } = {}) => {
-  console.log('[INVOICE:HTML] injecting company =', companyProfile?.name || '(none)');
+  console.log('[INVOICE:HTML] injecting company =', companyProfile?.name || '(none)', 'cashier =', cashierName);
   const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
   const receiptWidth = Math.max(10, pageWidth - 8);  // 4mm margin × 2
   const orderRef = extractOrderRef(orderName, orderId);
@@ -160,7 +164,7 @@ export const generateInvoiceHtml = ({
       <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
         <div style="text-align:left; direction:ltr;">No: ${escapeHtml(orderRef)}</div>
         <div style="text-align:center">Date: ${new Date().toLocaleDateString('en-GB')}</div>
-        <div style="text-align:right">Cashier: Admin</div>
+        <div style="text-align:right">Cashier: ${escapeHtml(cashierName || 'Cashier')}</div>
       </div>
 
       <table>

@@ -10,6 +10,7 @@ import {
   fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
   validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
   captureAndStoreOrderLocation,
+  registerLocationPromise,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
 } from '@api/services/generalApi';
@@ -402,6 +403,7 @@ const POSPayment = ({ navigation, route }) => {
       let createdOrderId = orderId || null;
       let invoiceInfo = null;
       let capturedLocation = null;
+      let locationPromise = null;
       if (!createdOrderId) {
         console.log('[STEP 1] No orderId passed to POSPayment. Creating a new order...');
         const posOrderPayload = {
@@ -543,15 +545,23 @@ const POSPayment = ({ navigation, route }) => {
             } else {
               console.log('✅ Order validated successfully');
 
-              // Capture device GPS + reverse-geocoded place name and store
-              // them on the just-validated pos.order. Best-effort: failures
-              // (permission denied / GPS timeout / no network) just leave
-              // capturedLocation null and the receipt skips the line.
-              try {
-                capturedLocation = await captureAndStoreOrderLocation(createdOrderId);
-              } catch (locErr) {
-                console.warn('[POSLocation] capture exception:', locErr?.message || locErr);
-              }
+              // Fire location capture in the background — the receipt screen
+              // doesn't need GPS to render, so don't block invoice creation
+              // on the GPS fix. Race for 1.2s so a fresh lastKnown fix lands
+              // immediately; otherwise the receipt opens with "Capturing…"
+              // and updates when locationPromise eventually settles.
+              locationPromise = captureAndStoreOrderLocation(createdOrderId).catch((e) => {
+                console.warn('[POSLocation] background capture failed:', e?.message || e);
+                return null;
+              });
+              // Stash the in-flight promise in a module registry keyed by
+              // orderId so the receipt screen can pick it up without a
+              // non-serializable nav param.
+              registerLocationPromise(createdOrderId, locationPromise);
+              capturedLocation = await Promise.race([
+                locationPromise,
+                new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+              ]);
 
               const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
               if (shouldCreateInvoice) {
@@ -665,9 +675,10 @@ const POSPayment = ({ navigation, route }) => {
         invoice: invoiceInfo,
         sessionId,
         registerName,
-        // GPS coordinates + place name captured at Validate Payment time
-        // (null if permission denied or capture failed — receipt skips
-        // the line in that case).
+        // GPS coordinates + place name. We may already have a fast-path
+        // fix (capturedLocation set) or just the in-flight promise — the
+        // promise itself is stored in the module registry (keyed by
+        // orderId) so navigation params stay serializable.
         capturedLocation,
       });
     } catch (e) {

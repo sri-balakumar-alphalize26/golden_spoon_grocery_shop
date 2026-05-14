@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   StyleSheet,
@@ -65,6 +66,11 @@ const ExpenseFormScreen = ({ navigation, route }) => {
   const isEdit = !!editId;
   const authUser = useAuthStore((state) => state.user);
   const companyProfile = useAuthStore((state) => state.companyProfile);
+  // Pull the freshest company letterhead from Odoo on every focus.
+  useFocusEffect(useCallback(() => {
+    try { useAuthStore.getState().refreshCompanyProfile?.(); } catch (_) {}
+    try { useAuthStore.getState().refreshUserProfile?.(); } catch (_) {}
+  }, []));
 
   const [saving, setSaving] = useState(false);
   const [prefilling, setPrefilling] = useState(isEdit);

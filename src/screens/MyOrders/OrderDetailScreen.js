@@ -72,6 +72,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
   const companyProfile = useAuthStore((state) => state.companyProfile);
+  const authUser = useAuthStore((state) => state.user);
   useEffect(() => { console.log('[CURRENCY:RENDER] OrderDetailScreen', currency); }, [currency]);
   useEffect(() => { console.log('[CURRENCY:RENDER] OrderDetailScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [loading, setLoading] = useState(true);
@@ -144,7 +145,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) return;
-      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm, companyProfile }));
+      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: (Array.isArray(order?.user_id) ? order.user_id[1] : null) || authUser?.name || authUser?.username || authUser?.login || 'Cashier' }));
       setPreviewVisible(true);
     } catch (err) {
       console.error('[OrderDetail] preview error', err);
@@ -158,7 +159,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
       const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
-      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile });
+      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: (Array.isArray(order?.user_id) ? order.user_id[1] : null) || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -205,7 +206,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
-      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile });
+      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: (Array.isArray(order?.user_id) ? order.user_id[1] : null) || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       await Print.printAsync({ html });
     } catch (err) {
       if (err?.message && !/cancel/i.test(err.message)) {

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import * as Font from 'expo-font';
-import { LogBox } from 'react-native';
+import { AppState, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
@@ -50,6 +50,19 @@ export default function App() {
 
     // Initialize auth state from AsyncStorage
     initializeAuth();
+
+    // Refresh the cached Odoo company letterhead whenever the app returns to
+    // the foreground, so an admin edit (company name / address / phone /
+    // email) reflects without a logout. Fire-and-forget.
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        try { useAuthStore.getState().refreshCompanyProfile?.(); } catch (_) {}
+        try { useAuthStore.getState().refreshUserProfile?.(); } catch (_) {}
+      }
+    });
+    return () => {
+      try { appStateSub.remove(); } catch (_) {}
+    };
   }, []);
 
   // Render the tree on the very first frame so the navigator can mount its

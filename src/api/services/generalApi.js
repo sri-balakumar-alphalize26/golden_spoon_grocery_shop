@@ -157,6 +157,22 @@ export const updatePosOrderOdoo = async (orderId, values) => {
   }
 };
 
+// Module-level map of orderId → in-flight location promise. Used so the
+// POSPayment screen can kick off capture in the background and the receipt
+// screen can subscribe to the same promise without passing a non-serializable
+// value through navigation params.
+const _locationPromises = new Map();
+export const registerLocationPromise = (orderId, promise) => {
+  if (!orderId || !promise) return;
+  _locationPromises.set(String(orderId), promise);
+  // Auto-clean after 60s so the map doesn't grow forever.
+  setTimeout(() => _locationPromises.delete(String(orderId)), 60_000);
+};
+export const getLocationPromise = (orderId) => {
+  if (!orderId) return null;
+  return _locationPromises.get(String(orderId)) || null;
+};
+
 // Capture device GPS + reverse-geocoded place name and write them onto the
 // just-validated pos.order. Lazy-loads expo-location so the rest of the API
 // module doesn't pay the import cost. Graceful on permission denial / GPS
@@ -194,11 +210,28 @@ export const captureAndStoreOrderLocation = async (orderId) => {
       console.warn('[POSLocation] lastKnown failed:', lastErr?.message || lastErr);
     }
     if (!pos) {
-      console.log('[POSLocation] active fetch (timeout 8s)');
-      pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy?.Low ?? 1,
-        timeout: 8000,
-      });
+      // expo-location's `timeout` option is unreliable on some devices —
+      // it can hang indefinitely. Wrap with an explicit Promise.race so
+      // we ALWAYS resolve within ~3.5s, even if the GPS subsystem stalls.
+      console.log('[POSLocation] active fetch (hard timeout 3.5s)');
+      pos = await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy?.Low ?? 1,
+          timeout: 3000,
+        }).catch((e) => {
+          console.warn('[POSLocation] getCurrentPositionAsync rejected:', e?.message || e);
+          return null;
+        }),
+        new Promise((resolve) => setTimeout(() => {
+          console.warn('[POSLocation] hard timeout — getCurrentPositionAsync did not resolve in 3.5s');
+          resolve(null);
+        }, 3500)),
+      ]);
+      if (!pos) {
+        console.warn('[POSLocation] no fix available, returning null');
+        return null;
+      }
+      console.log('[POSLocation] active fetch returned pos');
     }
     const latitude = pos?.coords?.latitude;
     const longitude = pos?.coords?.longitude;
@@ -912,11 +945,18 @@ export const updatePosCategoryOdoo = async (categoryId, { name, color } = {}) =>
 // Counts of products per POS category, plus a grand total. Returns
 // { all: <int>, [categoryId]: <int>, ... }. Used by the Products screen
 // to label each category chip with its count.
-export const fetchPosCategoryCountsOdoo = async (categoryIds = []) => {
+export const fetchPosCategoryCountsOdoo = async (categoryIds = [], { posOnly = false } = {}) => {
   const baseUrl = getOdooUrl();
   const counts = { all: 0 };
+  // When the caller is the POS Products screen, the list and the strip
+  // count both filter by available_in_pos=true — so the chip counts need
+  // to honor the same filter, otherwise `All (83)` won't match the
+  // rendered `Showing 69 of 69`. Normal Products passes no flag and gets
+  // the original "all templates" count.
+  const posDomain = posOnly ? [['available_in_pos', '=', true]] : [];
 
-  const callCount = async (domain) => {
+  const callCount = async (extra) => {
+    const domain = [...posDomain, ...extra];
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -2836,6 +2876,12 @@ export const fetchPaymentJournalsOdoo = async () => {
 };
 
 // Create invoice (account.move) in Odoo
+// Module-level cache for the sales journal id. The user's configured sales
+// journal doesn't change mid-session, so re-querying account.journal on every
+// invoice is wasted latency (~200-400ms per call). Cleared on logout if needed.
+let _cachedSaleJournalId = null;
+export const _resetSaleJournalCache = () => { _cachedSaleJournalId = null; };
+
 export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = null, invoiceDate = null, reference = '' } = {}) => {
   try {
     if (!partnerId) throw new Error('partnerId is required');
@@ -2881,9 +2927,14 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
     }
 
     // When we still don't have a sales journal, try to auto-select one
+    if (!finalJournalId && _cachedSaleJournalId) {
+      finalJournalId = _cachedSaleJournalId;
+      console.log('[INVOICE:JOURNAL] cache hit id=', finalJournalId);
+    }
     if (!finalJournalId) {
       try {
         // First try the existing helper which returns payment journals
+        console.log('[INVOICE:JOURNAL] cache miss, fetching from Odoo');
         const journals = await fetchPaymentJournalsOdoo();
         console.log('[INVOICE] Fetched journals from Odoo:', JSON.stringify(journals));
         // Prefer explicit type 'sale' or names/codes indicating sales/invoice
@@ -2893,7 +2944,8 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
         }
         if (salesJournal) {
           finalJournalId = salesJournal.id;
-          console.log('[INVOICE] Auto-selected sales journal from payment list:', salesJournal);
+          _cachedSaleJournalId = finalJournalId;
+          console.log('[INVOICE:JOURNAL] cached id=', finalJournalId, 'from payment list');
         } else {
           // Fallback: explicitly query account.journal for type='sale'
           try {
@@ -2910,7 +2962,8 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
             const found = resp.data && resp.data.result || [];
             if (found.length > 0) {
               finalJournalId = found[0].id;
-              console.log('[INVOICE] Auto-selected sales journal via explicit account.journal search:', found[0]);
+              _cachedSaleJournalId = finalJournalId;
+              console.log('[INVOICE:JOURNAL] cached id=', finalJournalId, 'via explicit account.journal search');
             } else {
               console.error('[INVOICE] No sale journal found in Odoo. Cannot create invoice without a sales journal.');
               throw new Error('No sale journal found in Odoo. Please configure at least one sales journal or pass a valid sales journal id to createInvoiceOdoo.');
@@ -5323,6 +5376,35 @@ export const fetchCompanyProfileOdoo = async (companyId) => {
     };
   } catch (e) {
     console.warn('fetchCompanyProfileOdoo failed:', e?.message);
+    return null;
+  }
+};
+
+// Fresh display name + login for the currently-logged-in Odoo user. Used by
+// useAuthStore.refreshUserProfile() so an admin rename in Odoo reflects on
+// the receipt's "Cashier: …" line without requiring a logout.
+export const fetchUserProfileOdoo = async (uid) => {
+  if (!uid) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'res.users',
+        method: 'read',
+        args: [[Number(uid)], ['name', 'login']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 });
+    if (resp.data?.error) {
+      console.warn('fetchUserProfileOdoo error:', resp.data.error?.data?.message);
+      return null;
+    }
+    const u = resp.data?.result?.[0];
+    if (!u) return null;
+    return { name: u.name || '', login: u.login || '' };
+  } catch (e) {
+    console.warn('fetchUserProfileOdoo failed:', e?.message);
     return null;
   }
 };

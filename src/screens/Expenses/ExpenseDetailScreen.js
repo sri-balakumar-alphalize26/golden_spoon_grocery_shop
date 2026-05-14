@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Image,
@@ -71,6 +72,13 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
   const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
   const companyProfile = useAuthStore((state) => state.companyProfile);
+  // Pull the freshest company letterhead from Odoo on every focus so an
+  // admin edit (name / address / phone / email) shows on the receipt
+  // viewer without requiring a re-login.
+  useFocusEffect(useCallback(() => {
+    try { useAuthStore.getState().refreshCompanyProfile?.(); } catch (_) {}
+    try { useAuthStore.getState().refreshUserProfile?.(); } catch (_) {}
+  }, []));
   useEffect(() => { console.log('[CURRENCY:RENDER] ExpenseDetailScreen', currency); }, [currency]);
   useEffect(() => { console.log('[CURRENCY:RENDER] ExpenseDetailScreen decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
 
