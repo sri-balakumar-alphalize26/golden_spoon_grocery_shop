@@ -51,6 +51,7 @@ const DeviceSetupScreen = () => {
   const [dbDropdownOpen, setDbDropdownOpen] = useState(false);
   const [errors, setErrors] = useState({});
   const [notRegisteredOpen, setNotRegisteredOpen] = useState(false);
+  const [ipChangedOpen, setIpChangedOpen] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -167,31 +168,7 @@ const DeviceSetupScreen = () => {
       if (lookup.status === 'not_found') {
         const prevRegistered = await AsyncStorage.getItem('device_registered');
         if (prevRegistered === 'true') {
-          Alert.alert(
-            'Server IP Changed?',
-            'This device was previously configured but is not found on this server IP.\n\nIf you changed WiFi/network, tap "Update & Continue" to use the new server address.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Update & Continue',
-                onPress: async () => {
-                  await AsyncStorage.multiSet([
-                    ['device_server_url', base],
-                    ['device_db_name', selectedDb],
-                  ]);
-                  navigation.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] });
-                },
-              },
-              {
-                text: 'Scan QR',
-                onPress: () => navigation.navigate('DeviceQRScanner', {
-                  deviceUUID,
-                  deviceModel: getDeviceModel(),
-                  serverUrl: base,
-                }),
-              },
-            ]
-          );
+          setIpChangedOpen(true);
         } else {
           setNotRegisteredOpen(true);
         }
@@ -436,6 +413,23 @@ const DeviceSetupScreen = () => {
           onCancel={() => setNotRegisteredOpen(false)}
           onConfirm={() => {
             setNotRegisteredOpen(false);
+            navigation.navigate('DeviceQRScanner', {
+              deviceUUID,
+              deviceModel: getDeviceModel(),
+              serverUrl: normalizeUrl(serverUrl),
+            });
+          }}
+        />
+
+        <ConfirmModal
+          isVisible={ipChangedOpen}
+          title="Server IP Changed?"
+          message={'This device was previously configured but is not found on this server IP.\n\nTap "Scan QR" to re-register this device on the new server.'}
+          confirmLabel="Scan QR"
+          cancelLabel="OK"
+          onCancel={() => setIpChangedOpen(false)}
+          onConfirm={() => {
+            setIpChangedOpen(false);
             navigation.navigate('DeviceQRScanner', {
               deviceUUID,
               deviceModel: getDeviceModel(),
