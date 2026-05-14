@@ -33,3 +33,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# user manual source images (regenerated from the zip)
+assets_for_manual/
