@@ -10,7 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const JSZip = require("jszip");
 
-const DOCX_PATH = path.join(__dirname, "..", "Golden Spoon Vegetables.docx");
+const DOCX_PATH = path.join(__dirname, "..", "documents", "Golden Spoon Vegetables.docx");
 const BAK_PATH = DOCX_PATH + ".bak";
 
 // The exact text of the existing step we anchor to (full text — must be the

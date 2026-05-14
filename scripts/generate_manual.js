@@ -1,5 +1,5 @@
 /*
- * Generates Golden_Spoon_User_Manual.docx at the project root.
+ * Generates documents/Golden_Spoon_User_Manual.docx.
  * Run with: node scripts/generate_manual.js
  */
 
@@ -899,7 +899,7 @@ const doc = new Document({
 
 // ---------- write file ----------
 
-const outPath = path.join(__dirname, "..", "Golden_Spoon_User_Manual.docx");
+const outPath = path.join(__dirname, "..", "documents", "Golden_Spoon_User_Manual.docx");
 Packer.toBuffer(doc).then((buf) => {
   fs.writeFileSync(outPath, buf);
   console.log("Wrote", outPath, "(", buf.length, "bytes )");
