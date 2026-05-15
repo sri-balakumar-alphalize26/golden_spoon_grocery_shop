@@ -8,6 +8,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
 import {
   fetchEasyPurchaseDetail, cancelEasyPurchase, draftEasyPurchase, confirmEasyPurchase,
+  updateEasyPurchase,
   readPurchaseOrder, readStockPicking, readVendorBill, readPayments,
   fetchPurchaseTaxes,
 } from '@api/services/easyPurchaseApi';
@@ -105,9 +106,23 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
         text: 'Confirm',
         onPress: async () => {
           setBusy(true);
-          try { await confirmEasyPurchase(id); await load(); showToastMessage('Confirmed'); }
-          catch (e) { showToastMessage(e?.message || 'Failed to confirm'); }
-          finally { setBusy(false); }
+          try {
+            // Disable auto_register_payment + auto_validate_bill on this
+            // draft before confirming. With either flag on, an order whose
+            // total is $0 (e.g. cashier saved a draft with no prices yet)
+            // makes Odoo's account.payment.register raise "nothing left to
+            // pay" and the whole confirm chain fails. The cashier can
+            // register payment manually later, or fix the price first.
+            try { await updateEasyPurchase(id, { auto_register_payment: false, auto_validate_bill: false }); }
+            catch (wErr) { console.warn('[EasyPurchase] update before confirm failed:', wErr?.message || wErr); }
+            await confirmEasyPurchase(id);
+            await load();
+            showToastMessage('Confirmed');
+          } catch (e) {
+            showToastMessage(e?.message || 'Failed to confirm');
+          } finally {
+            setBusy(false);
+          }
         },
       },
     ]);

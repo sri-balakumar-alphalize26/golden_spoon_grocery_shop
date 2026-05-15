@@ -299,8 +299,13 @@ const EasyPurchaseFormScreen = ({ navigation }) => {
         const def = (pms || []).find((p) => p.is_default);
         if (def) setPaymentMethod({ id: def.id, label: def.name, raw: def });
 
-        setWarehouseOptions((whs || []).map((w) => ({ id: w.id, label: w.name, sub: w.code, raw: w })));
-        if ((whs || []).length === 1) setWarehouse({ id: whs[0].id, label: whs[0].name, raw: whs[0] });
+        const whOpts = (whs || []).map((w) => ({ id: w.id, label: w.name, sub: w.code, raw: w }));
+        setWarehouseOptions(whOpts);
+        // Mirror the Odoo default from easy_purchase.py:46-47
+        // (`stock.warehouse.search([('company_id','=',env.company.id)], limit=1)`):
+        // auto-select the first warehouse for the active company so the
+        // cashier doesn't need to open the picker on every new purchase.
+        if (whOpts.length > 0) setWarehouse(whOpts[0]);
 
         setPaymentTermOptions((terms || []).map((t) => ({ id: t.id, label: t.name })));
         setTaxOptions(taxes || []);

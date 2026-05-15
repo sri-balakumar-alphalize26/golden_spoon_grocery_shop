@@ -15,7 +15,14 @@ import { useAuthStore } from '@stores/auth';
 const getCurrentCompanyId = () => {
   try {
     const u = useAuthStore.getState().user;
-    return u?.company_id || u?.company?.id || u?.companyId || 1;
+    // user.company_id is the Odoo many2one tuple [id, name] — pull the
+    // scalar id. Other call sites in the codebase do the same (see
+    // useAuthStore.js:73, :94). Returning the raw tuple here builds
+    // domains like [['company_id','=',[3,'My Company']]] which Odoo
+    // rejects, taking down the whole form bootstrap.
+    const raw = u?.company_id ?? u?.company?.id ?? u?.companyId;
+    const id = Array.isArray(raw) ? raw[0] : raw;
+    return Number(id) || 1;
   } catch (_) { return 1; }
 };
 
@@ -114,6 +121,13 @@ export const createEasyPurchase = async (vals) => {
 export const confirmEasyPurchase = async (id) => callKw('easy.purchase.app', 'action_confirm', [[Number(id)]]);
 export const cancelEasyPurchase = async (id) => callKw('easy.purchase.app', 'action_cancel', [[Number(id)]]);
 export const draftEasyPurchase = async (id) => callKw('easy.purchase.app', 'action_draft', [[Number(id)]]);
+
+// Generic write to easy.purchase.app — used by the Detail screen's Confirm
+// Order to disable auto_register_payment / auto_validate_bill on $0 drafts
+// before action_confirm runs (otherwise account.payment.register raises
+// "There's nothing left to pay" and the whole confirm chain fails).
+export const updateEasyPurchase = async (id, vals) =>
+  callKw('easy.purchase.app', 'write', [[Number(id)], vals]);
 
 // ────────────────────────────────────────────────────────────────────
 // Payment Methods
