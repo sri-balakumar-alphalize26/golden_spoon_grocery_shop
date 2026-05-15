@@ -279,29 +279,41 @@ export const writeOrderLocationOdoo = async (orderId, fix) => {
 // Read Odoo's freshly-allocated POS reference for an order. Called right
 // after submit so the receipt + MyOrders show the real ref (e.g. "Shop/0001")
 // instead of the placeholder "/" that exists for a brief window before
-// Odoo's sequence fires.
+// Odoo's sequence fires. Retries once after 500ms when the first read
+// still shows "/" — that race window is short but real on slower DBs.
 export const fetchPosOrderRefOdoo = async (orderId) => {
   if (!orderId) return null;
-  try {
-    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-      jsonrpc: '2.0', method: 'call',
-      params: {
-        model: 'pos.order', method: 'read',
-        args: [[Number(orderId)], ['name', 'pos_reference']],
-        kwargs: {},
-      },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    const r = resp.data?.result?.[0];
-    if (!r) return null;
-    const safe = (s) => (s && s !== '/' ? s : '');
-    return {
-      name: safe(r.name),
-      posReference: safe(r.pos_reference) || safe(r.name),
-    };
-  } catch (e) {
-    console.warn('[POS] ref fetch failed:', e?.message || e);
-    return null;
+  const safe = (s) => (s && s !== '/' ? s : '');
+  const readOnce = async () => {
+    try {
+      const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'pos.order', method: 'read',
+          args: [[Number(orderId)], ['name', 'pos_reference']],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const r = resp.data?.result?.[0];
+      if (!r) return null;
+      return {
+        name: safe(r.name),
+        posReference: safe(r.pos_reference) || safe(r.name),
+      };
+    } catch (e) {
+      console.warn('[POS] ref fetch failed:', e?.message || e);
+      return null;
+    }
+  };
+
+  let result = await readOnce();
+  if (!result?.posReference && !result?.name) {
+    // Sequence might not have committed yet — give Odoo a tick and re-read.
+    await new Promise((r) => setTimeout(r, 500));
+    const retry = await readOnce();
+    if (retry && (retry.posReference || retry.name)) result = retry;
   }
+  return result;
 };
 
 export const captureAndStoreOrderLocation = async (orderId) => {
@@ -481,13 +493,13 @@ export const submitPosOrderToOdoo = async ({
   // ── Odoo 18+: pos.order.sync_from_ui ───────────────────────────────────
   // Flat order dict in a list. No `data:` wrapper. Order is already paid.
   // Don't pre-set `name` or `pos_reference` — Odoo's POS config sequence
-  // assigns them (e.g. "Clothes Shop - 000042"). If we send our random
-  // client-side uid as `name`, Odoo skips the sequence and the order ends
-  // up with garbage like "Clothes Shop - 1h2wdk". `id` is fine to send;
-  // Odoo only uses it as a dedupe key during _process_order.
+  // assigns them (e.g. "Clothes Shop - 000042"). `config_id` is required
+  // so Odoo can look up the right per-config sequence; without it the
+  // order ends up with name "/" because no sequence fires.
   const buildSyncFromUiOrder = () => ({
     id: orderUid,
     session_id: sessionId,
+    config_id: posConfigId,
     partner_id: partnerId || false,
     user_id: userId || false,
     fiscal_position_id: false,
@@ -2088,7 +2100,7 @@ export const fetchAppFeaturesOdoo = async () => {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'app.feature',
+          model: 'app.feature.app',
           method: 'search_read',
           args: [[['active', '=', true]]],
           kwargs: {
@@ -2127,7 +2139,7 @@ export const fetchHiddenAppFeaturesAdmin = async (userId) => {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'app.feature.visibility',
+          model: 'app.feature.visibility.app',
           method: 'get_user_hides_for_admin',
           args: [Number(userId)],
           kwargs: {},
@@ -2157,7 +2169,7 @@ const _callKw = async (method, args = [], kwargs = {}) => {
     {
       jsonrpc: '2.0',
       method: 'call',
-      params: { model: 'app.feature.visibility', method, args, kwargs },
+      params: { model: 'app.feature.visibility.app', method, args, kwargs },
     },
     { headers: { 'Content-Type': 'application/json' } },
   );
@@ -2228,7 +2240,7 @@ export const fetchPrivilegeStatsForUser = async (userId) => {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'app.feature.visibility',
+          model: 'app.feature.visibility.app',
           method: 'get_privilege_stats_for_user',
           args: [Number(userId)],
           kwargs: {},
@@ -2259,7 +2271,7 @@ export const hideAllFeaturesForUser = async (userId) => {
       jsonrpc: '2.0',
       method: 'call',
       params: {
-        model: 'app.feature.visibility',
+        model: 'app.feature.visibility.app',
         method: 'hide_all_features_for_user',
         args: [Number(userId)],
         kwargs: {},
@@ -2285,7 +2297,7 @@ export const clearAllHidesForUser = async (userId) => {
       jsonrpc: '2.0',
       method: 'call',
       params: {
-        model: 'app.feature.visibility',
+        model: 'app.feature.visibility.app',
         method: 'clear_all_hides_for_user',
         args: [Number(userId)],
         kwargs: {},
@@ -2313,7 +2325,7 @@ export const setAppFeatureHiddenForUser = async (userId, featureId, hidden) => {
       jsonrpc: '2.0',
       method: 'call',
       params: {
-        model: 'app.feature.visibility',
+        model: 'app.feature.visibility.app',
         method: 'toggle_user_hide_admin',
         args: [Number(userId), Number(featureId), Boolean(hidden)],
         kwargs: {},
@@ -2340,7 +2352,7 @@ export const fetchHiddenAppFeatures = async (userId) => {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'app.feature.visibility',
+          model: 'app.feature.visibility.app',
           method: 'get_hidden_features_for_user',
           args: [Number(userId)],
           kwargs: {},

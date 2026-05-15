@@ -5,7 +5,7 @@ import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import { COLORS } from '@constants/theme';
-import { fetchDiscountsOdoo } from '@api/services/generalApi';
+import { fetchDiscountsOdoo, createPosOrderOdoo } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,6 +24,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
+  const [creatingOrder, setCreatingOrder] = useState(false);
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [customDiscountInput, setCustomDiscountInput] = useState('');
@@ -222,26 +223,67 @@ const TakeoutDelivery = ({ navigation, route }) => {
     navigation.navigate('POSProducts');
   };
 
-  const handlePlaceOrder = () => {
+  const handlePlaceOrder = async () => {
     if (!cart || cart.length === 0) {
       Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before placing order', position: 'bottom' });
       return;
     }
-    // No pre-create. POSPayment uses pos.order.create_from_ui to atomically
-    // create the order, record the payment(s), mark it paid, and validate
-    // the stock picking. Pre-creating a draft here and then handing the
-    // orderId to POSPayment causes its create_from_ui call to be skipped,
-    // leaving the order in draft with no picking → no stock movement.
+
     const sessionId = route?.params?.sessionId;
     const posConfigId = route?.params?.registerId;
-    navigation.navigate('POSPayment', {
-      sessionId,
-      registerId: posConfigId,
-      totalAmount: finalTotal,
-      products: cart,
-      discountAmount: discountApplied,
-      customer,
-    });
+    const partnerId = customer?.id || customer?._id || null;
+
+    // Build line tuples for the draft. Use `remoteId || id` (raw Odoo
+    // product id) — POS submit ships product_id straight to Postgres which
+    // expects an INTEGER, so the prefixed cart key 'prod_<n>' would fail.
+    const lines = cart.map((item) => ({
+      product_id: item.remoteId || item.id,
+      qty: item.quantity || item.qty || 1,
+      price_unit: item.price_unit || item.price || 0,
+      name: item.name || 'Product',
+      discount: Number(item.discount_percent || item.discount || 0),
+      price_subtotal: typeof item.price_subtotal !== 'undefined' ? Number(item.price_subtotal) : undefined,
+    }));
+
+    setCreatingOrder(true);
+    try {
+      const resp = await createPosOrderOdoo({
+        partnerId,
+        lines,
+        sessionId,
+        posConfigId,
+        discount: discountApplied,
+        amount_total: finalTotal,
+      });
+      if (resp?.error) {
+        Toast.show({
+          type: 'error',
+          text1: 'Order Error',
+          text2: resp.error.message || JSON.stringify(resp.error) || 'Failed to create draft',
+          position: 'bottom',
+        });
+        return;
+      }
+      const orderId = resp?.result;
+      if (!orderId) {
+        Toast.show({ type: 'error', text1: 'Order Error', text2: 'No order ID returned', position: 'bottom' });
+        return;
+      }
+      Toast.show({ type: 'success', text1: 'Draft saved', text2: `Order #${orderId}`, position: 'bottom' });
+      navigation.navigate('POSPayment', {
+        orderId,
+        sessionId,
+        registerId: posConfigId,
+        totalAmount: finalTotal,
+        products: cart,
+        discountAmount: discountApplied,
+        customer,
+      });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Order Error', text2: e?.message || 'Failed to create draft', position: 'bottom' });
+    } finally {
+      setCreatingOrder(false);
+    }
   };
 
   const renderLine = ({ item }) => {
@@ -646,6 +688,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
           {/* Place Order — full width below Add Products */}
           <TouchableOpacity
             onPress={handlePlaceOrder}
+            disabled={creatingOrder}
             activeOpacity={0.85}
             style={{
               flexDirection: 'row',
@@ -654,6 +697,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
               backgroundColor: '#10b981',
               paddingVertical: 14,
               borderRadius: 14,
+              opacity: creatingOrder ? 0.6 : 1,
               shadowColor: '#10b981',
               shadowOffset: { width: 0, height: 5 },
               shadowOpacity: 0.32,
@@ -661,8 +705,14 @@ const TakeoutDelivery = ({ navigation, route }) => {
               elevation: 7,
             }}
           >
-            <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
+            {creatingOrder ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
       </View>

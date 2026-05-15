@@ -42,7 +42,7 @@ const callKw = async (model, method, args, kwargs = {}) => {
 
 export const fetchEasyPurchases = async ({ state = '', limit = 50, offset = 0 } = {}) => {
   const domain = state ? [['state', '=', state]] : [];
-  return callKw('easy.purchase', 'search_read', [domain], {
+  return callKw('easy.purchase.app', 'search_read', [domain], {
     fields: [
       'id', 'name', 'date', 'partner_id', 'company_id', 'currency_id',
       'amount_untaxed', 'amount_tax', 'amount_total', 'state', 'payment_state',
@@ -56,7 +56,7 @@ export const fetchEasyPurchases = async ({ state = '', limit = 50, offset = 0 } 
 
 export const fetchEasyPurchaseDetail = async (id) => {
   if (!id) throw new Error('id is required');
-  const [record] = await callKw('easy.purchase', 'read', [[Number(id)]], {
+  const [record] = await callKw('easy.purchase.app', 'read', [[Number(id)]], {
     fields: [
       'id', 'name', 'date', 'partner_id', 'company_id', 'currency_id',
       'discount_type', 'line_ids', 'state', 'payment_state',
@@ -68,7 +68,7 @@ export const fetchEasyPurchaseDetail = async (id) => {
   });
   let lines = [];
   if (record?.line_ids?.length) {
-    lines = await callKw('easy.purchase.line', 'read', [record.line_ids], {
+    lines = await callKw('easy.purchase.line.app', 'read', [record.line_ids], {
       fields: [
         'id', 'sequence', 'display_type', 'name', 'product_id', 'description',
         'quantity', 'uom_id', 'price_unit', 'discount', 'discount_type',
@@ -95,13 +95,13 @@ export const createEasyPurchase = async (vals) => {
     discount: Number(l.discount) || 0,
     ...(Array.isArray(l.tax_ids) && l.tax_ids.length ? { tax_ids: [[6, 0, l.tax_ids]] } : {}),
   }]);
-  const id = await callKw('easy.purchase', 'create', [payload]);
+  const id = await callKw('easy.purchase.app', 'create', [payload]);
   return id;
 };
 
-export const confirmEasyPurchase = async (id) => callKw('easy.purchase', 'action_confirm', [[Number(id)]]);
-export const cancelEasyPurchase = async (id) => callKw('easy.purchase', 'action_cancel', [[Number(id)]]);
-export const draftEasyPurchase = async (id) => callKw('easy.purchase', 'action_draft', [[Number(id)]]);
+export const confirmEasyPurchase = async (id) => callKw('easy.purchase.app', 'action_confirm', [[Number(id)]]);
+export const cancelEasyPurchase = async (id) => callKw('easy.purchase.app', 'action_cancel', [[Number(id)]]);
+export const draftEasyPurchase = async (id) => callKw('easy.purchase.app', 'action_draft', [[Number(id)]]);
 
 // ────────────────────────────────────────────────────────────────────
 // Payment Methods
@@ -109,7 +109,7 @@ export const draftEasyPurchase = async (id) => callKw('easy.purchase', 'action_d
 
 export const fetchPaymentMethods = async ({ active = true } = {}) => {
   const domain = active ? [['active', '=', true]] : [];
-  return callKw('easy.purchase.payment.method', 'search_read', [domain], {
+  return callKw('easy.purchase.payment.method.app', 'search_read', [domain], {
     fields: [
       'id', 'name', 'sequence', 'active', 'company_id',
       'journal_id', 'journal_type', 'is_default', 'is_vendor_account', 'notes',
@@ -119,13 +119,13 @@ export const fetchPaymentMethods = async ({ active = true } = {}) => {
 };
 
 export const createPaymentMethod = async (vals) =>
-  callKw('easy.purchase.payment.method', 'create', [vals]);
+  callKw('easy.purchase.payment.method.app', 'create', [vals]);
 
 export const updatePaymentMethod = async (id, vals) =>
-  callKw('easy.purchase.payment.method', 'write', [[Number(id)], vals]);
+  callKw('easy.purchase.payment.method.app', 'write', [[Number(id)], vals]);
 
 export const deletePaymentMethod = async (id) =>
-  callKw('easy.purchase.payment.method', 'unlink', [[Number(id)]]);
+  callKw('easy.purchase.payment.method.app', 'unlink', [[Number(id)]]);
 
 // ────────────────────────────────────────────────────────────────────
 // Pickers / dropdown sources
@@ -236,7 +236,7 @@ export const printBarcodeLabel = async ({
   lineId = false,
 }) => {
   if (!productId) throw new Error('productId is required');
-  const wizardId = await callKw('easy.purchase.barcode.wizard', 'create', [{
+  const wizardId = await callKw('easy.purchase.barcode.wizard.app', 'create', [{
     product_id: Number(productId),
     quantity: Math.max(1, parseInt(quantity, 10) || 1),
     label_size: labelSize,
@@ -248,6 +248,6 @@ export const printBarcodeLabel = async ({
   // action_print returns an ir.actions.report dict — the React Native side can't
   // render Odoo PDFs natively; we instead expose the report URL the user can
   // open in a WebView or share.
-  const reportUrl = `${getOdooUrl()}/report/pdf/easy_purchase.action_report_easy_purchase_barcode/${wizardId}`;
+  const reportUrl = `${getOdooUrl()}/report/pdf/easy_purchase_apps.action_report_easy_purchase_barcode_app/${wizardId}`;
   return { wizardId, reportUrl };
 };

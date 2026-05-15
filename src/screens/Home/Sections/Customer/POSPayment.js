@@ -15,6 +15,13 @@ import {
   getCurrentDeviceLocation,
   writeOrderLocationOdoo,
   fetchPosOrderRefOdoo,
+  // Used to finalize a pre-existing draft (TakeoutDelivery's Place Order
+  // creates the draft; we record the payment, stamp amount_paid, then
+  // call action_pos_order_paid which transitions draft→paid, allocates
+  // the receipt sequence, and creates the stock.picking).
+  createPosPaymentOdoo,
+  updatePosOrderOdoo,
+  validatePosOrderOdoo,
 } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
 // react-native-modal — used here for the ID-proof popup so it animates
@@ -603,27 +610,57 @@ const POSPayment = ({ navigation, route }) => {
             createdOrderId = submitResp.result;
             console.log('✅ POS Order submitted, id:', createdOrderId);
           } else {
-            // A caller pre-created a pos.order via the legacy createPosOrderOdoo
-            // path and handed us its id. That path can NOT be completed with
-            // submitPosOrderToOdoo (it would create a duplicate), and the
-            // legacy payment+write+validate sequence does not generate a
-            // stock.picking reliably across Odoo versions — so the order
-            // would silently stay in draft with no stock movement. Fail
-            // loudly so the upstream caller is forced to migrate (drop the
-            // pre-create and let POSPayment own creation).
-            console.error(
-              '[POSPayment] Refusing to validate a pre-existing orderId. ' +
-              'POSPayment must be the sole creator of pos.order via submitPosOrderToOdoo — ' +
-              'remove the upstream createPosOrderOdoo call.',
-              { createdOrderId }
-            );
-            Toast.show({
-              type: 'error',
-              text1: 'Order submit error',
-              text2: 'Internal: order was pre-created. Please report this.',
-              position: 'bottom',
+            // Pre-existing orderId from TakeoutDelivery's Place Order — the
+            // pos.order is in Odoo as a draft with name='/' until we
+            // finalize it here.
+            //
+            // Sequence: create pos.payment(s) → write amount_paid → call
+            // action_pos_order_paid. CRITICAL: do NOT pre-write state='paid'
+            // before action_pos_order_paid. Doing so makes Odoo's method
+            // short-circuit and skip _create_order_picking() — that's how
+            // we previously ended up with paid orders that didn't decrement
+            // stock. Letting action_pos_order_paid do the draft→paid
+            // transition itself guarantees the picking gets created.
+
+            const paymentResp = await createPosPaymentOdoo({
+              orderId: createdOrderId,
+              payments,
+              partnerId,
+              sessionId,
+              companyId,
             });
-            return;
+            if (paymentResp?.error) {
+              Toast.show({
+                type: 'error',
+                text1: 'Payment Error',
+                text2: paymentResp.error.message || JSON.stringify(paymentResp.error) || 'Failed to create payment',
+                position: 'bottom',
+              });
+              return;
+            }
+
+            // Stamp amount_paid + partner so action_pos_order_paid sees the
+            // right totals. State stays 'draft' so the action can transition.
+            const updateResp = await updatePosOrderOdoo(createdOrderId, {
+              amount_paid: total,
+              partner_id: partnerId || false,
+            });
+            if (updateResp?.error) {
+              Toast.show({ type: 'error', text1: 'Update Error', text2: 'Failed to update draft', position: 'bottom' });
+              return;
+            }
+
+            const validateResp = await validatePosOrderOdoo(createdOrderId);
+            if (validateResp?.error) {
+              Toast.show({
+                type: 'error',
+                text1: 'Validation Error',
+                text2: validateResp.error.message || 'Could not validate draft order',
+                position: 'bottom',
+              });
+              return;
+            }
+            console.log('✅ Draft order finalized, id:', createdOrderId);
           }
 
           {
