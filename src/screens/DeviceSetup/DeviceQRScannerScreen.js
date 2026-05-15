@@ -20,18 +20,20 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import Text from '@components/Text';
 import { FONT_FAMILY } from '@constants/theme';
 import * as deviceApi from '@api/services/deviceApi';
+import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
 
 const PURPLE = '#2E294E';
 
 const DeviceQRScannerScreen = () => {
   const navigation = useNavigation();
   const route = useRoute();
-  const { deviceUUID, deviceModel, serverUrl } = route.params || {};
+  const { deviceUUID, deviceModel, serverUrl, databaseName } = route.params || {};
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('Point camera at the QR code on the Odoo screen');
+  const [wrongDbInfo, setWrongDbInfo] = useState(null);
 
   useEffect(() => {
     requestPermission();
@@ -66,6 +68,11 @@ const DeviceQRScannerScreen = () => {
           { text: 'Try Again', onPress: resetScanner },
           { text: 'Cancel', onPress: () => navigation.goBack() },
         ]);
+        return;
+      }
+
+      if (databaseName && parsed.d !== databaseName) {
+        setWrongDbInfo({ qrDb: parsed.d, expectedDb: databaseName });
         return;
       }
 
@@ -168,6 +175,20 @@ const DeviceQRScannerScreen = () => {
           </Text>
         </View>
       </View>
+
+      <StyledConfirmModal
+        isVisible={!!wrongDbInfo}
+        title="Wrong Database"
+        message={
+          wrongDbInfo
+            ? `This QR was generated for database "${wrongDbInfo.qrDb}", but you selected "${wrongDbInfo.expectedDb}" on the setup screen.\n\nAsk your admin to generate a new QR from database "${wrongDbInfo.expectedDb}", or go back and pick "${wrongDbInfo.qrDb}" instead.`
+            : ''
+        }
+        confirmLabel="Try Again"
+        cancelLabel="Go Back"
+        onConfirm={() => { setWrongDbInfo(null); resetScanner(); }}
+        onCancel={() => { setWrongDbInfo(null); navigation.goBack(); }}
+      />
     </View>
   );
 };

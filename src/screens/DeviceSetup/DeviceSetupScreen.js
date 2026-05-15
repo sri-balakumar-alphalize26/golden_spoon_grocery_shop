@@ -21,6 +21,7 @@ import { FONT_FAMILY } from '@constants/theme';
 import * as deviceApi from '@api/services/deviceApi';
 import { generateUUIDv4 } from '@utils/uuid';
 import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const getDeviceModel = () =>
   Device.deviceName || Device.modelName || 'Unknown Device';
@@ -51,6 +52,7 @@ const DeviceSetupScreen = () => {
   const [errors, setErrors] = useState({});
   const [moduleMissingOpen, setModuleMissingOpen] = useState(false);
   const [scanPromptOpen, setScanPromptOpen] = useState(false);
+  const [hidePassword, setHidePassword] = useState(true);
 
   useEffect(() => {
     async function init() {
@@ -323,18 +325,31 @@ const DeviceSetupScreen = () => {
             </Field>
 
             <Field error={errors.password}>
-              <TextInputNative
-                value={password}
-                onChangeText={(t) => { setPassword(t); clearError('password'); }}
-                onFocus={() => clearError('password')}
-                placeholder="Password"
-                placeholderTextColor="#bbb"
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="done"
-                style={[styles.nativeInput, errors.password && styles.inputError]}
-              />
+              <View style={styles.urlInputRow}>
+                <TextInputNative
+                  value={password}
+                  onChangeText={(t) => { setPassword(t); clearError('password'); }}
+                  onFocus={() => clearError('password')}
+                  placeholder="Password"
+                  placeholderTextColor="#bbb"
+                  secureTextEntry={hidePassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  style={[styles.nativeInput, styles.urlInput, errors.password && styles.inputError]}
+                />
+                <TouchableOpacity
+                  onPress={() => setHidePassword((v) => !v)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={styles.eyeBtn}
+                >
+                  <Icon
+                    name={hidePassword ? 'eye-off-outline' : 'eye-outline'}
+                    size={22}
+                    color={PURPLE}
+                  />
+                </TouchableOpacity>
+              </View>
             </Field>
 
             <View style={styles.divider} />
@@ -380,6 +395,7 @@ const DeviceSetupScreen = () => {
               deviceUUID,
               deviceModel: getDeviceModel(),
               serverUrl: normalizeUrl(serverUrl),
+              databaseName: selectedDb,
             });
           }}
           onCancel={() => setScanPromptOpen(false)}
@@ -445,6 +461,11 @@ const styles = StyleSheet.create({
   urlSpinner: {
     position: 'absolute',
     right: 14,
+  },
+  eyeBtn: {
+    position: 'absolute',
+    right: 12,
+    padding: 4,
   },
   stepRow: {
     flexDirection: 'row',
