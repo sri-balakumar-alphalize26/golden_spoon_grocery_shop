@@ -124,6 +124,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const discount = typeof params.discount !== 'undefined' ? Number(params.discount) : 0;
   const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + service - discount;
   const orderId = params.orderId || params.id || params.invoiceId || null;
+  // Payment method label, seeded from POSPayment so the receipt renders
+  // the right method on first paint instead of flashing "Cash" while the
+  // async fetchPosOrderPaymentsOdoo settles. Falls back to "Cash" only
+  // when the screen is opened without a route-param seed (e.g. from
+  // MyOrders), in which case the async load below replaces it.
+  const seededPaymentMethodLabel = params.paymentMethodLabel || '';
   // GPS + place name. POSPayment's strict location gate captures the fix
   // BEFORE Validate Payment, so by the time this screen mounts the param
   // is already populated. We render it as-is — no auto-refetch, no retry,
@@ -450,7 +456,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
                   legacy Cash + Change layout while the fetch is in flight or
                   if Odoo returns no records. */}
               <Text style={s.paperPaymentTitle}>
-                {isSplit ? 'Payment Details (Split) / تفاصيل الدفع' : 'Payment Details / تفاصيل الدفع'}
+                {(isSplit || /^split/i.test(seededPaymentMethodLabel))
+                  ? 'Payment Details (Split) / تفاصيل الدفع'
+                  : 'Payment Details / تفاصيل الدفع'}
               </Text>
               {payments.length > 0 ? (
                 <>
@@ -470,7 +478,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               ) : (
                 <>
                   <View style={s.paperTotalsRow}>
-                    <Text style={s.paperPlain}>Cash:</Text>
+                    <Text style={s.paperPlain}>{`${seededPaymentMethodLabel || 'Cash'}:`}</Text>
                     <Text style={s.paperPlainBold}>{displayNum(cashDisplay)}</Text>
                   </View>
                   <View style={s.paperTotalsRow}>

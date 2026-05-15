@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Per-user gateable features for the Easy Purchase flow.
+         Records register on app.feature.app (provided by
+         user_privilege_manager_apps). Once installed, an admin can toggle
+         these in the app's "Apps Privileges" screen and the matching
+         <FeatureGate featureKey="..."> wrappers in React Native hide the
+         corresponding UI. noupdate=1 keeps admin-edited labels intact
+         across module upgrades. -->
+    <data noupdate="1">
+
+        <!-- Top-level Easy Purchase tile on the home screen. -->
+        <record id="feat_home_tile_easy_purchase" model="app.feature.app">
+            <field name="feature_key">home.tile.easy_purchase</field>
+            <field name="name">Easy Purchase Tile</field>
+            <field name="description">Home tile that opens the Easy Purchase list.</field>
+            <field name="sequence">60</field>
+        </record>
+
+        <!-- Per-action gates inside Easy Purchase. parent_id groups them
+             under the home tile in the admin tree. -->
+        <record id="feat_easy_purchase_create" model="app.feature.app">
+            <field name="feature_key">easy_purchase.create</field>
+            <field name="name">Easy Purchase: Create</field>
+            <field name="description">Add a new Easy Purchase entry.</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">61</field>
+        </record>
+
+        <record id="feat_easy_purchase_confirm" model="app.feature.app">
+            <field name="feature_key">easy_purchase.confirm</field>
+            <field name="name">Easy Purchase: Confirm</field>
+            <field name="description">Confirm an Easy Purchase entry (move to in-progress).</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">62</field>
+        </record>
+
+        <record id="feat_easy_purchase_validate" model="app.feature.app">
+            <field name="feature_key">easy_purchase.validate</field>
+            <field name="name">Easy Purchase: Validate / Receive</field>
+            <field name="description">Validate/receive stock for an Easy Purchase.</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">63</field>
+        </record>
+
+        <record id="feat_easy_purchase_invoice" model="app.feature.app">
+            <field name="feature_key">easy_purchase.invoice</field>
+            <field name="name">Easy Purchase: Generate Invoice</field>
+            <field name="description">Create / link the vendor invoice for an Easy Purchase.</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">64</field>
+        </record>
+
+        <record id="feat_easy_purchase_pay" model="app.feature.app">
+            <field name="feature_key">easy_purchase.pay</field>
+            <field name="name">Easy Purchase: Register Payment</field>
+            <field name="description">Register a vendor payment against an Easy Purchase invoice.</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">65</field>
+        </record>
+
+        <record id="feat_easy_purchase_draft" model="app.feature.app">
+            <field name="feature_key">easy_purchase.draft</field>
+            <field name="name">Easy Purchase: Reset to Draft</field>
+            <field name="description">Reset a confirmed Easy Purchase back to draft state.</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">66</field>
+        </record>
+
+        <record id="feat_easy_purchase_delete_line" model="app.feature.app">
+            <field name="feature_key">easy_purchase.delete_line</field>
+            <field name="name">Easy Purchase: Delete Line</field>
+            <field name="description">Remove a product line from a draft Easy Purchase.</field>
+            <field name="parent_id" ref="feat_home_tile_easy_purchase"/>
+            <field name="sequence">67</field>
+        </record>
+
+    </data>
+</odoo>

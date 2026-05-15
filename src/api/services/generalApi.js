@@ -181,9 +181,13 @@ export const getLocationPromise = (orderId) => {
 // Get a fresh device location fix WITHOUT touching Odoo. Returns either
 //   { latitude, longitude, locationName }   on success
 // or { error: 'expo_missing'|'services_off'|'permission_denied'|'no_fix' }
-// when something blocks us. Used by POSPayment to gate Validate Payment so
-// the receipt always carries a real fix instead of the previous "Location
-// unavailable — tap to retry" race.
+//
+// Position-first ordering (don't trust hasServicesEnabledAsync up front —
+// on Android it returns stale `false` right after app launch / focus, which
+// is what produced the "popup says unavailable but location is actually on"
+// regression). We try permission → position → only then re-check services.
+// By the time we re-check, the failed position attempt has refreshed the
+// services-enabled cache, so we get the real value.
 export const getCurrentDeviceLocation = async () => {
   let Location;
   try { Location = require('expo-location'); }
@@ -192,16 +196,16 @@ export const getCurrentDeviceLocation = async () => {
     return { error: 'expo_missing' };
   }
   try {
-    const services = await Location.hasServicesEnabledAsync().catch(() => true);
-    if (!services) return { error: 'services_off' };
-
+    // 1. Permission — also nudges the OS to enable services on some Androids.
     const perm = await Location.requestForegroundPermissionsAsync();
     if (perm?.status !== 'granted') return { error: 'permission_denied' };
 
+    // 2. Try to get a position. Don't gate on services first — that check
+    //    lies on a cold cache.
     let pos = null;
     try {
       pos = await Location.getLastKnownPositionAsync({ maxAge: 60_000, requiredAccuracy: 200 });
-    } catch (_) {}
+    } catch (_) { /* fall through */ }
     if (!pos) {
       pos = await Promise.race([
         Location.getCurrentPositionAsync({
@@ -211,22 +215,33 @@ export const getCurrentDeviceLocation = async () => {
         new Promise((r) => setTimeout(() => r(null), 5500)),
       ]);
     }
-    const lat = pos?.coords?.latitude;
-    const lon = pos?.coords?.longitude;
-    if (lat == null || lon == null) return { error: 'no_fix' };
 
-    let locationName = '';
-    try {
-      const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-      const p = (places && places[0]) || null;
-      if (p) {
-        locationName = [p.street, p.name && p.name !== p.street ? p.name : null,
-                        p.district, p.city || p.subregion, p.region, p.country]
-          .filter(Boolean).join(', ');
-      }
-    } catch (_) {}
+    if (pos?.coords?.latitude != null) {
+      // We have a real fix → services are obviously on. Reverse-geocode
+      // and return success.
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      let locationName = '';
+      try {
+        const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+        const p = (places && places[0]) || null;
+        if (p) {
+          locationName = [p.street, p.name && p.name !== p.street ? p.name : null,
+                          p.district, p.city || p.subregion, p.region, p.country]
+            .filter(Boolean).join(', ');
+        }
+      } catch (_) {}
+      return { latitude: lat, longitude: lon, locationName };
+    }
 
-    return { latitude: lat, longitude: lon, locationName };
+    // 3. No position. NOW check services — its cache is fresh after the
+    //    failed fetch attempt. Only classify as services_off when this
+    //    explicit check confirms it; otherwise it's a no-fix (indoors etc).
+    let servicesOn = true;
+    try { servicesOn = await Location.hasServicesEnabledAsync(); }
+    catch (_) { servicesOn = true; }
+    if (!servicesOn) return { error: 'services_off' };
+    return { error: 'no_fix' };
   } catch (err) {
     console.warn('[POSLocation] getCurrentDeviceLocation failed:', err?.message || err);
     return { error: 'no_fix' };
@@ -5526,17 +5541,20 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
 // Fetch sales report data from Odoo
 export const fetchSalesReportData = async ({ startDate = null, endDate = null } = {}) => {
   try {
+    // Only count completed sales — paid / done / invoiced. Excluding `draft`
+    // means in-cart (unpaid) orders don't pollute the report. Excluding
+    // `cancel` was already implicit via the inclusive list.
+    const PAID_STATES = ['paid', 'done', 'invoiced'];
     let domain = [];
 
-    // Filter by date range if provided
     if (startDate && endDate) {
       domain = [
         ['date_order', '>=', startDate],
         ['date_order', '<=', endDate],
-        ['state', '!=', 'cancel'] // Exclude only cancelled orders
+        ['state', 'in', PAID_STATES],
       ];
     } else {
-      domain = [['state', '!=', 'cancel']];
+      domain = [['state', 'in', PAID_STATES]];
     }
 
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {

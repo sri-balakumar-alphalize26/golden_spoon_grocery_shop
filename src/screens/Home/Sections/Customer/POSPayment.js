@@ -440,6 +440,11 @@ const POSPayment = ({ navigation, route }) => {
       let invoiceInfo = null;
       let capturedLocation = null;
       let posReference = '';
+      // Display label for the receipt's payment-method line. Computed from
+      // the chosen method(s) at navigation time so the receipt renders the
+      // right label on first paint instead of flashing "Cash" while waiting
+      // for fetchPosOrderPaymentsOdoo to resolve.
+      let paymentMethodLabel = '';
       // NOTE: the order is now submitted atomically inside the payment block
       // via submitPosOrderToOdoo (sync_from_ui on Odoo 18+, create_from_ui on 13-17),
       // which is the only entry point that reliably creates the stock.picking
@@ -499,6 +504,7 @@ const POSPayment = ({ navigation, route }) => {
               journalId: slot2JournalId,
               paymentMode: 'split',
             });
+            paymentMethodLabel = `Split (${slot1Method.name} + ${slot2Method.name})`;
             console.log(`🪓 Split payment: ${slot1Method.name} ${payments[0].amount} + ${slot2Method.name} ${payments[1].amount} = ${total}`);
           } else {
             // Single-method (cash or card) — existing flow.
@@ -525,6 +531,7 @@ const POSPayment = ({ navigation, route }) => {
               payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
               console.log(`💳 Card payment: Total=${total}`);
             }
+            paymentMethodLabel = method.name || (paymentMode === 'card' ? 'Card' : 'Cash');
           }
           payments.forEach((p, idx) => {
             const type = p.amount > 0 ? 'RECEIVED' : 'CHANGE';
@@ -757,6 +764,10 @@ const POSPayment = ({ navigation, route }) => {
         // Odoo's freshly-allocated POS reference (e.g. "Shop/0001"),
         // already resolved by fetchPosOrderRefOdoo above.
         posReference,
+        // Display label for the receipt's payment-method line — seeded
+        // here so the preview never flashes "Cash" while waiting for
+        // fetchPosOrderPaymentsOdoo to resolve.
+        paymentMethodLabel,
       });
     } catch (e) {
       Toast.show({ type: 'error', text1: 'POS Error', text2: e?.message || 'Failed to create POS order', position: 'bottom' });

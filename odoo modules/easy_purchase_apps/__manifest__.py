@@ -15,7 +15,10 @@ original ``easy_purchase`` module without any name or table collisions.
     'author': 'Alphalize Technologies',
     'website': 'https://www.alphalize.com',
     'license': 'LGPL-3',
-    'depends': ['purchase', 'stock', 'account'],
+    # user_privilege_manager_apps provides the app.feature.app catalog the
+    # data/easy_purchase_app_features.xml below registers into. Without
+    # this dep the data file would fail to load.
+    'depends': ['purchase', 'stock', 'account', 'user_privilege_manager_apps'],
     'data': [
         'security/security_groups.xml',
         'security/ir.model.access.csv',
@@ -24,6 +27,7 @@ original ``easy_purchase`` module without any name or table collisions.
         'views/easy_purchase_payment_method_views.xml',
         'views/easy_purchase_views.xml',
         'views/easy_purchase_menus.xml',
+        'data/easy_purchase_app_features.xml',
     ],
     'installable': True,
     'application': True,

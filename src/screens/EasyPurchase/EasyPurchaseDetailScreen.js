@@ -9,7 +9,7 @@ import { showToastMessage } from '@components/Toast';
 import {
   fetchEasyPurchaseDetail, cancelEasyPurchase, draftEasyPurchase,
   readPurchaseOrder, readStockPicking, readVendorBill, readPayments,
-  fetchPurchaseTaxes, readProduct,
+  fetchPurchaseTaxes,
 } from '@api/services/easyPurchaseApi';
 import { useAuthStore } from '@stores/auth';
 import { formatCurrency } from '@utils/currency';
@@ -105,39 +105,6 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
     finally { setBusy(false); }
   };
 
-  // Print a barcode label for a saved line. We only stash product_id on the
-  // line, so re-read the product to get fresh prices/barcode/code.
-  const handlePrintLine = async (l) => {
-    const productId = Array.isArray(l.product_id) ? l.product_id[0] : l.product_id;
-    const productName = Array.isArray(l.product_id) ? l.product_id[1] : (l.description || 'Product');
-    if (!productId) return showToastMessage('No product on this line');
-    try {
-      const p = await readProduct(productId);
-      navigation.navigate('BarcodePrint', {
-        prefill: {
-          productId,
-          productName: p?.display_name || productName,
-          productCode: p?.default_code || '',
-          productBarcode: p?.barcode || '',
-          quantity: Math.max(1, parseInt(Number(l.quantity) || 1, 10)),
-          retailPrice: p?.lst_price ?? 0,
-          wholesalePrice: p?.standard_price ?? Number(l.price_unit) ?? 0,
-        },
-      });
-    } catch (e) {
-      // Fallback: at least open the screen with what we have
-      navigation.navigate('BarcodePrint', {
-        prefill: {
-          productId,
-          productName,
-          quantity: Math.max(1, parseInt(Number(l.quantity) || 1, 10)),
-          retailPrice: Number(l.price_unit) || 0,
-          wholesalePrice: Number(l.price_unit) || 0,
-        },
-      });
-    }
-  };
-
   if (loading && !data) {
     return (
       <SafeAreaView backgroundColor={NAVY}>
@@ -203,7 +170,7 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
             const total = l.total != null ? l.total : Number(l.subtotal || 0) + Number(l.tax_amount || 0);
             return (
               <View key={l.id} style={styles.lineCard}>
-                {/* Top row: name + description + Print button */}
+                {/* Top row: name + description */}
                 <View style={styles.lineTopRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.lineName} numberOfLines={1}>{productName}</Text>
@@ -211,10 +178,6 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
                       <Text style={styles.lineDesc} numberOfLines={1}>{l.description}</Text>
                     ) : null}
                   </View>
-                  <TouchableOpacity onPress={() => handlePrintLine(l)} style={styles.linePrintBtn}>
-                    <MaterialIcons name="qr-code-2" size={16} color="#fff" />
-                    <Text style={styles.linePrintText}>Print</Text>
-                  </TouchableOpacity>
                 </View>
 
                 {/* Column grid */}

@@ -374,14 +374,6 @@ const LoginScreenOdoo = () => {
         {/* Loader removed during login per UX requirement; submit button has its own disabled state. */}
 
         <View style={styles.imageContainer}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate("DeviceSetup")}
-            style={styles.gearBtn}
-            activeOpacity={0.7}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Text style={styles.gearIcon}>⚙</Text>
-          </TouchableOpacity>
           <View style={styles.logoWrapper}>
             <Image
               source={require("@assets/images/header/logo_header.png")}
@@ -475,22 +467,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: "4%",
     position: "relative",
-  },
-  gearBtn: {
-    position: "absolute",
-    top: 12,
-    right: 16,
-    zIndex: 10,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(0,0,0,0.05)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  gearIcon: {
-    fontSize: 20,
-    color: "#555",
   },
   logoWrapper: {
     backgroundColor: "transparent",
