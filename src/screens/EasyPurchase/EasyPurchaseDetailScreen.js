@@ -7,7 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
 import {
-  fetchEasyPurchaseDetail, cancelEasyPurchase, draftEasyPurchase,
+  fetchEasyPurchaseDetail, cancelEasyPurchase, draftEasyPurchase, confirmEasyPurchase,
   readPurchaseOrder, readStockPicking, readVendorBill, readPayments,
   fetchPurchaseTaxes,
 } from '@api/services/easyPurchaseApi';
@@ -92,6 +92,21 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
           setBusy(true);
           try { await cancelEasyPurchase(id); await load(); showToastMessage('Cancelled'); }
           catch (e) { showToastMessage(e?.message || 'Failed to cancel'); }
+          finally { setBusy(false); }
+        },
+      },
+    ]);
+  };
+
+  const onConfirm = () => {
+    Alert.alert('Confirm Order', 'Confirm this purchase order?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Confirm',
+        onPress: async () => {
+          setBusy(true);
+          try { await confirmEasyPurchase(id); await load(); showToastMessage('Confirmed'); }
+          catch (e) { showToastMessage(e?.message || 'Failed to confirm'); }
           finally { setBusy(false); }
         },
       },
@@ -281,12 +296,28 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
       {/* Action footer */}
       <View style={styles.bottomBar}>
         {data.state === 'draft' ? (
-          <FeatureGate featureKey="easy_purchase.cancel">
-            <TouchableOpacity style={[styles.btn, styles.btnDanger, busy && { opacity: 0.6 }]} disabled={busy} onPress={onCancel}>
-              <MaterialIcons name="cancel" size={18} color="#fff" />
-              <Text style={styles.btnDangerText}>Cancel Purchase</Text>
-            </TouchableOpacity>
-          </FeatureGate>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <FeatureGate featureKey="easy_purchase.cancel">
+              <TouchableOpacity
+                style={[styles.btn, styles.btnDanger, { flex: 1 }, busy && { opacity: 0.6 }]}
+                disabled={busy}
+                onPress={onCancel}
+              >
+                <MaterialIcons name="cancel" size={18} color="#fff" />
+                <Text style={styles.btnDangerText}>Cancel Purchase</Text>
+              </TouchableOpacity>
+            </FeatureGate>
+            <FeatureGate featureKey="easy_purchase.confirm">
+              <TouchableOpacity
+                style={[styles.btn, styles.btnConfirm, { flex: 1 }, busy && { opacity: 0.6 }]}
+                disabled={busy}
+                onPress={onConfirm}
+              >
+                <MaterialIcons name="check-circle" size={18} color="#fff" />
+                <Text style={styles.btnConfirmText}>Confirm Order</Text>
+              </TouchableOpacity>
+            </FeatureGate>
+          </View>
         ) : data.state === 'cancelled' ? (
           <FeatureGate featureKey="easy_purchase.cancel">
             <TouchableOpacity style={[styles.btn, styles.btnPrimary, busy && { opacity: 0.6 }]} disabled={busy} onPress={onDraft}>
@@ -372,6 +403,8 @@ const styles = StyleSheet.create({
   btnPrimaryText: { color: '#fff', fontFamily: FONT_FAMILY.urbanistBold, fontSize: 14, marginLeft: 4 },
   btnDanger: { backgroundColor: '#dc2626' },
   btnDangerText: { color: '#fff', fontFamily: FONT_FAMILY.urbanistBold, fontSize: 14, marginLeft: 4 },
+  btnConfirm: { backgroundColor: '#10b981' },
+  btnConfirmText: { color: '#fff', fontFamily: FONT_FAMILY.urbanistBold, fontSize: 14, marginLeft: 4 },
   donePill: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: '#ecfdf5', paddingVertical: 12, borderRadius: 12,
