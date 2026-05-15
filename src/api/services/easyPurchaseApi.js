@@ -6,6 +6,18 @@
 
 import axios from 'axios';
 import { getOdooUrl, getOdooDb } from '@api/config/odooConfig';
+import { useAuthStore } from '@stores/auth';
+
+// Active company id for the logged-in user. Used to scope multi-company
+// queries (e.g. stock.warehouse) so we don't return records from a company
+// the user can list-but-not-read, which produces "doesn't have read access"
+// errors when those records are then submitted on a form.
+const getCurrentCompanyId = () => {
+  try {
+    const u = useAuthStore.getState().user;
+    return u?.company_id || u?.company?.id || u?.companyId || 1;
+  } catch (_) { return 1; }
+};
 
 const buildPayload = (model, method, args, kwargs = {}) => ({
   jsonrpc: '2.0',
@@ -175,8 +187,19 @@ export const fetchPurchaseTaxes = async () =>
     order: 'sequence, id',
   });
 
-export const fetchWarehouses = async () =>
-  callKw('stock.warehouse', 'search_read', [[]], { fields: ['id', 'name', 'code', 'company_id'], order: 'name' });
+export const fetchWarehouses = async () => {
+  const companyId = getCurrentCompanyId();
+  return callKw(
+    'stock.warehouse',
+    'search_read',
+    [[['company_id', '=', companyId]]],
+    {
+      fields: ['id', 'name', 'code', 'company_id'],
+      order: 'name',
+      context: { allowed_company_ids: [companyId] },
+    },
+  );
+};
 
 export const fetchPaymentTerms = async () =>
   callKw('account.payment.term', 'search_read', [[]], { fields: ['id', 'name'], order: 'sequence, id' });

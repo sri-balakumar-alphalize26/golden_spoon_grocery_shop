@@ -916,6 +916,17 @@ import { API_ENDPOINTS } from "@api/endpoints";
 import { useAuthStore } from '@stores/auth';
 import handleApiError from "../utils/handleApiError";
 
+// Active company id from the auth store. Used to scope multi-company writes
+// + reads (POS orders) so a draft created in company A is visible to a list
+// fetched in company A — otherwise drafts can land in a company that the
+// list query doesn't see and "disappear" from MyOrders.
+const getActiveCompanyId = () => {
+  try {
+    const u = useAuthStore.getState().user;
+    return u?.company_id || u?.company?.id || u?.companyId || 1;
+  } catch (_) { return 1; }
+};
+
 // Debugging output for useAuthStore
 export const fetchProducts = async ({ offset, limit, categoryId, searchText }) => {
   try {
@@ -3864,7 +3875,11 @@ export const createPosOrderOdoo = async ({ partnerId = null, lines = [], session
         model: 'pos.order',
         method: 'create',
         args: [vals],
-        kwargs: {},
+        // Multi-company: pin the create to the requested company so the
+        // draft lands somewhere MyOrders' fetch (using the same context)
+        // can see it. Without this, the draft can disappear into a
+        // company the active session isn't switched to.
+        kwargs: { context: { allowed_company_ids: [vals.company_id] } },
       },
     }, { headers: { 'Content-Type': 'application/json' } });
 
@@ -5375,6 +5390,7 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' 
       ];
     }
 
+    const companyId = getActiveCompanyId();
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -5392,6 +5408,9 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' 
           offset,
           limit,
           order: 'date_order desc',
+          // Match the company context createPosOrderOdoo uses so just-
+          // created drafts are visible here.
+          context: { allowed_company_ids: [companyId] },
         },
       },
       id: new Date().getTime(),
