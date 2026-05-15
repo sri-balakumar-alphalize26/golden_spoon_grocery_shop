@@ -734,7 +734,8 @@ const POSPayment = ({ navigation, route }) => {
     );
   };
 
-  const cashInsufficient = paymentMode === 'cash' && paidAmount < total;
+  const amountInsufficient =
+    (paymentMode === 'cash' || paymentMode === 'card') && paidAmount < total;
 
   // Split-payment validity — both amounts > 0, sum matches the total within
   // 0.01 tolerance, and the two slots reference different pos.payment.method
@@ -752,6 +753,13 @@ const POSPayment = ({ navigation, route }) => {
 
   // Helper: lookup a method record by id, plus pick a sensible icon for it.
   const getSplitMethod = (id) => posPaymentMethods.find((m) => m.id === id) || null;
+  // Methods eligible for the Partial Payment popup — excludes pay-later
+  // (customer-account, flagged by split_transactions=true) and Bank methods.
+  const splitMethods = posPaymentMethods.filter(
+    (m) =>
+      m.split_transactions !== true &&
+      !(m.name || '').toLowerCase().includes('bank')
+  );
   const iconForMethod = (m) => {
     if (!m) return 'help-outline';
     if (m.is_cash_count === true) return 'payments';
@@ -769,7 +777,7 @@ const POSPayment = ({ navigation, route }) => {
         setSplitModalVisible(true);
         return;
       }
-    } else if (cashInsufficient) {
+    } else if (amountInsufficient) {
       setAmountModalVisible(true);
       return;
     }
@@ -863,17 +871,6 @@ const POSPayment = ({ navigation, route }) => {
                   await fetchPaymentMethodId(cardJournal.id);
                 } else {
                   console.log('Card payment selected, no journal mapped');
-                }
-              }, 100);
-            })}
-            {renderModeCard('account', 'Customer\nAccount', 'account-balance-wallet', async () => {
-              setPaymentMode('account');
-              setTimeout(async () => {
-                if (selectedJournal) {
-                  console.log('Customer Account card selected, journal id:', selectedJournal.id);
-                  await fetchPaymentMethodId(selectedJournal.id);
-                } else {
-                  console.log('Customer Account card selected, no journal mapped');
                 }
               }, 100);
             })}
@@ -1136,7 +1133,7 @@ const POSPayment = ({ navigation, route }) => {
             </View>
             <Text style={styles.alertTitle}>Amount Required</Text>
             <Text style={styles.alertText}>
-              Please enter the cash received. You still need {displayNum(remaining)} to cover the total.
+              {`Please enter the full ${paymentMode === 'card' ? 'card' : 'cash'} amount. You still need ${displayNum(remaining)} to cover the total.`}
             </Text>
             <TouchableOpacity
               onPress={() => setAmountModalVisible(false)}
@@ -1168,15 +1165,15 @@ const POSPayment = ({ navigation, route }) => {
               {`Total to collect: ${displayNum(total)}`}
             </Text>
 
-            {posPaymentMethods.length === 0 ? (
+            {splitMethods.length === 0 ? (
               <Text style={[styles.alertText, { marginTop: 14 }]}>
                 No payment methods are configured on this POS register.{'\n'}
                 Add some in Odoo: Point of Sale → Configuration → Payment Methods.
               </Text>
-            ) : posPaymentMethods.length < 2 ? (
+            ) : splitMethods.length < 2 ? (
               <Text style={[styles.alertText, { marginTop: 14 }]}>
                 Split payment needs at least two payment methods on this register.{'\n'}
-                Currently configured: {posPaymentMethods.map((m) => m.name).join(', ')}.
+                Currently configured: {splitMethods.map((m) => m.name).join(', ')}.
               </Text>
             ) : (
               [
@@ -1186,7 +1183,7 @@ const POSPayment = ({ navigation, route }) => {
                 <View key={idx} style={styles.splitSlotCard}>
                   <Text style={styles.splitSlotLabel}>{label}</Text>
                   <View style={styles.splitChipRow}>
-                    {posPaymentMethods.map((m) => {
+                    {splitMethods.map((m) => {
                       const active = slot.methodId === m.id;
                       return (
                         <TouchableOpacity
@@ -1224,6 +1221,15 @@ const POSPayment = ({ navigation, route }) => {
                     placeholderTextColor="#9ca3af"
                     style={styles.splitAmountInput}
                   />
+                  {(() => {
+                    const otherAmt = parseFloat(idx === 0 ? splitSlot2.amount : splitSlot1.amount) || 0;
+                    const remaining = Math.max(0, total - otherAmt);
+                    return (
+                      <Text style={styles.splitRemainingHint}>
+                        {`Remaining ${displayNum(remaining)}`}
+                      </Text>
+                    );
+                  })()}
                 </View>
               ))
             )}
@@ -2094,6 +2100,13 @@ letterSpacing: 0.4,
     color: NAVY,
     fontFamily: FONT_FAMILY.urbanistBold,
     textAlign: 'center',
+  },
+  splitRemainingHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#6b7280',
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    textAlign: 'right',
   },
   splitSumPill: {
     flexDirection: 'row',

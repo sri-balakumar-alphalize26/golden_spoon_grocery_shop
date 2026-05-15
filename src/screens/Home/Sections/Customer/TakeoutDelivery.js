@@ -6,6 +6,7 @@ import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import { COLORS } from '@constants/theme';
 import { createPosOrderOdoo, fetchDiscountsOdoo, updatePosOrderOdoo } from '@api/services/generalApi';
+import { getOdooUrl } from '@api/config/odooConfig';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '@components/containers';
@@ -437,11 +438,23 @@ const TakeoutDelivery = ({ navigation, route }) => {
     // template-based fetch, or a raw base64 `image_128` string from legacy
     // callers. RN's Image can't load Odoo's `/web/image?…` directly because
     // the JS request has no session cookie.
-    const rawImg = item.rawItem?.image_url || null;
-    const raw128 = item.rawItem?.image_128 || null;
-    const imgUrl = (rawImg && (rawImg.startsWith('data:') || rawImg.startsWith('http')))
+    const raw = item.rawItem || {};
+    const rawImg = raw.image_url || raw.image || raw.image_url_full || null;
+    const raw128 = raw.image_128 || raw.image_256 || null;
+    const odooBase = (typeof getOdooUrl === 'function' && getOdooUrl()) || '';
+    const imgUrl = rawImg && (rawImg.startsWith('data:') || rawImg.startsWith('http'))
       ? rawImg
-      : (raw128 ? `data:image/png;base64,${raw128}` : null);
+      : (rawImg && rawImg.startsWith('/') && odooBase
+          ? `${odooBase}${rawImg}`
+          : (raw128 ? `data:image/png;base64,${raw128}` : null));
+    console.log('[REGISTER:IMG]', {
+      name: item.name,
+      hasRawImg: !!rawImg,
+      rawImgPrefix: rawImg ? String(rawImg).slice(0, 40) : null,
+      has128: !!raw128,
+      keys: Object.keys(raw),
+      resolvedImgUrl: imgUrl ? String(imgUrl).slice(0, 60) : null,
+    });
     const initial = (item.name || '?').trim().charAt(0).toUpperCase();
     return (
       <TouchableOpacity

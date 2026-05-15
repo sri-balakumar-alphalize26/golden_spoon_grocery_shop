@@ -109,7 +109,7 @@ const useProductStore = create((set, get) => ({
       ...state,
       cartItems: {
         ...state.cartItems,
-        [currentCustomerId]: currentCart.filter((product) => product.id !== productId)
+        [currentCustomerId]: currentCart.filter((product) => String(product.id) !== String(productId))
       }
     };
   }),
