@@ -300,6 +300,194 @@ export const validatePosOrderOdoo = async (orderId) => {
     return { error };
   }
 };
+
+// Submit a POS order via Odoo's official UI pipeline — the same entry point
+// the web POS uses, and the ONLY supported way to make Odoo create the
+// stock.picking that decrements qty_available. The 4-step manual flow
+// (create + payment + write + action_paid) does NOT trigger picking creation
+// reliably, which is why orders submitted through the app's POS appeared to
+// succeed but never actually moved stock.
+//
+// Odoo renamed the method between versions:
+//   - Odoo 18+ (incl. 19): pos.order.sync_from_ui  (flat order dicts, payment_ids)
+//   - Odoo 17:             pos.order.create_from_ui  (data-wrapped, payment_ids)
+//   - Odoo 13-16:          pos.order.create_from_ui  (data-wrapped, statement_ids)
+// We try them in that order and fall through on missing-method / unknown-field.
+export const submitPosOrderToOdoo = async ({
+  orderUid, sessionId, posConfigId, userId, partnerId,
+  lines, payments,
+  amountTotal, amountPaid, amountReturn = 0,
+  pricelistId = false, toInvoice = false,
+  creationDate = new Date().toISOString(),
+  companyId = 1,
+} = {}) => {
+  if (!sessionId) return { error: { message: 'sessionId is required' } };
+  if (!Array.isArray(lines) || lines.length === 0) return { error: { message: 'lines required' } };
+  if (!Array.isArray(payments) || payments.length === 0) return { error: { message: 'payments required' } };
+
+  const baseUrl = getOdooUrl();
+
+  const lineTuples = lines.map((l) => [0, 0, {
+    product_id: l.product_id,
+    qty: Number(l.qty) || 0,
+    price_unit: Number(l.price_unit) || 0,
+    price_subtotal: Number(l.price_subtotal) || 0,
+    price_subtotal_incl: Number(l.price_subtotal_incl ?? l.price_subtotal) || 0,
+    discount: Number(l.discount) || 0,
+    name: l.name || '',
+    pack_lot_ids: [],
+  }]);
+
+  const paymentTuples = payments
+    .filter((p) => Number(p.amount) !== 0)
+    .map((p) => [0, 0, {
+      amount: Number(p.amount) || 0,
+      payment_method_id: p.payment_method_id,
+      name: p.name || creationDate,
+    }]);
+
+  const isMethodMissing = (err) => {
+    const msg = err?.payload?.data?.message || err?.payload?.message || '';
+    const args = (err?.payload?.data?.arguments || []).join(' ');
+    return /does not exist/i.test(msg) || /does not exist/i.test(args);
+  };
+
+  // ── Odoo 18+: pos.order.sync_from_ui ───────────────────────────────────
+  // Flat order dict in a list. No `data:` wrapper. Order is already paid.
+  const buildSyncFromUiOrder = () => ({
+    id: orderUid,
+    pos_reference: `Order ${orderUid}`,
+    name: `Order ${orderUid}`,
+    session_id: sessionId,
+    partner_id: partnerId || false,
+    user_id: userId || false,
+    fiscal_position_id: false,
+    pricelist_id: pricelistId || false,
+    company_id: companyId,
+    sequence_number: 1,
+    creation_date: creationDate,
+    amount_paid: Number(amountPaid) || 0,
+    amount_total: Number(amountTotal) || 0,
+    amount_tax: 0,
+    amount_return: Number(amountReturn) || 0,
+    state: 'paid',
+    lines: lineTuples,
+    payment_ids: paymentTuples,
+    to_invoice: !!toInvoice,
+  });
+
+  const callSyncFromUi = async () => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'sync_from_ui',
+        args: [[buildSyncFromUiOrder()]],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      const e = new Error('sync_from_ui error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data?.result ?? null;
+  };
+
+  // ── Odoo 13-17: pos.order.create_from_ui ───────────────────────────────
+  const buildCreateFromUiData = (paymentsKey) => ({
+    name: `Order ${orderUid}`,
+    amount_paid: Number(amountPaid) || 0,
+    amount_total: Number(amountTotal) || 0,
+    amount_tax: 0,
+    amount_return: Number(amountReturn) || 0,
+    lines: lineTuples,
+    [paymentsKey]: paymentTuples,
+    pos_session_id: sessionId,
+    partner_id: partnerId || false,
+    user_id: userId || false,
+    uid: orderUid,
+    sequence_number: 1,
+    creation_date: creationDate,
+    fiscal_position_id: false,
+    pricelist_id: pricelistId || false,
+    company_id: companyId,
+  });
+
+  const callCreateFromUi = async (paymentsKey) => {
+    const orders = [{
+      id: orderUid,
+      data: buildCreateFromUiData(paymentsKey),
+      to_invoice: !!toInvoice,
+    }];
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'create_from_ui',
+        args: [orders, false],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      const e = new Error('create_from_ui error');
+      e.payload = resp.data.error;
+      throw e;
+    }
+    return resp.data?.result ?? null;
+  };
+
+  // ── Dispatch ───────────────────────────────────────────────────────────
+  let result = null;
+  try {
+    result = await callSyncFromUi();
+  } catch (err) {
+    if (!isMethodMissing(err)) {
+      return { error: err.payload || { message: err.message || 'sync_from_ui failed' } };
+    }
+    console.warn('sync_from_ui not on this Odoo, falling back to create_from_ui');
+    try {
+      result = await callCreateFromUi('payment_ids');
+    } catch (err2) {
+      const msg2 = err2?.payload?.data?.message || err2?.payload?.message || '';
+      if (/payment_ids|invalid|unknown field/i.test(msg2)) {
+        console.warn('create_from_ui: payment_ids rejected, retrying with statement_ids');
+        try {
+          result = await callCreateFromUi('statement_ids');
+        } catch (err3) {
+          return { error: err3.payload || { message: err3.message || 'create_from_ui failed' } };
+        }
+      } else {
+        return { error: err2.payload || { message: err2.message || 'create_from_ui failed' } };
+      }
+    }
+  }
+
+  // ── Result extraction (sync_from_ui vs create_from_ui shapes) ──────────
+  let createdId = null;
+  if (result && typeof result === 'object' && !Array.isArray(result) && Array.isArray(result['pos.order'])) {
+    // sync_from_ui shape: { 'pos.order': [{id, ...}], 'pos.order.line': [...], 'pos.payment': [...] }
+    const first = result['pos.order'][0];
+    createdId = first?.id || null;
+  } else if (Array.isArray(result)) {
+    // create_from_ui shape: [{id, pos_reference, ...}] or [id]
+    const first = result[0];
+    if (typeof first === 'number') createdId = first;
+    else if (first && typeof first === 'object') createdId = first.id || first.pos_reference || null;
+  }
+
+  if (!createdId) {
+    return { error: { message: 'POS submit returned no order id' } };
+  }
+
+  return { result: createdId, raw: result };
+};
+
+// Back-compat alias — keep the old export name pointing at the new function
+// so any straggling imports don't break.
+export const submitPosOrderViaCreateFromUi = submitPosOrderToOdoo;
 // Read all pos.payment records attached to a single pos.order. Used by the
 // order detail screen so a split-paid order can show "Cash 500 · Card 500"
 // instead of just the aggregate "amount_paid". Returns an array shaped like
@@ -1112,12 +1300,79 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   return { result: productId };
 };
 
-// Update an existing product.product. Same payload shape as createProductOdoo,
-// with the same safe-fields fallback. `onHandQty` triggers the
-// stock.change.product.qty wizard the same way create does.
-export const updateProductOdoo = async (productId, { name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty } = {}) => {
-  if (!productId) return { error: { message: 'productId is required' } };
+// Update an existing product. Writes against product.template (so fields like
+// categ_id, pos_categ_ids, uom_id propagate reliably across all variants),
+// then verifies each field actually persisted. The on-hand qty path uses the
+// modern stock.quant + action_apply_inventory flow rather than the deprecated
+// stock.change.product.qty wizard. Returns:
+//   { result, partial, notSaved: [field,...], qtySaved: true|false|null }
+// so the caller can show an honest "some fields didn't save" message instead
+// of a blanket green toast.
+export const updateProductOdoo = async (arg, opts = {}) => {
+  // Accept legacy signature updateProductOdoo(productId, payload) AND the new
+  // updateProductOdoo({ productTmplId, productId, ...payload }) form.
+  let productId = null;
+  let productTmplId = null;
+  let payload = opts;
+  if (arg && typeof arg === 'object' && !Array.isArray(arg)) {
+    productId = arg.productId || null;
+    productTmplId = arg.productTmplId || null;
+    payload = { ...arg, ...opts };
+  } else {
+    productId = arg;
+  }
+  if (!productId && !productTmplId) {
+    return { error: { message: 'productId or productTmplId is required' } };
+  }
   const baseUrl = getOdooUrl();
+  const {
+    name, categId, posCategoryId, listPrice, standardPrice,
+    barcode, defaultCode, uomId, image, descriptionSale, onHandQty,
+  } = payload;
+
+  // Resolve the template id (and the variant id, needed for the qty path).
+  let resolvedVariantId = productId;
+  if (!productTmplId && productId) {
+    try {
+      const lookupResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.product',
+          method: 'read',
+          args: [[productId], ['product_tmpl_id']],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const v = (lookupResp.data?.result || [])[0];
+      if (v && Array.isArray(v.product_tmpl_id)) productTmplId = v.product_tmpl_id[0];
+    } catch (e) {
+      console.warn('updateProductOdoo tmpl lookup failed:', e?.payload || e?.message);
+    }
+  }
+  if (!productTmplId) {
+    return { error: { message: 'Could not resolve product template' } };
+  }
+  if (!resolvedVariantId) {
+    try {
+      const tmplResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.template',
+          method: 'read',
+          args: [[productTmplId], ['product_variant_ids']],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const t = (tmplResp.data?.result || [])[0];
+      if (t && Array.isArray(t.product_variant_ids) && t.product_variant_ids.length > 0) {
+        resolvedVariantId = t.product_variant_ids[0];
+      }
+    } catch (e) {
+      console.warn('updateProductOdoo variant lookup failed:', e?.payload || e?.message);
+    }
+  }
 
   const vals = {};
   if (name !== undefined) vals.name = String(name).trim();
@@ -1134,11 +1389,12 @@ export const updateProductOdoo = async (productId, { name, categId, posCategoryI
   if (descriptionSale !== undefined) vals.description_sale = descriptionSale ? String(descriptionSale).trim() : false;
   if (image) vals.image_1920 = image;
 
-  const callWrite = async (payload) => {
+  // Helper: write `payload` to product.template by id.
+  const callWrite = async (model, ids, writeVals) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
-      params: { model: 'product.product', method: 'write', args: [[productId], payload], kwargs: {} },
+      params: { model, method: 'write', args: [ids, writeVals], kwargs: {} },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data && resp.data.error) {
       const e = new Error('Odoo JSON-RPC error');
@@ -1148,56 +1404,201 @@ export const updateProductOdoo = async (productId, { name, categId, posCategoryI
     return resp.data.result;
   };
 
-  let partial = false;
-  try {
-    await callWrite(vals);
-  } catch (err) {
-    console.warn('updateProductOdoo full write failed, retrying with safe fields:', err?.payload || err?.message);
-    const safe = {};
-    if (vals.name !== undefined) safe.name = vals.name;
-    if (vals.list_price !== undefined) safe.list_price = vals.list_price;
-    if (vals.standard_price !== undefined) safe.standard_price = vals.standard_price;
-    if (vals.default_code !== undefined) safe.default_code = vals.default_code;
-    if (vals.barcode !== undefined) safe.barcode = vals.barcode;
-    if (vals.image_1920 !== undefined) safe.image_1920 = vals.image_1920;
-    if (vals.description_sale !== undefined) safe.description_sale = vals.description_sale;
+  // Most fields live on product.template; barcode is variant-only on
+  // multi-variant templates so we split it off if the template write rejects
+  // it.
+  const tmplVals = { ...vals };
+  delete tmplVals.barcode;
+  let barcodeWriteVal = vals.barcode;
+
+  // Try the template write. If it fails, we don't fall back to a stripped
+  // safe-set anymore (that's what was silently losing fields). Instead we
+  // surface the failure in `notSaved` via the verify step.
+  let writeFatalError = null;
+  if (Object.keys(tmplVals).length > 0) {
     try {
-      await callWrite(safe);
-      partial = true;
-    } catch (err2) {
-      console.error('updateProductOdoo safe write also failed:', err2?.payload || err2?.message);
-      return { error: err2?.payload || { message: err2?.message || 'Save failed' } };
+      await callWrite('product.template', [productTmplId], tmplVals);
+    } catch (err) {
+      console.warn('updateProductOdoo template write failed:', err?.payload || err?.message);
+      writeFatalError = err?.payload || { message: err?.message || 'Save failed' };
     }
   }
 
-  // On-hand qty change via stock.change.product.qty wizard
-  if (onHandQty !== undefined && onHandQty !== '' && onHandQty !== null) {
+  // Barcode lives on the variant. Try writing it there.
+  let barcodeWriteFailed = false;
+  if (barcodeWriteVal !== undefined && resolvedVariantId) {
     try {
-      const wizardResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      await callWrite('product.product', [resolvedVariantId], { barcode: barcodeWriteVal });
+    } catch (err) {
+      console.warn('updateProductOdoo barcode write failed:', err?.payload || err?.message);
+      barcodeWriteFailed = true;
+    }
+  }
+
+  // Verify: re-read the same fields from the template and report any that
+  // didn't take. This catches both silent rejections AND the case where the
+  // initial write succeeded but a downstream rule reverted the value.
+  const fieldsToVerify = Object.keys(vals);
+  const notSaved = [];
+  if (fieldsToVerify.length > 0) {
+    try {
+      const verifyResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'stock.change.product.qty',
-          method: 'create',
-          args: [{ product_id: productId, new_quantity: Number(onHandQty) }],
+          model: 'product.template',
+          method: 'read',
+          args: [[productTmplId], fieldsToVerify],
           kwargs: {},
         },
       }, { headers: { 'Content-Type': 'application/json' } });
-      const wizId = wizardResp.data?.result;
-      if (wizId) {
-        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      const after = (verifyResp.data?.result || [])[0] || {};
+      for (const k of fieldsToVerify) {
+        if (!fieldEquals(k, vals[k], after[k])) notSaved.push(k);
+      }
+    } catch (err) {
+      console.warn('updateProductOdoo verify read failed:', err?.payload || err?.message);
+      // Verify itself failed — assume nothing saved if the main write also failed,
+      // otherwise leave notSaved empty (best effort).
+      if (writeFatalError) notSaved.push(...fieldsToVerify);
+    }
+  }
+  if (barcodeWriteFailed && !notSaved.includes('barcode')) notSaved.push('barcode');
+
+  // If absolutely nothing went through, surface a hard error so the caller
+  // shows the full Odoo message instead of a "some fields not saved" toast.
+  if (writeFatalError && notSaved.length === fieldsToVerify.length && fieldsToVerify.length > 0) {
+    return { error: writeFatalError };
+  }
+
+  // On-hand qty path — modern stock.quant flow, works on Odoo 13–18.
+  // qtySaved: null = not attempted, true = saved, false = failed.
+  let qtySaved = null;
+  if (onHandQty !== undefined && onHandQty !== '' && onHandQty !== null && resolvedVariantId) {
+    qtySaved = false;
+    try {
+      const newQty = Number(onHandQty);
+      if (!Number.isFinite(newQty)) throw new Error('Invalid quantity');
+
+      // 1. Find an existing internal-location quant for this variant.
+      const quantSearch = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.quant',
+          method: 'search_read',
+          args: [[['product_id', '=', resolvedVariantId], ['location_id.usage', '=', 'internal']]],
+          kwargs: { fields: ['id', 'location_id'], limit: 1 },
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      let quantId = (quantSearch.data?.result || [])[0]?.id || null;
+
+      if (!quantId) {
+        // 2. No quant yet — create one in the first available internal location.
+        const locResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
           jsonrpc: '2.0',
           method: 'call',
-          params: { model: 'stock.change.product.qty', method: 'change_product_qty', args: [[wizId]], kwargs: {} },
+          params: {
+            model: 'stock.location',
+            method: 'search_read',
+            args: [[['usage', '=', 'internal']]],
+            kwargs: { fields: ['id'], limit: 1, order: 'id' },
+          },
         }, { headers: { 'Content-Type': 'application/json' } });
+        const locationId = (locResp.data?.result || [])[0]?.id || null;
+        if (!locationId) throw new Error('No internal stock location available');
+        const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'stock.quant',
+            method: 'create',
+            args: [{ product_id: resolvedVariantId, location_id: locationId, inventory_quantity: newQty }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        if (createResp.data?.error) throw Object.assign(new Error('quant create failed'), { payload: createResp.data.error });
+        quantId = createResp.data?.result;
+      } else {
+        // 3. Quant exists — set inventory_quantity (the count target).
+        await callWrite('stock.quant', [quantId], { inventory_quantity: newQty });
       }
+
+      // 4. Apply the inventory adjustment so qty_available actually reflects it.
+      const applyResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.quant',
+          method: 'action_apply_inventory',
+          args: [[quantId]],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      if (applyResp.data?.error) throw Object.assign(new Error('apply inventory failed'), { payload: applyResp.data.error });
+
+      qtySaved = true;
     } catch (qtyErr) {
-      console.warn('updateProductOdoo on-hand qty step failed:', qtyErr?.payload || qtyErr?.message);
+      console.warn('updateProductOdoo qty write failed:', qtyErr?.payload || qtyErr?.message);
+      qtySaved = false;
     }
   }
 
-  return { result: productId, partial };
+  const partial = notSaved.length > 0 || qtySaved === false;
+  return { result: productTmplId, partial, notSaved, qtySaved };
 };
+
+// Compare a value we wrote against the value Odoo read back. Handles the
+// quirks: Odoo returns false for unset scalars (empty string equivalence),
+// many2one comes back as [id, name], x2many `[[6,0,[id]]]` writes come back
+// as `[id, ...]`, and floats can drift on round-trip. Only the field names
+// updateProductOdoo actually writes need to be supported here.
+function fieldEquals(field, wrote, read) {
+  // Both null/false/'' considered equal.
+  const empty = (v) => v === null || v === undefined || v === false || v === '';
+  if (empty(wrote) && empty(read)) return true;
+
+  // many2one fields written as id, read back as [id, name].
+  if (field === 'categ_id' || field === 'uom_id') {
+    const readId = Array.isArray(read) ? read[0] : read;
+    return Number(wrote) === Number(readId);
+  }
+
+  // many2many (POS categories) written as [[6,0,[id]]], read back as [id, id, ...].
+  if (field === 'pos_categ_ids') {
+    let wroteIds = [];
+    if (Array.isArray(wrote)) {
+      const cmd = wrote[0];
+      if (Array.isArray(cmd) && cmd[0] === 6) wroteIds = cmd[2] || [];
+      else if (Array.isArray(cmd) && cmd[0] === 5) wroteIds = [];
+      else wroteIds = wrote;
+    }
+    const readIds = Array.isArray(read) ? read.map(Number) : [];
+    const a = [...wroteIds].map(Number).sort();
+    const b = [...readIds].sort();
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+  }
+
+  // Booleans
+  if (field === 'available_in_pos') return Boolean(wrote) === Boolean(read);
+
+  // Numerics — round to 4 decimals to absorb price/qty rounding.
+  if (field === 'list_price' || field === 'standard_price') {
+    return Math.round(Number(wrote) * 10000) === Math.round(Number(read) * 10000);
+  }
+
+  // image_1920: Odoo returns the resized base64 of whatever we sent. Just
+  // checking the field is non-empty after the write is enough — comparing
+  // base64 strings is unreliable because Odoo re-encodes.
+  if (field === 'image_1920') {
+    return typeof read === 'string' && read.length > 0;
+  }
+
+  // Strings (name, default_code, barcode, description_sale)
+  if (typeof wrote === 'string') return String(wrote).trim() === String(read || '').trim();
+
+  return wrote === read;
+}
 
 // ─── Stock / inventory helpers ──────────────────────────────────────────────
 // fetch list of products with on-hand qty, supports filter by stock state.
@@ -1309,7 +1710,7 @@ export const fetchStockProductsByTemplateOdoo = async ({
     return resp.data.result || [];
   };
 
-  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'categ_id', 'product_variant_id'];
+  const richFields = ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'categ_id', 'product_variant_id', 'image_128'];
   const safeFields = ['id', 'name', 'default_code', 'qty_available', 'product_variant_id'];
 
   let raw = [];
@@ -1322,6 +1723,7 @@ export const fetchStockProductsByTemplateOdoo = async ({
 
   return raw.map((t) => {
     const variantId = Array.isArray(t.product_variant_id) ? t.product_variant_id[0] : t.id;
+    const hasBase64 = t.image_128 && typeof t.image_128 === 'string' && t.image_128.length > 0;
     return {
       id: variantId,
       name: t.name || '',
@@ -1332,7 +1734,7 @@ export const fetchStockProductsByTemplateOdoo = async ({
       uom: Array.isArray(t.uom_id) ? { id: t.uom_id[0], name: t.uom_id[1] } : null,
       category: Array.isArray(t.categ_id) ? { id: t.categ_id[0], name: t.categ_id[1] } : null,
       product_tmpl_id: [t.id, t.name],
-      image_url: `${baseUrl}/web/image?model=product.template&id=${t.id}&field=image_128`,
+      image_url: hasBase64 ? `data:image/png;base64,${t.image_128}` : '',
     };
   });
 };
@@ -1365,101 +1767,167 @@ export const fetchStockProductCountOdoo = async ({ searchText = '', filter = 'al
 };
 
 // Detail for a single product: product info + per-location quants + last move.
-export const fetchProductStockDetailOdoo = async (productId) => {
-  if (!productId) return null;
+// Queries product.template so the on-hand value matches the Stock list (which
+// also reads template-level qty_available) and Odoo's Inventory > Products
+// view. Quants and last-move are widened to all variants of the template so
+// stock that lives on a non-default variant still shows up.
+export const fetchProductStockDetailOdoo = async (arg) => {
+  if (!arg) return null;
   const baseUrl = getOdooUrl();
 
-  const productResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+  // Accept either a positional id (legacy) or { productTmplId, productId }.
+  let productTmplId = null;
+  let productId = null;
+  if (typeof arg === 'object') {
+    productTmplId = arg.productTmplId || null;
+    productId = arg.productId || null;
+  } else {
+    productId = arg;
+  }
+
+  // Resolve template id from variant id when needed.
+  if (!productTmplId && productId) {
+    try {
+      const lookupResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'product.product',
+          method: 'search_read',
+          args: [[['id', '=', productId]]],
+          kwargs: { fields: ['id', 'product_tmpl_id'], limit: 1 },
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const v = (lookupResp.data?.result || [])[0];
+      if (v && Array.isArray(v.product_tmpl_id)) productTmplId = v.product_tmpl_id[0];
+    } catch (e) {
+      console.warn('fetchProductStockDetailOdoo tmpl lookup failed:', e?.payload || e?.message);
+    }
+  }
+  if (!productTmplId) return null;
+
+  // Read the template (matches the Stock list source — qty_available here is
+  // the sum across all variants, which is what Odoo's Inventory list shows).
+  const tmplResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
     jsonrpc: '2.0',
     method: 'call',
     params: {
-      model: 'product.product',
+      model: 'product.template',
       method: 'search_read',
-      args: [[['id', '=', productId]]],
+      args: [[['id', '=', productTmplId]]],
       kwargs: {
-        fields: ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id'],
+        fields: ['id', 'name', 'default_code', 'list_price', 'qty_available', 'virtual_available', 'uom_id', 'image_128', 'categ_id', 'product_variant_ids'],
         limit: 1,
       },
     },
   }, { headers: { 'Content-Type': 'application/json' } });
-  if (productResp.data && productResp.data.error) {
-    return { error: productResp.data.error };
+  if (tmplResp.data && tmplResp.data.error) {
+    return { error: tmplResp.data.error };
   }
-  const p = (productResp.data.result || [])[0];
-  if (!p) return null;
+  const t = (tmplResp.data.result || [])[0];
+  if (!t) return null;
+
+  const variantIds = Array.isArray(t.product_variant_ids) ? t.product_variant_ids : [];
+  const hasBase64 = t.image_128 && typeof t.image_128 === 'string' && t.image_128.length > 0;
 
   const product = {
-    id: p.id,
-    name: p.name || '',
-    default_code: p.default_code || '',
-    list_price: Number(p.list_price) || 0,
-    qty_available: Number(p.qty_available) || 0,
-    virtual_available: typeof p.virtual_available === 'undefined' ? null : Number(p.virtual_available),
-    uom: Array.isArray(p.uom_id) ? { id: p.uom_id[0], name: p.uom_id[1] } : null,
-    category: Array.isArray(p.categ_id) ? { id: p.categ_id[0], name: p.categ_id[1] } : null,
-    image_url: `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`,
+    id: t.id,
+    name: t.name || '',
+    default_code: t.default_code || '',
+    list_price: Number(t.list_price) || 0,
+    qty_available: Number(t.qty_available) || 0,
+    virtual_available: typeof t.virtual_available === 'undefined' ? null : Number(t.virtual_available),
+    uom: Array.isArray(t.uom_id) ? { id: t.uom_id[0], name: t.uom_id[1] } : null,
+    category: Array.isArray(t.categ_id) ? { id: t.categ_id[0], name: t.categ_id[1] } : null,
+    image_url: hasBase64 ? `data:image/png;base64,${t.image_128}` : '',
   };
 
-  // Quants by location
+  // Quants — widened to every variant of this template so we capture stock
+  // no matter which variant it sits on. `location_id.usage` lets us sum only
+  // internal locations for the on-hand cross-check below.
   let quants = [];
-  try {
-    const quantResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'stock.quant',
-        method: 'search_read',
-        args: [[['product_id', '=', productId]]],
-        kwargs: {
-          fields: ['id', 'location_id', 'quantity', 'reserved_quantity'],
-          order: 'location_id',
+  if (variantIds.length > 0) {
+    try {
+      const quantResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.quant',
+          method: 'search_read',
+          args: [[['product_id', 'in', variantIds]]],
+          kwargs: {
+            fields: ['id', 'location_id', 'quantity', 'reserved_quantity', 'location_id.usage'],
+            order: 'location_id',
+          },
         },
-      },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    if (!(quantResp.data && quantResp.data.error)) {
-      quants = (quantResp.data.result || []).map((q) => ({
-        id: q.id,
-        location: Array.isArray(q.location_id) ? { id: q.location_id[0], name: q.location_id[1] } : null,
-        quantity: Number(q.quantity) || 0,
-        reserved: Number(q.reserved_quantity) || 0,
-        available: (Number(q.quantity) || 0) - (Number(q.reserved_quantity) || 0),
-      }));
+      }, { headers: { 'Content-Type': 'application/json' } });
+      if (!(quantResp.data && quantResp.data.error)) {
+        quants = (quantResp.data.result || []).map((q) => ({
+          id: q.id,
+          location: Array.isArray(q.location_id)
+            ? { id: q.location_id[0], name: q.location_id[1], usage: q['location_id.usage'] || null }
+            : null,
+          quantity: Number(q.quantity) || 0,
+          reserved: Number(q.reserved_quantity) || 0,
+          available: (Number(q.quantity) || 0) - (Number(q.reserved_quantity) || 0),
+        }));
+      }
+    } catch (e) {
+      console.warn('fetchProductStockDetailOdoo quants fetch failed:', e?.payload || e?.message);
     }
-  } catch (e) {
-    console.warn('fetchProductStockDetailOdoo quants fetch failed:', e?.payload || e?.message);
   }
 
-  // Last completed move (best-effort)
+  // Defence-in-depth: if Odoo's stored qty_available drifts from the live
+  // sum of internal-location quants, prefer the live sum so the displayed
+  // on-hand always matches what Odoo's Inventory screen would compute.
+  const internalQuants = quants.filter((q) => q.location?.usage === 'internal');
+  const internalQuantSum = internalQuants.reduce((sum, q) => sum + (Number(q.quantity) || 0), 0);
+  if (
+    internalQuants.length > 0 &&
+    Number.isFinite(internalQuantSum) &&
+    internalQuantSum !== product.qty_available
+  ) {
+    console.warn('[Stock] qty_available !== sum(stock.quant); using stock.quant sum', {
+      productTmplId,
+      qty_available: product.qty_available,
+      internalQuantSum,
+    });
+    product.qty_available = internalQuantSum;
+  }
+
+  // Last completed move (best-effort) — also widened to all variants.
   let lastMove = null;
-  try {
-    const moveResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'stock.move.line',
-        method: 'search_read',
-        args: [[['product_id', '=', productId], ['state', '=', 'done']]],
-        kwargs: {
-          fields: ['id', 'date', 'qty_done', 'quantity', 'location_id', 'location_dest_id'],
-          order: 'date desc',
-          limit: 1,
+  if (variantIds.length > 0) {
+    try {
+      const moveResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.move.line',
+          method: 'search_read',
+          args: [[['product_id', 'in', variantIds], ['state', '=', 'done']]],
+          kwargs: {
+            fields: ['id', 'date', 'qty_done', 'quantity', 'location_id', 'location_dest_id'],
+            order: 'date desc',
+            limit: 1,
+          },
         },
-      },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    if (!(moveResp.data && moveResp.data.error)) {
-      const m = (moveResp.data.result || [])[0];
-      if (m) {
-        lastMove = {
-          id: m.id,
-          date: m.date || null,
-          qty: Number(m.qty_done ?? m.quantity ?? 0) || 0,
-          from: Array.isArray(m.location_id) ? { id: m.location_id[0], name: m.location_id[1] } : null,
-          to: Array.isArray(m.location_dest_id) ? { id: m.location_dest_id[0], name: m.location_dest_id[1] } : null,
-        };
+      }, { headers: { 'Content-Type': 'application/json' } });
+      if (!(moveResp.data && moveResp.data.error)) {
+        const m = (moveResp.data.result || [])[0];
+        if (m) {
+          lastMove = {
+            id: m.id,
+            date: m.date || null,
+            qty: Number(m.qty_done ?? m.quantity ?? 0) || 0,
+            from: Array.isArray(m.location_id) ? { id: m.location_id[0], name: m.location_id[1] } : null,
+            to: Array.isArray(m.location_dest_id) ? { id: m.location_dest_id[0], name: m.location_dest_id[1] } : null,
+          };
+        }
       }
+    } catch (e) {
+      console.warn('fetchProductStockDetailOdoo last-move fetch failed:', e?.payload || e?.message);
     }
-  } catch (e) {
-    console.warn('fetchProductStockDetailOdoo last-move fetch failed:', e?.payload || e?.message);
   }
 
   return { product, quants, lastMove };

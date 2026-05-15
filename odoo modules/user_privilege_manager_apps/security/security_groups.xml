@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Module category — shows as "PRIVILEGE MANAGER APPS" section header
+         in the Access Rights tab of the user form. -->
+    <record id="module_category_privilege_apps" model="ir.module.category">
+        <field name="name">Privilege Manager Apps</field>
+        <field name="description">Manage which mobile app screens and features each user can see.</field>
+        <field name="sequence">110</field>
+    </record>
+
+    <!-- Odoo 19: res.groups.privilege groups together the dropdown options
+         shown in that section. -->
+    <record id="privilege_privilege_apps" model="res.groups.privilege">
+        <field name="name">Privilege Manager Apps</field>
+        <field name="sequence">10</field>
+        <field name="category_id" ref="module_category_privilege_apps"/>
+    </record>
+
+    <!-- Dropdown option 1: User (read-only access to the new menu) -->
+    <record id="group_privilege_apps_user" model="res.groups">
+        <field name="name">User</field>
+        <field name="privilege_id" ref="privilege_privilege_apps"/>
+        <field name="comment">Can open the Privilege Manager Apps menu and view app feature configuration.</field>
+    </record>
+
+    <!-- Dropdown option 2: Manager (full control). Implies User. -->
+    <record id="group_privilege_apps_manager" model="res.groups">
+        <field name="name">Manager</field>
+        <field name="privilege_id" ref="privilege_privilege_apps"/>
+        <field name="implied_ids" eval="[(4, ref('group_privilege_apps_user'))]"/>
+        <field name="user_ids" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+        <field name="comment">Can manage the app feature catalog and per-user app feature visibility.</field>
+    </record>
+
+    <!-- Multi-company rule on privilege.role.app -->
+    <record id="rule_privilege_role_app_company" model="ir.rule">
+        <field name="name">Privilege Role (Apps): multi-company</field>
+        <field name="model_id" ref="model_privilege_role_app"/>
+        <field name="domain_force">['|', ('company_id', '=', False), ('company_id', 'in', company_ids)]</field>
+    </record>
+
+</odoo>

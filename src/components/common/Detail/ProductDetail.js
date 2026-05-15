@@ -204,24 +204,61 @@ const ProductDetail = ({ navigation, route }) => {
     const { getCurrentCart, addProduct, setCurrentCustomer } = useProductStore.getState();
     setCurrentCustomer('pos_guest');
     const currentProducts = getCurrentCart();
-    const newProduct = {
-      id: details.id ?? details._id,
-      name: details.product_name || details.name,
-      quantity: 1,
-      price: details.cost ?? details.price ?? 0,
-      imageUrl: details.image_url,
-    };
-    if (!newProduct.id) {
+
+    const remoteId = details.id ?? details._id;
+    if (!remoteId) {
       showToastMessage('Product ID missing, cannot add to cart');
       return;
     }
-    if (currentProducts.some((p) => p.id === newProduct.id)) {
-      showToastMessage('Product already added to POS cart');
+
+    // Match an existing entry by raw id, by `prod_${id}` (POSProducts'
+    // legacy prefixed format), or by `remoteId`, so we don't end up with
+    // two rows for the same product across entry paths. The cart-entry
+    // id we write below is the RAW Odoo id — POSPayment ships `p.id`
+    // straight to Odoo as `product_id`, so anything other than the
+    // integer would break the POS submit.
+    const existing = currentProducts.find((p) =>
+      String(p.id) === String(remoteId) ||
+      String(p.id) === `prod_${remoteId}` ||
+      String(p.remoteId) === String(remoteId)
+    );
+
+    // Sale price first — `details.cost` is the *purchase* price and is 0
+    // for most products, which is what was being shown as "0" on the line.
+    const salePrice = Number(
+      details.sale_price ?? details.price ?? details.list_price ?? details.cost ?? 0
+    ) || 0;
+
+    // Snake-case `image_url` is what every cart consumer reads; the old
+    // camelCase `imageUrl` only worked by an accidental fallback.
+    const imageUrl = details.image_url || null;
+
+    if (existing) {
+      const currentQty = Number(existing.quantity ?? existing.qty ?? 1);
+      addProduct({
+        ...existing,
+        image_url: existing.image_url || imageUrl,
+        price: existing.price || salePrice,
+        price_unit: existing.price_unit || salePrice,
+        quantity: currentQty + 1,
+        qty: currentQty + 1,
+      });
+      showToastMessage(`Added another ${details.product_name || details.name}`);
     } else {
-      addProduct(newProduct);
+      addProduct({
+        id: remoteId,
+        remoteId,
+        name: details.product_name || details.name,
+        quantity: 1,
+        qty: 1,
+        price: salePrice,
+        price_unit: salePrice,
+        image_url: imageUrl,
+        product_code: details.product_code || details.default_code || null,
+      });
       showToastMessage('Added to POS cart');
-      navigation.goBack();
     }
+    navigation.goBack();
   };
 
   const categoryDisplay =

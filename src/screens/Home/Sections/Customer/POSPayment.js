@@ -8,13 +8,13 @@ import { SafeAreaView } from '@components/containers';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import {
   fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
-  validatePosOrderOdoo, updatePosOrderOdoo, createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
+  createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
   captureAndStoreOrderLocation,
   registerLocationPromise,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
+  submitPosOrderToOdoo,
 } from '@api/services/generalApi';
-import { createPosOrderOdoo, createPosPaymentOdoo } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
 // react-native-modal — used here for the ID-proof popup so it animates
 // in like LogoutModal (slide-up + dimmed backdrop) instead of the
@@ -404,28 +404,12 @@ const POSPayment = ({ navigation, route }) => {
       let invoiceInfo = null;
       let capturedLocation = null;
       let locationPromise = null;
-      if (!createdOrderId) {
-        console.log('[STEP 1] No orderId passed to POSPayment. Creating a new order...');
-        const posOrderPayload = {
-          partnerId, lines, sessionId, posConfigId: resolvedConfigId, companyId, orderName: '/',
-          // Override the helper's naïve sum so Odoo's pos.order.amount_total
-          // reflects the discount rather than the raw subtotal.
-          amount_total: total,
-        };
-        console.log('[STEP 1] POS Order Payload:', posOrderPayload);
-        const resp = await createPosOrderOdoo(posOrderPayload);
-        console.log('[STEP 1] POS Order Response:', resp);
-        if (resp && resp.error) {
-          console.error('Odoo POS Order Error:', resp.error);
-          Toast.show({ type: 'error', text1: 'POS Error', text2: resp.error.message || JSON.stringify(resp.error) || 'Failed to create POS order', position: 'bottom' });
-          return;
-        }
-        createdOrderId = resp && resp.result ? resp.result : null;
-        if (!createdOrderId) {
-          Toast.show({ type: 'error', text1: 'POS Error', text2: 'No order id returned', position: 'bottom' });
-          return;
-        }
-      }
+      // NOTE: the order is now submitted atomically inside the payment block
+      // via submitPosOrderToOdoo (sync_from_ui on Odoo 18+, create_from_ui on 13-17),
+      // which is the only entry point that reliably creates the stock.picking
+      // that decrements qty_available. We no longer create a draft order up
+      // front and then try to mark it paid — that path bypassed picking
+      // creation on several Odoo versions and silently failed to move stock.
 
       if (paymentMode === 'cash' || paymentMode === 'card' || paymentMode === 'split') {
         try {
@@ -510,60 +494,112 @@ const POSPayment = ({ navigation, route }) => {
             const type = p.amount > 0 ? 'RECEIVED' : 'CHANGE';
             console.log(`[PAYMENT LOG] #${idx + 1} Type: ${type}, Amount: ${p.amount}, JournalId: ${p.journalId}, PaymentMethodId: ${p.paymentMethodId}`);
           });
-          const paymentPayload = { orderId: createdOrderId, payments, partnerId, sessionId, companyId };
-          console.log('JSON-RPC payment payload:', paymentPayload);
-          const paymentResp = await createPosPaymentOdoo(paymentPayload);
-          console.log('Payment API response:', paymentResp);
-          if (paymentResp && paymentResp.error) {
-            console.error('Payment API error:', paymentResp.error);
-            Toast.show({ type: 'error', text1: 'Payment Error', text2: paymentResp.error.message || JSON.stringify(paymentResp.error) || 'Failed to create payment', position: 'bottom' });
+          const totalPaymentAmount = payments.reduce((sum, p) => sum + p.amount, 0);
+          console.log('💰 Total payment amount:', totalPaymentAmount, 'Order total:', total);
+          if (totalPaymentAmount < total) {
+            console.log('⚠️ Payment amount does not cover order total. Skipping submit.');
+            Toast.show({
+              type: 'error',
+              text1: 'Payment Error',
+              text2: 'Payment amount does not cover the order total',
+              position: 'bottom',
+            });
             return;
           }
 
-          const totalPaymentAmount = payments.reduce((sum, p) => sum + p.amount, 0);
-          console.log('💰 Total payment amount:', totalPaymentAmount, 'Order total:', total);
-          if (totalPaymentAmount >= total) {
-            console.log('✅ Payments created. Updating order amount_paid before validation');
-            // Persist partner_id on the order too — if the user picked the
-            // customer on the payment screen (and not on the register), it
-            // would otherwise never land on the Odoo pos.order record.
-            const updateResp = await updatePosOrderOdoo(createdOrderId, {
-              amount_paid: total,
-              state: 'paid',
-              partner_id: partnerId || false,
+          if (!createdOrderId) {
+            // Cashier id comes from the auth store, not route params — older
+            // navigate calls didn't reliably pass it, and we don't want this
+            // to crash if a future caller forgets. `false` is Odoo's "no
+            // user" sentinel, which makes the server fall back to the
+            // JSON-RPC session user.
+            const authUser = useAuthStore.getState().user;
+            const cashierUserId = (authUser && (authUser.id || authUser.uid)) || false;
+            const orderUid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const submitResp = await submitPosOrderToOdoo({
+              orderUid,
+              sessionId,
+              posConfigId: resolvedConfigId,
+              userId: cashierUserId,
+              partnerId,
+              lines: lines.map((l) => {
+                const lineSubtotal = (typeof l.price_subtotal !== 'undefined' && l.price_subtotal !== null)
+                  ? Number(l.price_subtotal)
+                  : Number(l.price) * Number(l.qty) * (1 - (Number(l.discount) || 0) / 100);
+                return {
+                  product_id: l.product_id,
+                  qty: l.qty,
+                  price_unit: l.price,
+                  price_subtotal: lineSubtotal,
+                  price_subtotal_incl: lineSubtotal,
+                  discount: l.discount || 0,
+                  name: l.name,
+                };
+              }),
+              payments: payments.map((p) => ({
+                amount: p.amount,
+                payment_method_id: p.paymentMethodId,
+                name: p.paymentMode || 'payment',
+              })),
+              amountTotal: total,
+              amountPaid: totalPaymentAmount,
+              amountReturn: Math.max(0, paidAmount - total),
+              toInvoice: invoiceChecked || Boolean(customer && (customer.id || customer._id)),
+              companyId,
             });
-            if (updateResp && updateResp.error) {
-              console.error('Order update error:', updateResp.error);
-              Toast.show({ type: 'error', text1: 'Update Error', text2: 'Failed to update order', position: 'bottom' });
+            if (submitResp?.error) {
+              console.error('POS submit error:', submitResp.error);
+              Toast.show({
+                type: 'error',
+                text1: 'Could not submit order',
+                text2: submitResp.error?.data?.message || submitResp.error?.message || 'Unknown error',
+                position: 'bottom',
+              });
               return;
             }
-            console.log('✅ Order updated. Now validating order', createdOrderId);
-            const validateResp = await validatePosOrderOdoo(createdOrderId);
-            if (validateResp && validateResp.error) {
-              console.error('Order validation error:', validateResp.error);
-              Toast.show({ type: 'error', text1: 'Validation Error', text2: 'Payment created but order validation failed', position: 'bottom' });
-            } else {
-              console.log('✅ Order validated successfully');
+            createdOrderId = submitResp.result;
+            console.log('✅ POS Order submitted, id:', createdOrderId);
+          } else {
+            // A caller pre-created a pos.order via the legacy createPosOrderOdoo
+            // path and handed us its id. That path can NOT be completed with
+            // submitPosOrderToOdoo (it would create a duplicate), and the
+            // legacy payment+write+validate sequence does not generate a
+            // stock.picking reliably across Odoo versions — so the order
+            // would silently stay in draft with no stock movement. Fail
+            // loudly so the upstream caller is forced to migrate (drop the
+            // pre-create and let POSPayment own creation).
+            console.error(
+              '[POSPayment] Refusing to validate a pre-existing orderId. ' +
+              'POSPayment must be the sole creator of pos.order via submitPosOrderToOdoo — ' +
+              'remove the upstream createPosOrderOdoo call.',
+              { createdOrderId }
+            );
+            Toast.show({
+              type: 'error',
+              text1: 'Order submit error',
+              text2: 'Internal: order was pre-created. Please report this.',
+              position: 'bottom',
+            });
+            return;
+          }
 
-              // Fire location capture in the background — the receipt screen
-              // doesn't need GPS to render, so don't block invoice creation
-              // on the GPS fix. Race for 1.2s so a fresh lastKnown fix lands
-              // immediately; otherwise the receipt opens with "Capturing…"
-              // and updates when locationPromise eventually settles.
-              locationPromise = captureAndStoreOrderLocation(createdOrderId).catch((e) => {
-                console.warn('[POSLocation] background capture failed:', e?.message || e);
-                return null;
-              });
-              // Stash the in-flight promise in a module registry keyed by
-              // orderId so the receipt screen can pick it up without a
-              // non-serializable nav param.
-              registerLocationPromise(createdOrderId, locationPromise);
-              capturedLocation = await Promise.race([
-                locationPromise,
-                new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
-              ]);
+          {
+            // Fire location capture in the background — the receipt screen
+            // doesn't need GPS to render, so don't block invoice creation
+            // on the GPS fix. Race for 1.2s so a fresh lastKnown fix lands
+            // immediately; otherwise the receipt opens with "Capturing…"
+            // and updates when locationPromise eventually settles.
+            locationPromise = captureAndStoreOrderLocation(createdOrderId).catch((e) => {
+              console.warn('[POSLocation] background capture failed:', e?.message || e);
+              return null;
+            });
+            registerLocationPromise(createdOrderId, locationPromise);
+            capturedLocation = await Promise.race([
+              locationPromise,
+              new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+            ]);
 
-              const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
+            const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
               if (shouldCreateInvoice) {
                 try {
                   const actualTotal = Math.round(Number(totalAmount) * 1000) / 1000 || 0;
@@ -637,9 +673,6 @@ const POSPayment = ({ navigation, route }) => {
                   Toast.show({ type: 'error', text1: 'Invoice Error', text2: invErr?.message || 'Failed to create invoice', position: 'bottom' });
                 }
               }
-            }
-          } else {
-            console.log('⚠️ Payment amount does not cover order total. Order remains in draft state.');
           }
         } catch (e) {
           console.error('Payment API exception:', e);

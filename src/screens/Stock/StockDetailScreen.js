@@ -34,18 +34,18 @@ const formatDate = (s) => {
 };
 
 const StockDetailScreen = ({ navigation, route }) => {
-  const { productId } = route?.params || {};
+  const { productTmplId, productId } = route?.params || {};
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [imgFailed, setImgFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    if (!productId) {
+    if (!productTmplId && !productId) {
       setLoading(false);
       return;
     }
-    fetchProductStockDetailOdoo(productId)
+    fetchProductStockDetailOdoo({ productTmplId, productId })
       .then((res) => {
         if (!alive) return;
         if (res?.error) {
@@ -59,7 +59,7 @@ const StockDetailScreen = ({ navigation, route }) => {
       })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [productId]);
+  }, [productTmplId, productId]);
 
   if (loading) {
     return (

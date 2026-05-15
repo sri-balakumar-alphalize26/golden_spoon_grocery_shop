@@ -124,7 +124,10 @@ const StockScreen = ({ navigation }) => {
       <TouchableOpacity
         style={styles.row}
         activeOpacity={0.85}
-        onPress={() => navigation.navigate('StockDetail', { productId: item.id })}
+        onPress={() => navigation.navigate('StockDetail', {
+          productTmplId: item.product_tmpl_id?.[0] ?? item.id,
+          productId: item.id,
+        })}
       >
         {renderThumb(item)}
         <View style={{ flex: 1, marginLeft: 12 }}>

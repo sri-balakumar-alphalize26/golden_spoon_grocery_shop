@@ -5,7 +5,7 @@ import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import { COLORS } from '@constants/theme';
-import { createPosOrderOdoo, fetchDiscountsOdoo, updatePosOrderOdoo } from '@api/services/generalApi';
+import { fetchDiscountsOdoo } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,7 +24,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
-  const [creatingOrder, setCreatingOrder] = useState(false);
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [customDiscountInput, setCustomDiscountInput] = useState('');
@@ -50,9 +49,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
-  const [createdOrderId, setCreatedOrderId] = useState(route?.params?.existingOrderId || null);
-  const [submittedFingerprint, setSubmittedFingerprint] = useState(null);
-  const [existingOrderRef, setExistingOrderRef] = useState(route?.params?.existingOrderRef || '');
   const [qtyEditFor, setQtyEditFor] = useState(null);
   const [qtyDraft, setQtyDraft] = useState('');
   const qtyInputRef = useRef(null);
@@ -96,36 +92,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const total = useMemo(() => items.reduce((s, it) => s + (it.subtotal || (it.unit * it.qty)), 0), [items]);
   const discountApplied = Number(discountAmount) || 0;
   const finalTotal = Math.max(0, total - discountApplied);
-
-  // Seed the initial fingerprint when we arrive from Orders with an existing
-  // draft. This captures the loaded state once, so a no-change Place Order tap
-  // hits the silent reuse branch (Path A) instead of unnecessarily updating.
-  React.useEffect(() => {
-    if (!createdOrderId) return;
-    if (submittedFingerprint !== null) return;
-    if (!Array.isArray(cart) || cart.length === 0) return;
-    const lines = cart.map((item) => ({
-      product_id: item.remoteId || item.id,
-      qty: item.quantity || item.qty || 1,
-      price_unit: item.price_unit || item.price || 0,
-      discount: Number(item.discount_percent || item.discount || 0),
-      price_subtotal: typeof item.price_subtotal !== 'undefined' ? Number(item.price_subtotal) : undefined,
-    }));
-    const partnerId = customer?.id || customer?._id || null;
-    const seed = JSON.stringify({
-      partnerId: partnerId || null,
-      discount: Number(discountApplied) || 0,
-      amount_total: Number(finalTotal) || 0,
-      lines: lines.map((l) => ({
-        product_id: l.product_id,
-        qty: Number(l.qty) || 0,
-        price_unit: Number(l.price_unit) || 0,
-        discount: Number(l.discount) || 0,
-        price_subtotal: typeof l.price_subtotal === 'undefined' ? null : Number(l.price_subtotal),
-      })),
-    });
-    setSubmittedFingerprint(seed);
-  }, [createdOrderId, submittedFingerprint, cart, customer, discountApplied, finalTotal]);
 
   // Persisted discount presets: load local first, fallback to Odoo fetch
   React.useEffect(() => {
@@ -256,179 +222,26 @@ const TakeoutDelivery = ({ navigation, route }) => {
     navigation.navigate('POSProducts');
   };
 
-  const handlePlaceOrder = async () => {
+  const handlePlaceOrder = () => {
     if (!cart || cart.length === 0) {
       Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before placing order', position: 'bottom' });
       return;
     }
-
-    setCreatingOrder(true);
-    try {
-      const lines = cart.map(item => ({
-        product_id: item.remoteId || item.id,
-        qty: item.quantity || item.qty || 1,
-        price_unit: item.price_unit || item.price || 0,
-        name: item.name || 'Product',
-        discount: Number(item.discount_percent || item.discount || 0),
-        price_subtotal: typeof item.price_subtotal !== 'undefined' ? Number(item.price_subtotal) : undefined
-      }));
-
-      const sessionId = route?.params?.sessionId;
-      const posConfigId = route?.params?.registerId;
-      const partnerId = customer?.id || customer?._id || null;
-
-      // Fingerprint of what we're about to submit. If we already created an order
-      // and the fingerprint matches, skip the API call and just navigate. Prevents
-      // duplicate pos.order rows when the user goes back and taps Place Order again.
-      const fingerprintPayload = {
-        partnerId: partnerId || null,
-        discount: Number(discountApplied) || 0,
-        amount_total: Number(finalTotal) || 0,
-        lines: lines.map(l => ({
-          product_id: l.product_id,
-          qty: Number(l.qty) || 0,
-          price_unit: Number(l.price_unit) || 0,
-          discount: Number(l.discount) || 0,
-          price_subtotal: typeof l.price_subtotal === 'undefined' ? null : Number(l.price_subtotal),
-        })),
-      };
-      const fingerprint = JSON.stringify(fingerprintPayload);
-
-      // Path A: same order, same content → no-op API, no toast, just navigate.
-      // Triggered when the user reopens an existing draft from Orders and taps
-      // Place Order without changing anything. The receipt id was already
-      // generated, so we silently move on.
-      if (createdOrderId && submittedFingerprint === fingerprint) {
-        console.log('[Place Order] Reusing existing order, no API call:', createdOrderId);
-        navigation.navigate('POSPayment', {
-          orderId: createdOrderId,
-          sessionId,
-          registerId: posConfigId,
-          totalAmount: finalTotal,
-          products: cart,
-          discountAmount: discountApplied,
-          customer,
-        });
-        return;
-      }
-
-      // Path B: order already exists but content changed → write new lines/totals
-      // onto the existing pos.order instead of creating a duplicate.
-      if (createdOrderId) {
-        const lineCommands = [[5, 0, 0]].concat(
-          lines.map(l => {
-            const price_unit = l.price_unit || 0;
-            const qty = l.qty || 1;
-            const subtotal = (typeof l.price_subtotal !== 'undefined' && l.price_subtotal !== null)
-              ? Number(l.price_subtotal)
-              : (price_unit * qty);
-            return [0, 0, {
-              product_id: l.product_id,
-              qty,
-              price_unit,
-              name: l.name || '',
-              discount: Number(l.discount) || 0,
-              price_subtotal: subtotal,
-              price_subtotal_incl: subtotal,
-            }];
-          })
-        );
-
-        console.log('[Place Order] Updating existing order:', createdOrderId);
-        const updResp = await updatePosOrderOdoo(createdOrderId, {
-          partner_id: partnerId || false,
-          amount_total: Number(finalTotal) || 0,
-          lines: lineCommands,
-        });
-        if (updResp && updResp.error) {
-          Toast.show({
-            type: 'error',
-            text1: 'Order Update Failed',
-            text2: updResp.error.message || 'Could not update existing order',
-            position: 'bottom',
-          });
-          return;
-        }
-        setSubmittedFingerprint(fingerprint);
-        Toast.show({
-          type: 'success',
-          text1: 'Order Updated',
-          text2: existingOrderRef ? `Ref: ${existingOrderRef}` : `Order ID: ${createdOrderId}`,
-          position: 'bottom',
-        });
-        navigation.navigate('POSPayment', {
-          orderId: createdOrderId,
-          sessionId,
-          registerId: posConfigId,
-          totalAmount: finalTotal,
-          products: cart,
-          discountAmount: discountApplied,
-          customer,
-        });
-        return;
-      }
-
-      console.log('[Place Order] Creating order with:', { lines, sessionId, posConfigId, partnerId });
-
-      // Don't pass preset_id - let Odoo use default or omit if optional
-      const resp = await createPosOrderOdoo({
-        partnerId,
-        lines,
-        sessionId,
-        posConfigId,
-        discount: discountApplied,
-        amount_total: finalTotal
-      });
-
-      console.log('[Place Order] Response:', resp);
-
-      if (resp && resp.error) {
-        Toast.show({
-          type: 'error',
-          text1: 'Order Error',
-          text2: resp.error.message || JSON.stringify(resp.error) || 'Failed to create order',
-          position: 'bottom'
-        });
-        return;
-      }
-
-      const orderId = resp && resp.result ? resp.result : null;
-      if (!orderId) {
-        Toast.show({ type: 'error', text1: 'Order Error', text2: 'No order ID returned', position: 'bottom' });
-        return;
-      }
-
-      setCreatedOrderId(orderId);
-      setSubmittedFingerprint(fingerprint);
-
-      Toast.show({
-        type: 'success',
-        text1: 'Order Created',
-        text2: `Order ID: ${orderId}`,
-        position: 'bottom'
-      });
-
-      // Navigate to payment or clear cart
-      navigation.navigate('POSPayment', {
-        orderId,
-        sessionId,
-        registerId: posConfigId,
-        totalAmount: finalTotal,
-        products: cart,
-        discountAmount: discountApplied,
-        customer
-      });
-    } catch (error) {
-      console.error('[Place Order] Error:', error);
-      Toast.show({ 
-        type: 'error', 
-        text1: 'Order Error', 
-        text2: error?.message || 'Failed to create order', 
-        position: 'bottom' 
-      });
-    } finally {
-      setCreatingOrder(false);
-    }
+    // No pre-create. POSPayment uses pos.order.create_from_ui to atomically
+    // create the order, record the payment(s), mark it paid, and validate
+    // the stock picking. Pre-creating a draft here and then handing the
+    // orderId to POSPayment causes its create_from_ui call to be skipped,
+    // leaving the order in draft with no picking → no stock movement.
+    const sessionId = route?.params?.sessionId;
+    const posConfigId = route?.params?.registerId;
+    navigation.navigate('POSPayment', {
+      sessionId,
+      registerId: posConfigId,
+      totalAmount: finalTotal,
+      products: cart,
+      discountAmount: discountApplied,
+      customer,
+    });
   };
 
   const renderLine = ({ item }) => {
@@ -833,7 +646,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
           {/* Place Order — full width below Add Products */}
           <TouchableOpacity
             onPress={handlePlaceOrder}
-            disabled={creatingOrder}
             activeOpacity={0.85}
             style={{
               flexDirection: 'row',
@@ -842,7 +654,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
               backgroundColor: '#10b981',
               paddingVertical: 14,
               borderRadius: 14,
-              opacity: creatingOrder ? 0.6 : 1,
               shadowColor: '#10b981',
               shadowOffset: { width: 0, height: 5 },
               shadowOpacity: 0.32,
@@ -850,14 +661,8 @@ const TakeoutDelivery = ({ navigation, route }) => {
               elevation: 7,
             }}
           >
-            {creatingOrder ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
-                <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
-              </>
-            )}
+            <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
+            <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
           </TouchableOpacity>
         </View>
       </View>

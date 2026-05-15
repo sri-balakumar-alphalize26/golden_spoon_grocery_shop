@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Image,
@@ -52,6 +52,10 @@ const ProductCreationForm = ({ navigation, route }) => {
 
   const [saving, setSaving] = useState(false);
   const [prefilling, setPrefilling] = useState(isEdit);
+  // Original on-hand qty captured at prefill — used to skip the qty write
+  // when the user didn't actually change it. The qty path is the most
+  // failure-prone part of the save and we don't want it firing on every save.
+  const originalOnHandRef = useRef(null);
 
   const [productName, setProductName] = useState('');
   const [salesPrice, setSalesPrice] = useState('');
@@ -103,7 +107,9 @@ const ProductCreationForm = ({ navigation, route }) => {
         setProductName(od.product_name || '');
         setSalesPrice(od.sale_price !== undefined && od.sale_price !== null ? String(od.sale_price) : '');
         setCost(od.cost !== undefined && od.cost !== null ? String(od.cost) : '');
-        setOnHandQty(od.total_product_quantity !== undefined && od.total_product_quantity !== null ? String(od.total_product_quantity) : '');
+        const initialQty = od.total_product_quantity ?? 0;
+        setOnHandQty(String(initialQty));
+        originalOnHandRef.current = String(initialQty);
         setBarcode(od.barcode || '');
         setInternalRef(od.product_code || '');
         if (od.image_url) setImageUri(od.image_url);
@@ -158,6 +164,14 @@ const ProductCreationForm = ({ navigation, route }) => {
     }
     setSaving(true);
     try {
+      // Only push qty when the user actually changed it. Otherwise the
+      // stock.quant write fires every save and any failure (e.g. no internal
+      // location for this user) gets reported as a partial-save error even
+      // though the user didn't touch qty.
+      const qtyChanged = isEdit
+        ? String(onHandQty || '').trim() !== String(originalOnHandRef.current ?? '').trim()
+        : (onHandQty || '') !== '';
+
       const payload = {
         name: productName.trim(),
         // Picker stores both Internal and POS categories — branch on `kind`
@@ -173,7 +187,7 @@ const ProductCreationForm = ({ navigation, route }) => {
         // In edit mode only send a fresh image when the user picked one
         // (imageBase64 is null when they kept the existing photo).
         image: imageBase64 || undefined,
-        onHandQty: onHandQty || undefined,
+        onHandQty: qtyChanged ? (onHandQty || '0') : undefined,
       };
       const resp = isEdit
         ? await updateProductOdoo(editId, payload)
@@ -187,11 +201,41 @@ const ProductCreationForm = ({ navigation, route }) => {
         });
         return;
       }
+      const notSaved = Array.isArray(resp?.notSaved) ? resp.notSaved : [];
+      const qtyFailed = resp?.qtySaved === false;
+      const hasPartialFailure = isEdit && (notSaved.length > 0 || qtyFailed);
+
+      if (hasPartialFailure) {
+        const labels = {
+          name: 'Name',
+          list_price: 'Sales Price',
+          standard_price: 'Cost',
+          categ_id: 'Category',
+          pos_categ_ids: 'POS Category',
+          available_in_pos: 'POS Visibility',
+          barcode: 'Barcode',
+          default_code: 'Internal Reference',
+          uom_id: 'Unit of Measure',
+          image_1920: 'Image',
+          description_sale: 'Description',
+        };
+        const failed = notSaved.map((k) => labels[k] || k);
+        if (qtyFailed) failed.push('On-Hand Qty');
+        Toast.show({
+          type: 'error',
+          text1: 'Some changes did not save',
+          text2: failed.join(', '),
+          position: 'bottom',
+          visibilityTime: 6000,
+        });
+        // Stay on the form so the user can retry — don't navigate away and
+        // hide the lost data behind a green toast.
+        return;
+      }
+
       Toast.show({
         type: 'success',
-        text1: isEdit
-          ? (resp?.partial ? 'Product saved (some fields skipped)' : 'Product updated')
-          : 'Product created',
+        text1: isEdit ? 'Product updated' : 'Product created',
         position: 'bottom',
       });
       if (isEdit) {

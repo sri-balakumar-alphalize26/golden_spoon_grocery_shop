@@ -1,0 +1,297 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Tile catalog: noupdate=1 so admin-edited labels survive upgrades. -->
+    <data noupdate="1">
+
+    <!-- Catalog of app-side UI elements that can be hidden per user/role.
+         Each record's feature_key must match the corresponding <FeatureGate
+         featureKey="..."> wrapper or the `featureKey` field on an item in
+         the React Native HomeScreen SECTIONS array. Adding more records here
+         + wrapping the matching UI element in JSX is the entire workflow
+         for making a new piece of the app gateable. -->
+
+    <record id="feature_home_banner" model="app.feature.app">
+        <field name="feature_key">home.banner</field>
+        <field name="name">Home Banner Carousel</field>
+        <field name="description">Top banner slideshow on the home screen.</field>
+        <field name="sequence">10</field>
+    </record>
+
+    <!-- Sales &amp; POS section tiles -->
+    <record id="feature_home_tile_pos" model="app.feature.app">
+        <field name="feature_key">home.tile.pos</field>
+        <field name="name">POS Tile</field>
+        <field name="description">Home tile: opens the Point of Sale register.</field>
+        <field name="sequence">20</field>
+    </record>
+    <record id="feature_home_tile_orders" model="app.feature.app">
+        <field name="feature_key">home.tile.orders</field>
+        <field name="name">Orders Tile</field>
+        <field name="description">Home tile: browse and manage customer orders.</field>
+        <field name="sequence">21</field>
+    </record>
+    <record id="feature_home_tile_sales_report" model="app.feature.app">
+        <field name="feature_key">home.tile.sales_report</field>
+        <field name="name">Sales Report Tile</field>
+        <field name="description">Home tile: view sales analytics and reports.</field>
+        <field name="sequence">22</field>
+    </record>
+
+    <!-- Inventory section tiles -->
+    <record id="feature_home_tile_products" model="app.feature.app">
+        <field name="feature_key">home.tile.products</field>
+        <field name="name">Products Tile</field>
+        <field name="description">Home tile: browse and manage the product catalog.</field>
+        <field name="sequence">30</field>
+    </record>
+    <record id="feature_home_tile_stock" model="app.feature.app">
+        <field name="feature_key">home.tile.stock</field>
+        <field name="name">Stock Tile</field>
+        <field name="description">Home tile: manage inventory levels.</field>
+        <field name="sequence">31</field>
+    </record>
+
+    <!-- Easy Purchase section tiles -->
+    <record id="feature_home_tile_easy_purchase" model="app.feature.app">
+        <field name="feature_key">home.tile.easy_purchase</field>
+        <field name="name">Easy Purchase Tile</field>
+        <field name="description">Home tile: quick bulk purchase ordering.</field>
+        <field name="sequence">40</field>
+    </record>
+
+    <!-- Contacts section tiles -->
+    <record id="feature_home_tile_customers" model="app.feature.app">
+        <field name="feature_key">home.tile.customers</field>
+        <field name="name">Customers Tile</field>
+        <field name="description">Home tile: customer directory and management.</field>
+        <field name="sequence">50</field>
+    </record>
+    <record id="feature_home_tile_customer_id_proofs" model="app.feature.app">
+        <field name="feature_key">home.tile.customer_id_proofs</field>
+        <field name="name">Customer ID Proofs Tile</field>
+        <field name="description">Home tile: view customer identity documents.</field>
+        <field name="sequence">51</field>
+    </record>
+
+    <!-- Finance section tiles -->
+    <record id="feature_home_tile_expenses" model="app.feature.app">
+        <field name="feature_key">home.tile.expenses</field>
+        <field name="name">Expenses Tile</field>
+        <field name="description">Home tile: record and track business expenses.</field>
+        <field name="sequence">60</field>
+    </record>
+
+    <!-- Administration section tiles
+         NOTE: the in-app "App Features" admin tile is intentionally NOT in
+         this catalog. Hiding it would lock an admin out of the very tool
+         that manages hides. -->
+    <record id="feature_home_tile_users" model="app.feature.app">
+        <field name="feature_key">home.tile.users</field>
+        <field name="name">Users Tile (Admin)</field>
+        <field name="description">Home tile: manage system users.</field>
+        <field name="sequence">70</field>
+    </record>
+    <record id="feature_home_tile_app_banners" model="app.feature.app">
+        <field name="feature_key">home.tile.app_banners</field>
+        <field name="name">App Banners Tile (Admin)</field>
+        <field name="description">Home tile: configure promotional banners.</field>
+        <field name="sequence">71</field>
+    </record>
+    <record id="feature_home_tile_app_privileges" model="app.feature.app">
+        <field name="feature_key">home.tile.app_privileges</field>
+        <field name="name">Apps Privileges Tile (Admin)</field>
+        <field name="description">Home tile: configure per-user / per-role visibility of in-app features.</field>
+        <field name="sequence">72</field>
+    </record>
+
+    </data>
+
+    <!-- Per-operation child gates: noupdate=0 so the parent_id link and
+         description are re-applied every upgrade. These are structural
+         records (parent_id IS the source of truth); admins should not
+         re-parent them in the UI. -->
+    <data noupdate="0">
+
+    <!-- Products screen: per-operation gates (not tile-level).
+         Nested under the Products Tile via parent_id so they render as
+         indented sub-rows behind an expand arrow in the App Features admin. -->
+    <record id="feature_products_add" model="app.feature.app">
+        <field name="feature_key">products.add</field>
+        <field name="name">Add</field>
+        <field name="description">Show the "+" Add Product button on the Products screen and the Save button in the new-product form.</field>
+        <field name="parent_id" ref="feature_home_tile_products"/>
+        <field name="sequence">100</field>
+    </record>
+    <record id="feature_products_edit" model="app.feature.app">
+        <field name="feature_key">products.edit</field>
+        <field name="name">Edit</field>
+        <field name="description">Show the "Edit Product" button on a product's detail screen and the Save button in edit mode.</field>
+        <field name="parent_id" ref="feature_home_tile_products"/>
+        <field name="sequence">101</field>
+    </record>
+
+    <!-- POS register operations -->
+    <record id="feature_pos_open_register" model="app.feature.app">
+        <field name="feature_key">pos.open_register</field>
+        <field name="name">Open Register</field>
+        <field name="description">Show the Open Register button in POS so the user can start a cash session.</field>
+        <field name="parent_id" ref="feature_home_tile_pos"/>
+        <field name="sequence">110</field>
+    </record>
+    <record id="feature_pos_close_register" model="app.feature.app">
+        <field name="feature_key">pos.close_register</field>
+        <field name="name">Close Register</field>
+        <field name="description">Show the Close Register button in POS so the user can end the active cash session.</field>
+        <field name="parent_id" ref="feature_home_tile_pos"/>
+        <field name="sequence">111</field>
+    </record>
+
+    <!-- Orders operations -->
+    <record id="feature_orders_resume_draft" model="app.feature.app">
+        <field name="feature_key">orders.resume_draft</field>
+        <field name="name">Resume Draft</field>
+        <field name="description">Allow tapping a draft order in the list to reload it into the cart for editing.</field>
+        <field name="parent_id" ref="feature_home_tile_orders"/>
+        <field name="sequence">120</field>
+    </record>
+    <record id="feature_orders_export_pdf" model="app.feature.app">
+        <field name="feature_key">orders.export_pdf</field>
+        <field name="name">Export PDF</field>
+        <field name="description">Show the Download PDF button on the order detail screen.</field>
+        <field name="parent_id" ref="feature_home_tile_orders"/>
+        <field name="sequence">121</field>
+    </record>
+
+    <!-- Sales Report operations -->
+    <record id="feature_sales_report_export_pdf" model="app.feature.app">
+        <field name="feature_key">sales_report.export_pdf</field>
+        <field name="name">Export PDF</field>
+        <field name="description">Show the Export PDF button on the Sales Report screen.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">130</field>
+    </record>
+    <record id="feature_sales_report_export_excel" model="app.feature.app">
+        <field name="feature_key">sales_report.export_excel</field>
+        <field name="name">Export Excel</field>
+        <field name="description">Show the Export Excel button on the Sales Report screen.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">131</field>
+    </record>
+
+    <!-- Easy Purchase operations -->
+    <record id="feature_easy_purchase_create" model="app.feature.app">
+        <field name="feature_key">easy_purchase.create</field>
+        <field name="name">Create</field>
+        <field name="description">Show the New Purchase FAB on the Easy Purchase list screen.</field>
+        <field name="parent_id" ref="feature_home_tile_easy_purchase"/>
+        <field name="sequence">140</field>
+    </record>
+    <record id="feature_easy_purchase_save" model="app.feature.app">
+        <field name="feature_key">easy_purchase.save</field>
+        <field name="name">Save</field>
+        <field name="description">Show the Confirm Purchase / Save button on the Easy Purchase form.</field>
+        <field name="parent_id" ref="feature_home_tile_easy_purchase"/>
+        <field name="sequence">141</field>
+    </record>
+    <record id="feature_easy_purchase_cancel" model="app.feature.app">
+        <field name="feature_key">easy_purchase.cancel</field>
+        <field name="name">Cancel</field>
+        <field name="description">Show the Cancel Purchase / Reset to Draft button on the Easy Purchase detail screen.</field>
+        <field name="parent_id" ref="feature_home_tile_easy_purchase"/>
+        <field name="sequence">142</field>
+    </record>
+
+    <!-- Customers operations -->
+    <record id="feature_customers_add" model="app.feature.app">
+        <field name="feature_key">customers.add</field>
+        <field name="name">Add</field>
+        <field name="description">Show the Add Customer FAB on the Customers screen and the Save button in the new-customer form.</field>
+        <field name="parent_id" ref="feature_home_tile_customers"/>
+        <field name="sequence">150</field>
+    </record>
+    <record id="feature_customers_edit" model="app.feature.app">
+        <field name="feature_key">customers.edit</field>
+        <field name="name">Edit</field>
+        <field name="description">Show the Edit pencil on customer rows and the Save button in edit mode.</field>
+        <field name="parent_id" ref="feature_home_tile_customers"/>
+        <field name="sequence">151</field>
+    </record>
+
+    <!-- Expenses operations -->
+    <record id="feature_expenses_create" model="app.feature.app">
+        <field name="feature_key">expenses.create</field>
+        <field name="name">Create</field>
+        <field name="description">Show the Create Expense FAB on the Expenses screen.</field>
+        <field name="parent_id" ref="feature_home_tile_expenses"/>
+        <field name="sequence">160</field>
+    </record>
+    <record id="feature_expenses_edit" model="app.feature.app">
+        <field name="feature_key">expenses.edit</field>
+        <field name="name">Edit</field>
+        <field name="description">Show the Edit icon on the Expense detail screen for draft expenses.</field>
+        <field name="parent_id" ref="feature_home_tile_expenses"/>
+        <field name="sequence">161</field>
+    </record>
+    <record id="feature_expenses_approve" model="app.feature.app">
+        <field name="feature_key">expenses.approve</field>
+        <field name="name">Approve</field>
+        <field name="description">Show the Approve button on submitted expenses (manager action).</field>
+        <field name="parent_id" ref="feature_home_tile_expenses"/>
+        <field name="sequence">162</field>
+    </record>
+    <record id="feature_expenses_refuse" model="app.feature.app">
+        <field name="feature_key">expenses.refuse</field>
+        <field name="name">Refuse</field>
+        <field name="description">Show the Refuse button on submitted/approved expenses (manager action).</field>
+        <field name="parent_id" ref="feature_home_tile_expenses"/>
+        <field name="sequence">163</field>
+    </record>
+
+    <!-- Users operations -->
+    <record id="feature_users_add" model="app.feature.app">
+        <field name="feature_key">users.add</field>
+        <field name="name">Add</field>
+        <field name="description">Show the New User FAB on the Users screen and the Save button in the new-user form.</field>
+        <field name="parent_id" ref="feature_home_tile_users"/>
+        <field name="sequence">170</field>
+    </record>
+    <record id="feature_users_edit" model="app.feature.app">
+        <field name="feature_key">users.edit</field>
+        <field name="name">Edit</field>
+        <field name="description">Show the Save button on an existing user's detail form.</field>
+        <field name="parent_id" ref="feature_home_tile_users"/>
+        <field name="sequence">171</field>
+    </record>
+    <record id="feature_users_change_password" model="app.feature.app">
+        <field name="feature_key">users.change_password</field>
+        <field name="name">Change Password</field>
+        <field name="description">Show the Change Password button on the user detail screen.</field>
+        <field name="parent_id" ref="feature_home_tile_users"/>
+        <field name="sequence">172</field>
+    </record>
+
+    <!-- App Banners operations -->
+    <record id="feature_app_banners_add" model="app.feature.app">
+        <field name="feature_key">app_banners.add</field>
+        <field name="name">Add</field>
+        <field name="description">Show the New Banner FAB on the Banners screen and the Save button in the new-banner form.</field>
+        <field name="parent_id" ref="feature_home_tile_app_banners"/>
+        <field name="sequence">180</field>
+    </record>
+    <record id="feature_app_banners_edit" model="app.feature.app">
+        <field name="feature_key">app_banners.edit</field>
+        <field name="name">Edit</field>
+        <field name="description">Show the Save button when editing an existing banner.</field>
+        <field name="parent_id" ref="feature_home_tile_app_banners"/>
+        <field name="sequence">181</field>
+    </record>
+    <record id="feature_app_banners_delete" model="app.feature.app">
+        <field name="feature_key">app_banners.delete</field>
+        <field name="name">Delete</field>
+        <field name="description">Show the Delete Banner button on the Banner detail screen.</field>
+        <field name="parent_id" ref="feature_home_tile_app_banners"/>
+        <field name="sequence">182</field>
+    </record>
+
+    </data>
+</odoo>
