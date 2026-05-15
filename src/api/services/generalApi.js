@@ -465,13 +465,13 @@ export const submitPosOrderToOdoo = async ({
 
   // ── Odoo 18+: pos.order.sync_from_ui ───────────────────────────────────
   // Flat order dict in a list. No `data:` wrapper. Order is already paid.
-  // Trimmed to fields that exist on Odoo 18+ pos.order — `creation_date`,
-  // `uid`, `sequence_number`, `to_invoice` were removed/renamed in the new
-  // Owl POS rewrite. Server fills `date_order` and `sequence_number` itself.
+  // Don't pre-set `name` or `pos_reference` — Odoo's POS config sequence
+  // assigns them (e.g. "Clothes Shop - 000042"). If we send our random
+  // client-side uid as `name`, Odoo skips the sequence and the order ends
+  // up with garbage like "Clothes Shop - 1h2wdk". `id` is fine to send;
+  // Odoo only uses it as a dedupe key during _process_order.
   const buildSyncFromUiOrder = () => ({
     id: orderUid,
-    pos_reference: `Order ${orderUid}`,
-    name: `Order ${orderUid}`,
     session_id: sessionId,
     partner_id: partnerId || false,
     user_id: userId || false,
