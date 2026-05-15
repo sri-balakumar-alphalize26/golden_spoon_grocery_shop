@@ -371,7 +371,10 @@ const POSPayment = ({ navigation, route }) => {
     setPaying(true);
     try {
       const lines = products.map((p) => ({
-        product_id: p.id,
+        // remoteId is the raw Odoo product id; `p.id` can be a prefixed cart
+        // key like 'prod_74' from POSProducts.mapToStoreProduct. Postgres
+        // rejects strings here because product_id is INTEGER.
+        product_id: p.remoteId || p.id,
         qty: p.quantity,
         price: p.price,
         name: p.name || p.product_name || '',
@@ -609,7 +612,9 @@ const POSPayment = ({ navigation, route }) => {
                   const ratio = grossTotal > 0 ? actualTotal / grossTotal : 1;
 
                   const invoiceProducts = (products || []).map((p) => ({
-                    id: p.id,
+                    // Same remoteId fallback as the POS lines builder above —
+                    // Odoo rejects 'prod_<n>' as an integer product_id.
+                    id: p.remoteId || p.id,
                     name: p.name || p.product_name || '',
                     quantity: Number(p.quantity || p.qty || 1),
                     price: Math.round(Number(p.price || p.price_unit || 0) * ratio * 1000) / 1000,

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Multi-company rule for easy.purchase.app -->
+    <record id="easy_purchase_app_comp_rule" model="ir.rule">
+        <field name="name">Easy Purchase App multi-company</field>
+        <field name="model_id" ref="model_easy_purchase_app"/>
+        <field name="domain_force">['|',('company_id','=',False),('company_id','in',company_ids)]</field>
+    </record>
+
+    <!-- Multi-company rule for easy.purchase.line.app -->
+    <record id="easy_purchase_line_app_comp_rule" model="ir.rule">
+        <field name="name">Easy Purchase Line App multi-company</field>
+        <field name="model_id" ref="model_easy_purchase_line_app"/>
+        <field name="domain_force">['|',('purchase_id.company_id','=',False),('purchase_id.company_id','in',company_ids)]</field>
+    </record>
+
+    <!-- Multi-company rule for easy.purchase.payment.method.app -->
+    <record id="easy_purchase_payment_method_app_comp_rule" model="ir.rule">
+        <field name="name">Easy Purchase Payment Method App multi-company</field>
+        <field name="model_id" ref="model_easy_purchase_payment_method_app"/>
+        <field name="domain_force">['|',('company_id','=',False),('company_id','in',company_ids)]</field>
+    </record>
+</odoo>

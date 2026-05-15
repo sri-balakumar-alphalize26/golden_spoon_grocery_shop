@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="easy_purchase_menu_root_app" name="Easy Purchase Apps" sequence="46" web_icon="easy_purchase_apps,static/description/icon.png" groups="easy_purchase_apps.group_easy_purchase_apps_user"/>
+    <menuitem id="easy_purchase_menu_purchases_app" name="Purchases" parent="easy_purchase_menu_root_app" sequence="10"/>
+    <menuitem id="easy_purchase_menu_action_app" name="Purchase Entry" parent="easy_purchase_menu_purchases_app" action="easy_purchase_app_action" sequence="10"/>
+    <menuitem id="easy_purchase_menu_configuration_app" name="Configuration" parent="easy_purchase_menu_root_app" sequence="90" groups="easy_purchase_apps.group_easy_purchase_apps_manager"/>
+    <menuitem id="easy_purchase_menu_payment_methods_app" name="Payment Methods" parent="easy_purchase_menu_configuration_app" action="easy_purchase_payment_method_app_action" sequence="10"/>
+    <menuitem id="easy_purchase_menu_in_purchase_app" name="Quick Purchase Apps" parent="purchase.menu_purchase_root" action="easy_purchase_app_action" sequence="6"/>
+</odoo>

@@ -354,6 +354,9 @@ export const submitPosOrderToOdoo = async ({
 
   // ── Odoo 18+: pos.order.sync_from_ui ───────────────────────────────────
   // Flat order dict in a list. No `data:` wrapper. Order is already paid.
+  // Trimmed to fields that exist on Odoo 18+ pos.order — `creation_date`,
+  // `uid`, `sequence_number`, `to_invoice` were removed/renamed in the new
+  // Owl POS rewrite. Server fills `date_order` and `sequence_number` itself.
   const buildSyncFromUiOrder = () => ({
     id: orderUid,
     pos_reference: `Order ${orderUid}`,
@@ -364,8 +367,6 @@ export const submitPosOrderToOdoo = async ({
     fiscal_position_id: false,
     pricelist_id: pricelistId || false,
     company_id: companyId,
-    sequence_number: 1,
-    creation_date: creationDate,
     amount_paid: Number(amountPaid) || 0,
     amount_total: Number(amountTotal) || 0,
     amount_tax: 0,
@@ -373,7 +374,6 @@ export const submitPosOrderToOdoo = async ({
     state: 'paid',
     lines: lineTuples,
     payment_ids: paymentTuples,
-    to_invoice: !!toInvoice,
   });
 
   const callSyncFromUi = async () => {
