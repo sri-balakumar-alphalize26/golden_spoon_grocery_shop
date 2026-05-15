@@ -160,7 +160,11 @@ const MyOrdersScreen = ({ navigation }) => {
   const renderOrderItem = useCallback(({ item }) => {
     const partnerName = Array.isArray(item.partner_id) ? item.partner_id[1] : item.partner_id || '—';
     const userName = Array.isArray(item.user_id) ? item.user_id[1] : item.user_id || '—';
-    const receiptNo = item.pos_reference || '';
+    // pos_reference is "/" until Odoo's sequence fires; fall back to `name`
+    // (the per-session sequence, e.g. "Shop/0001") so we never render a
+    // bare "/" chip in the orders list.
+    const ref = (item.pos_reference && item.pos_reference !== '/' ? item.pos_reference : '');
+    const receiptNo = ref || (item.name && item.name !== '/' ? item.name : '');
 
     return (
       <TouchableOpacity

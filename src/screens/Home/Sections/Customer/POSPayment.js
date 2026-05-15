@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ActivityIndicator, TouchableOpacity, ScrollView, StyleSheet,
-  StatusBar, Platform, Dimensions, Alert, Modal, TextInput,
+  StatusBar, Platform, Dimensions, Alert, Modal, TextInput, Linking,
 } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
@@ -9,11 +9,12 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import {
   fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
   createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
-  captureAndStoreOrderLocation,
-  registerLocationPromise,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
   submitPosOrderToOdoo,
+  getCurrentDeviceLocation,
+  writeOrderLocationOdoo,
+  fetchPosOrderRefOdoo,
 } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
 // react-native-modal — used here for the ID-proof popup so it animates
@@ -370,6 +371,38 @@ const POSPayment = ({ navigation, route }) => {
     console.log('Journal before payment:', selectedJournal);
     setPaying(true);
     try {
+      // Strict location gate. The receipt must always carry a real fix
+      // captured at the moment of payment — no "Location unavailable —
+      // tap to retry" placeholder. If services are off or permission is
+      // denied, popup with an Open Settings button (Google-Maps style)
+      // and BLOCK the payment.
+      const fix = await getCurrentDeviceLocation();
+      if (fix?.error) {
+        if (fix.error === 'services_off' || fix.error === 'permission_denied') {
+          const isOff = fix.error === 'services_off';
+          Alert.alert(
+            isOff ? 'Turn on location' : 'Allow location access',
+            isOff
+              ? 'Location services are off on this device. Turn them on to complete payment.'
+              : 'This app needs location permission to record where the sale happened. Open settings to allow it.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => { Linking.openSettings(); } },
+            ],
+          );
+        } else {
+          Toast.show({
+            type: 'error',
+            text1: 'Location unavailable',
+            text2: fix.error === 'no_fix'
+              ? 'Could not get a GPS fix. Move to a window or open sky and try again.'
+              : 'Location service error. Try again.',
+          });
+        }
+        setPaying(false);
+        return;
+      }
+
       const lines = products.map((p) => ({
         // remoteId is the raw Odoo product id; `p.id` can be a prefixed cart
         // key like 'prod_74' from POSProducts.mapToStoreProduct. Postgres
@@ -406,7 +439,7 @@ const POSPayment = ({ navigation, route }) => {
       let createdOrderId = orderId || null;
       let invoiceInfo = null;
       let capturedLocation = null;
-      let locationPromise = null;
+      let posReference = '';
       // NOTE: the order is now submitted atomically inside the payment block
       // via submitPosOrderToOdoo (sync_from_ui on Odoo 18+, create_from_ui on 13-17),
       // which is the only entry point that reliably creates the stock.picking
@@ -587,20 +620,25 @@ const POSPayment = ({ navigation, route }) => {
           }
 
           {
-            // Fire location capture in the background — the receipt screen
-            // doesn't need GPS to render, so don't block invoice creation
-            // on the GPS fix. Race for 1.2s so a fresh lastKnown fix lands
-            // immediately; otherwise the receipt opens with "Capturing…"
-            // and updates when locationPromise eventually settles.
-            locationPromise = captureAndStoreOrderLocation(createdOrderId).catch((e) => {
-              console.warn('[POSLocation] background capture failed:', e?.message || e);
-              return null;
-            });
-            registerLocationPromise(createdOrderId, locationPromise);
-            capturedLocation = await Promise.race([
-              locationPromise,
-              new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
-            ]);
+            // We already have the GPS fix (Strict location gate, top of
+            // handlePay) — just persist it on the new pos.order. No
+            // background promise, no race, no auto-update on the receipt.
+            await writeOrderLocationOdoo(createdOrderId, fix);
+            capturedLocation = {
+              latitude: fix.latitude,
+              longitude: fix.longitude,
+              locationName: fix.locationName,
+            };
+
+            // Read Odoo's freshly-allocated POS reference so the receipt
+            // shows the real ref (e.g. "Shop/0001") instead of the "/"
+            // placeholder Odoo uses before its sequence fires.
+            try {
+              const refInfo = await fetchPosOrderRefOdoo(createdOrderId);
+              if (refInfo?.posReference) posReference = refInfo.posReference;
+            } catch (refErr) {
+              console.warn('[POS] ref refetch failed:', refErr?.message || refErr);
+            }
 
             const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
               if (shouldCreateInvoice) {
@@ -713,11 +751,12 @@ const POSPayment = ({ navigation, route }) => {
         invoice: invoiceInfo,
         sessionId,
         registerName,
-        // GPS coordinates + place name. We may already have a fast-path
-        // fix (capturedLocation set) or just the in-flight promise — the
-        // promise itself is stored in the module registry (keyed by
-        // orderId) so navigation params stay serializable.
+        // GPS coordinates + place name — captured BEFORE submit and
+        // frozen here. Receipt must not refetch or auto-update.
         capturedLocation,
+        // Odoo's freshly-allocated POS reference (e.g. "Shop/0001"),
+        // already resolved by fetchPosOrderRefOdoo above.
+        posReference,
       });
     } catch (e) {
       Toast.show({ type: 'error', text1: 'POS Error', text2: e?.message || 'Failed to create POS order', position: 'bottom' });

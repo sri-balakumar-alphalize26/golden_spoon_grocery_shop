@@ -178,6 +178,117 @@ export const getLocationPromise = (orderId) => {
 // module doesn't pay the import cost. Graceful on permission denial / GPS
 // timeout — returns null and logs `[POSLocation] denied/failed`. The 3
 // fields live in the standalone `pos_order_location` Odoo module.
+// Get a fresh device location fix WITHOUT touching Odoo. Returns either
+//   { latitude, longitude, locationName }   on success
+// or { error: 'expo_missing'|'services_off'|'permission_denied'|'no_fix' }
+// when something blocks us. Used by POSPayment to gate Validate Payment so
+// the receipt always carries a real fix instead of the previous "Location
+// unavailable — tap to retry" race.
+export const getCurrentDeviceLocation = async () => {
+  let Location;
+  try { Location = require('expo-location'); }
+  catch (e) {
+    console.warn('[POSLocation] expo-location not available:', e?.message || e);
+    return { error: 'expo_missing' };
+  }
+  try {
+    const services = await Location.hasServicesEnabledAsync().catch(() => true);
+    if (!services) return { error: 'services_off' };
+
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (perm?.status !== 'granted') return { error: 'permission_denied' };
+
+    let pos = null;
+    try {
+      pos = await Location.getLastKnownPositionAsync({ maxAge: 60_000, requiredAccuracy: 200 });
+    } catch (_) {}
+    if (!pos) {
+      pos = await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy?.Low ?? 1,
+          timeout: 5000,
+        }).catch(() => null),
+        new Promise((r) => setTimeout(() => r(null), 5500)),
+      ]);
+    }
+    const lat = pos?.coords?.latitude;
+    const lon = pos?.coords?.longitude;
+    if (lat == null || lon == null) return { error: 'no_fix' };
+
+    let locationName = '';
+    try {
+      const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+      const p = (places && places[0]) || null;
+      if (p) {
+        locationName = [p.street, p.name && p.name !== p.street ? p.name : null,
+                        p.district, p.city || p.subregion, p.region, p.country]
+          .filter(Boolean).join(', ');
+      }
+    } catch (_) {}
+
+    return { latitude: lat, longitude: lon, locationName };
+  } catch (err) {
+    console.warn('[POSLocation] getCurrentDeviceLocation failed:', err?.message || err);
+    return { error: 'no_fix' };
+  }
+};
+
+// Persist a previously-captured fix onto a pos.order. Called after submit,
+// when we finally have the new order id. Returns true on write success.
+export const writeOrderLocationOdoo = async (orderId, fix) => {
+  if (!orderId || !fix || fix.error) return false;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'pos.order', method: 'write',
+        args: [[Number(orderId)], {
+          order_latitude: Number(fix.latitude),
+          order_longitude: Number(fix.longitude),
+          order_location_name: fix.locationName || '',
+        }],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      console.warn('[POSLocation] write failed:', resp.data.error?.data?.message || resp.data.error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[POSLocation] write threw:', e?.message || e);
+    return false;
+  }
+};
+
+// Read Odoo's freshly-allocated POS reference for an order. Called right
+// after submit so the receipt + MyOrders show the real ref (e.g. "Shop/0001")
+// instead of the placeholder "/" that exists for a brief window before
+// Odoo's sequence fires.
+export const fetchPosOrderRefOdoo = async (orderId) => {
+  if (!orderId) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: {
+        model: 'pos.order', method: 'read',
+        args: [[Number(orderId)], ['name', 'pos_reference']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const r = resp.data?.result?.[0];
+    if (!r) return null;
+    const safe = (s) => (s && s !== '/' ? s : '');
+    return {
+      name: safe(r.name),
+      posReference: safe(r.pos_reference) || safe(r.name),
+    };
+  } catch (e) {
+    console.warn('[POS] ref fetch failed:', e?.message || e);
+    return null;
+  }
+};
+
 export const captureAndStoreOrderLocation = async (orderId) => {
   if (!orderId) return null;
   let Location;

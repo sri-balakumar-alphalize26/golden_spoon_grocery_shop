@@ -8,6 +8,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchInventoryDetailsByName, fetchProductDetails } from '@api/details/detailApi';
 import { fetchProductDetailsOdoo } from '@api/services/generalApi';
 import { showToastMessage } from '@components/Toast';
+import Toast from 'react-native-toast-message';
 import { useAuthStore } from '@stores/auth';
 import { OverlayLoader } from '@components/Loader';
 import { CustomListModal, EmployeeListModal } from '@components/Modal';
@@ -207,57 +208,53 @@ const ProductDetail = ({ navigation, route }) => {
 
     const remoteId = details.id ?? details._id;
     if (!remoteId) {
-      showToastMessage('Product ID missing, cannot add to cart');
+      Toast.show({ type: 'error', text1: 'Cannot add', text2: 'Product ID missing' });
       return;
     }
 
-    // Match an existing entry by raw id, by `prod_${id}` (POSProducts'
-    // legacy prefixed format), or by `remoteId`, so we don't end up with
-    // two rows for the same product across entry paths. The cart-entry
-    // id we write below is the RAW Odoo id — POSPayment ships `p.id`
-    // straight to Odoo as `product_id`, so anything other than the
-    // integer would break the POS submit.
+    const productName = details.product_name || details.name || 'Product';
+
+    // Match across all three id shapes used by the various add paths so a
+    // product added via the + button (prefixed `prod_<n>`) and a product
+    // added via this button (raw int) never produce two cart rows.
     const existing = currentProducts.find((p) =>
       String(p.id) === String(remoteId) ||
       String(p.id) === `prod_${remoteId}` ||
       String(p.remoteId) === String(remoteId)
     );
 
-    // Sale price first — `details.cost` is the *purchase* price and is 0
-    // for most products, which is what was being shown as "0" on the line.
+    if (existing) {
+      // Don't increment — match the + button's behavior. The cashier
+      // adjusts qty from the register screen, not by re-tapping here.
+      Toast.show({
+        type: 'info',
+        text1: 'Already Added',
+        text2: `${productName} is already in the cart. Go back and increase quantity.`,
+      });
+      return;
+    }
+
     const salePrice = Number(
       details.sale_price ?? details.price ?? details.list_price ?? details.cost ?? 0
     ) || 0;
-
-    // Snake-case `image_url` is what every cart consumer reads; the old
-    // camelCase `imageUrl` only worked by an accidental fallback.
     const imageUrl = details.image_url || null;
 
-    if (existing) {
-      const currentQty = Number(existing.quantity ?? existing.qty ?? 1);
-      addProduct({
-        ...existing,
-        image_url: existing.image_url || imageUrl,
-        price: existing.price || salePrice,
-        price_unit: existing.price_unit || salePrice,
-        quantity: currentQty + 1,
-        qty: currentQty + 1,
-      });
-      showToastMessage(`Added another ${details.product_name || details.name}`);
-    } else {
-      addProduct({
-        id: remoteId,
-        remoteId,
-        name: details.product_name || details.name,
-        quantity: 1,
-        qty: 1,
-        price: salePrice,
-        price_unit: salePrice,
-        image_url: imageUrl,
-        product_code: details.product_code || details.default_code || null,
-      });
-      showToastMessage('Added to POS cart');
-    }
+    addProduct({
+      id: remoteId,
+      remoteId,
+      name: productName,
+      quantity: 1,
+      qty: 1,
+      price: salePrice,
+      price_unit: salePrice,
+      image_url: imageUrl,
+      product_code: details.product_code || details.default_code || null,
+    });
+    Toast.show({
+      type: 'success',
+      text1: 'Added',
+      text2: productName,
+    });
     navigation.goBack();
   };
 

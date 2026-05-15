@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, Modal, TextInput, Pressable } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, Modal, TextInput, Pressable, ScrollView } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
@@ -901,6 +901,11 @@ const TakeoutDelivery = ({ navigation, route }) => {
       {/* Add Discount Modal (simple percentage only) */}
       <Modal visible={addModalVisible} animationType="slide" transparent={true} onRequestClose={() => setAddModalVisible(false)}>
         <View style={{ flex:1, backgroundColor:'rgba(0,0,0,0.4)', justifyContent:'center', alignItems:'center' }}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ width:'100%', alignItems:'center' }}
+            style={{ width:'100%' }}
+          >
           <View style={{ width:'90%', backgroundColor:'#fff', borderRadius:8, padding:16 }}>
             <Text style={{ fontWeight:'800', fontSize:18, marginBottom:12 }}>Add New Discount</Text>
             <Text style={{ fontSize:13, color:'#666', marginBottom:10 }}>Enter discount percentage</Text>
@@ -926,12 +931,18 @@ const TakeoutDelivery = ({ navigation, route }) => {
               </TouchableOpacity>
             </View>
           </View>
+          </ScrollView>
         </View>
       </Modal>
 
       {/* Edit Discount Modal (list then edit) */}
       <Modal visible={editModalVisible} animationType="slide" transparent={true} onRequestClose={() => setEditModalVisible(false)}>
         <View style={{ flex:1, backgroundColor:'rgba(0,0,0,0.4)', justifyContent:'center', alignItems:'center' }}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ width:'100%', alignItems:'center' }}
+            style={{ width:'100%' }}
+          >
           <View style={{ width:'90%', backgroundColor:'#fff', borderRadius:8, padding:16, maxHeight:'80%' }}>
             <Text style={{ fontWeight:'800', fontSize:18, marginBottom:12 }}>Edit Discount</Text>
             <FlatList data={discountPresets} keyExtractor={d => String(d.id)} renderItem={({item}) => (
@@ -964,6 +975,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
               </View>
             ) : null}
           </View>
+          </ScrollView>
         </View>
       </Modal>
 

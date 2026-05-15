@@ -79,7 +79,7 @@ const POSProducts = ({ navigation }) => {
   const [totalCount, setTotalCount] = useState(0);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, posCategoryId: selectedPosCategory, posOnly: true }),
+    (text) => fetchData({ searchText: text, posCategoryId: selectedPosCategory }),
     500
   );
 
@@ -96,7 +96,7 @@ const POSProducts = ({ navigation }) => {
       const categoryChanged = lastCategoryRef.current !== selectedPosCategory;
       if (!hasLoadedRef.current || searchChanged || categoryChanged) {
         hasAttemptedFetchRef.current = true;
-        fetchData({ searchText, posCategoryId: selectedPosCategory, posOnly: true });
+        fetchData({ searchText, posCategoryId: selectedPosCategory });
         hasLoadedRef.current = true;
         lastSearchRef.current = searchText;
         lastCategoryRef.current = selectedPosCategory;
@@ -106,7 +106,6 @@ const POSProducts = ({ navigation }) => {
       fetchProductTemplateCountOdoo({
         searchText,
         posCategoryId: selectedPosCategory,
-        posOnly: true,
       }).then((total) => setTotalCount(total)).catch(() => setTotalCount(0));
 
       // Refresh POS category chips + their per-category counts on focus so
@@ -115,7 +114,7 @@ const POSProducts = ({ navigation }) => {
         try {
           const cats = await fetchPosCategoriesOdoo();
           const ids = (cats || []).map((c) => c.id).filter(Boolean);
-          const counts = await fetchPosCategoryCountsOdoo(ids, { posOnly: true });
+          const counts = await fetchPosCategoryCountsOdoo(ids);
           setPosCategories(cats || []);
           setCategoryCounts(counts || { all: 0 });
         } catch (e) {
@@ -153,9 +152,18 @@ const POSProducts = ({ navigation }) => {
   const handleQuickAdd = useCallback((item) => {
     try {
       const cartId = `prod_${item.id}`;
+      const rawId = String(item.id);
       const { getCurrentCart } = useProductStore.getState();
       const cart = getCurrentCart() || [];
-      const existing = cart.find((c) => String(c.id) === cartId);
+      // Match across all three id shapes — Add to POS Cart writes raw int,
+      // ProductsScreen + writes raw int, this + writes prefixed. Without
+      // this widened lookup, a row written by Add-to-POS-Cart wouldn't be
+      // recognised here and we'd add a duplicate.
+      const existing = cart.find((c) =>
+        String(c.id) === cartId ||
+        String(c.id) === rawId ||
+        String(c.remoteId) === rawId
+      );
       if (existing) {
         const productName = item?.product_name || item?.name || 'Product';
         Toast.show({
@@ -187,7 +195,7 @@ const POSProducts = ({ navigation }) => {
   }, [navigation]);
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText, posCategoryId: selectedPosCategory, posOnly: true });
+    fetchMoreData({ searchText, posCategoryId: selectedPosCategory });
   }, [searchText, selectedPosCategory, fetchMoreData]);
 
   const renderItem = useCallback(({ item }) => {

@@ -9,7 +9,7 @@ import * as FileSystem from 'expo-file-system';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, captureAndStoreOrderLocation, getLocationPromise } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
@@ -124,74 +124,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const discount = typeof params.discount !== 'undefined' ? Number(params.discount) : 0;
   const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + service - discount;
   const orderId = params.orderId || params.id || params.invoiceId || null;
-  // GPS + place name. Seeded from the capture done at Validate Payment time,
-  // but the preview screen also retries on mount and on user tap so a failed
-  // initial capture doesn't permanently hide the location on the receipt.
-  const [capturedLocation, setCapturedLocation] = useState(params.capturedLocation || null);
-  const [locationFetching, setLocationFetching] = useState(false);
-
-  const refreshLocation = useCallback(async () => {
-    if (locationFetching) return;
-    console.log('[INVOICE:PREVIEW] location refresh start orderId=', orderId);
-    setLocationFetching(true);
-    try {
-      const res = await captureAndStoreOrderLocation(orderId);
-      console.log('[INVOICE:PREVIEW] location refresh result =', res);
-      if (res && (res.locationName || res.latitude != null)) {
-        setCapturedLocation(res);
-      } else if (!res) {
-        Toast.show({
-          type: 'error',
-          text1: 'Location unavailable',
-          text2: 'Enable Location in device settings and tap to retry.',
-          position: 'bottom',
-        });
-      }
-    } catch (e) {
-      console.warn('[INVOICE:PREVIEW] location refresh failed:', e?.message || e);
-      Toast.show({
-        type: 'error',
-        text1: 'Location failed',
-        text2: e?.message || 'Could not fetch device location.',
-        position: 'bottom',
-      });
-    } finally {
-      setLocationFetching(false);
-    }
-  }, [orderId, locationFetching]);
-
-  // On mount: if POSPayment fired a background location capture and handed
-  // us the in-flight promise, await it (no second GPS round-trip). Otherwise
-  // fall back to a fresh capture so opening this screen directly still works.
-  useEffect(() => {
-    // Promises can't be serialized through navigation params, so we look
-    // up the in-flight capture promise from a module-level registry keyed
-    // by orderId (POSPayment registered it before navigating here).
-    const promise = getLocationPromise(orderId);
-    if (capturedLocation && (capturedLocation.latitude != null || capturedLocation.locationName)) {
-      return; // already have a fix
-    }
-    if (promise && typeof promise.then === 'function') {
-      console.log('[INVOICE:PREVIEW] awaiting background location promise…');
-      setLocationFetching(true);
-      promise
-        .then((res) => {
-          console.log('[INVOICE:PREVIEW] background location resolved =', res);
-          if (res && (res.locationName || res.latitude != null)) {
-            setCapturedLocation(res);
-          }
-        })
-        .catch((e) => {
-          console.warn('[INVOICE:PREVIEW] background location rejected:', e?.message || e);
-        })
-        .finally(() => setLocationFetching(false));
-    } else if (orderId) {
-      // No promise piggy-backed — direct entry (e.g. re-opened receipt).
-      // Kick a fresh capture so the cashier doesn't have to tap retry.
-      refreshLocation();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // GPS + place name. POSPayment's strict location gate captures the fix
+  // BEFORE Validate Payment, so by the time this screen mounts the param
+  // is already populated. We render it as-is — no auto-refetch, no retry,
+  // no background promise — so the value the cashier saw at payment time
+  // is the value that prints on the receipt.
+  const capturedLocation = params.capturedLocation || null;
 
   const grandTotal = total;
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
@@ -370,17 +308,15 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             </View>
           </View>
 
-          {/* Location strip — always rendered. Shows the resolved place
-              name when capture succeeded; "Capturing…" while a fetch is
-              in flight; and a tappable "Location unavailable — tap to
-              retry" otherwise. */}
+          {/* Location strip — frozen value captured at Validate Payment.
+              Tap opens the map modal if we have coords; otherwise it's
+              non-interactive (no retry — the strict gate guarantees a fix
+              by the time we reach this screen). */}
           <TouchableOpacity
-            activeOpacity={0.7}
+            activeOpacity={capturedLocation ? 0.7 : 1}
             onPress={() => {
               if (capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null)) {
                 setLocationModalVisible(true);
-              } else {
-                refreshLocation();
               }
             }}
             style={[s.metaStrip, { marginTop: 8 }]}
@@ -394,7 +330,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
                 <Text style={s.metaValue} numberOfLines={2}>
                   {capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null)
                     ? (capturedLocation.locationName || `${Number(capturedLocation.latitude).toFixed(5)}, ${Number(capturedLocation.longitude).toFixed(5)}`)
-                    : (locationFetching ? 'Capturing location…' : 'Location unavailable — tap to retry')}
+                    : 'Location unavailable'}
                 </Text>
               </View>
             </View>
@@ -610,19 +546,13 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               onPress={() => {
                 if (capturedLocation && (capturedLocation.locationName || capturedLocation.latitude != null)) {
                   setLocationModalVisible(true);
-                } else {
-                  refreshLocation();
                 }
               }}
-              activeOpacity={0.85}
+              activeOpacity={capturedLocation ? 0.85 : 1}
               style={[s.actionChip, s.locationChip]}
             >
               <View style={s.actionIconDisk}>
-                {locationFetching ? (
-                  <ActivityIndicator color="#9333ea" size="small" />
-                ) : (
-                  <MaterialIcons name="place" size={20} color="#9333ea" />
-                )}
+                <MaterialIcons name="place" size={20} color="#9333ea" />
               </View>
               <Text style={s.actionChipText}>Location</Text>
             </TouchableOpacity>
