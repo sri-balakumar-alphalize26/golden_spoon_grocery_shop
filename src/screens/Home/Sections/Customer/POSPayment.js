@@ -15,13 +15,12 @@ import {
   getCurrentDeviceLocation,
   writeOrderLocationOdoo,
   fetchPosOrderRefOdoo,
-  // Used to finalize a pre-existing draft (TakeoutDelivery's Place Order
-  // creates the draft; we record the payment, stamp amount_paid, then
-  // call action_pos_order_paid which transitions draft→paid, allocates
-  // the receipt sequence, and creates the stock.picking).
-  createPosPaymentOdoo,
-  updatePosOrderOdoo,
-  validatePosOrderOdoo,
+  // Discard a pre-existing draft (from TakeoutDelivery's Place Order)
+  // before re-submitting via sync_from_ui. The legacy 4-step manual
+  // flow (create → payment → write → action_paid) does NOT reliably
+  // create the stock.picking, so on-hand never decremented. sync_from_ui
+  // does, so we route every paid order through that single path.
+  deletePosOrderOdoo,
 } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
 // react-native-modal — used here for the ID-proof popup so it animates
@@ -576,7 +575,26 @@ const POSPayment = ({ navigation, route }) => {
             return;
           }
 
-          if (!createdOrderId) {
+          // If TakeoutDelivery's Place Order pre-created a draft pos.order,
+          // discard it now and re-submit via sync_from_ui. The legacy
+          // 4-step manual finalize (createPayment + write amount_paid +
+          // action_pos_order_paid) does not reliably create the
+          // stock.picking on Odoo 18/19 — that's why on-hand stopped
+          // decrementing. sync_from_ui IS the official UI pipeline and
+          // always creates the picking, so route every paid order
+          // through it whether or not a draft existed.
+          if (createdOrderId) {
+            console.log('[POSFinalize] discarding pre-existing draft id=', createdOrderId, 'before sync_from_ui');
+            const delResp = await deletePosOrderOdoo(createdOrderId);
+            if (delResp?.error) {
+              console.warn('[POSFinalize] discard draft warning:', delResp.error?.message || delResp.error);
+              // Soft-warn only — even if the draft survives in 'cancel' state,
+              // sync_from_ui will still create a fresh paid order with picking.
+            }
+            createdOrderId = null;
+          }
+
+          {
             // Cashier id comes from the auth store, not route params — older
             // navigate calls didn't reliably pass it, and we don't want this
             // to crash if a future caller forgets. `false` is Odoo's "no
@@ -628,63 +646,6 @@ const POSPayment = ({ navigation, route }) => {
             }
             createdOrderId = submitResp.result;
             console.log('✅ POS Order submitted, id:', createdOrderId);
-          } else {
-            // Pre-existing orderId from TakeoutDelivery's Place Order — the
-            // pos.order is in Odoo as a draft with name='/' until we
-            // finalize it here.
-            //
-            // Sequence: create pos.payment(s) → write amount_paid → call
-            // action_pos_order_paid. CRITICAL: do NOT pre-write state='paid'
-            // before action_pos_order_paid. Doing so makes Odoo's method
-            // short-circuit and skip _create_order_picking() — that's how
-            // we previously ended up with paid orders that didn't decrement
-            // stock. Letting action_pos_order_paid do the draft→paid
-            // transition itself guarantees the picking gets created.
-
-            console.log('[POSFinalize] finalize start, orderId=', createdOrderId,
-              'total=', total, 'payments=', payments.length);
-            const paymentResp = await createPosPaymentOdoo({
-              orderId: createdOrderId,
-              payments,
-              partnerId,
-              sessionId,
-              companyId,
-            });
-            console.log('[POSFinalize] payment response:', JSON.stringify(paymentResp));
-            if (paymentResp?.error) {
-              Toast.show({
-                type: 'error',
-                text1: 'Payment Error',
-                text2: paymentResp.error.message || JSON.stringify(paymentResp.error) || 'Failed to create payment',
-                position: 'bottom',
-              });
-              return;
-            }
-
-            // Stamp amount_paid + partner so action_pos_order_paid sees the
-            // right totals. State stays 'draft' so the action can transition.
-            const updateResp = await updatePosOrderOdoo(createdOrderId, {
-              amount_paid: total,
-              partner_id: partnerId || false,
-            });
-            console.log('[POSFinalize] update response:', JSON.stringify(updateResp));
-            if (updateResp?.error) {
-              Toast.show({ type: 'error', text1: 'Update Error', text2: 'Failed to update draft', position: 'bottom' });
-              return;
-            }
-
-            const validateResp = await validatePosOrderOdoo(createdOrderId);
-            console.log('[POSFinalize] validate response:', JSON.stringify(validateResp));
-            if (validateResp?.error) {
-              Toast.show({
-                type: 'error',
-                text1: 'Validation Error',
-                text2: validateResp.error.message || 'Could not validate draft order',
-                position: 'bottom',
-              });
-              return;
-            }
-            console.log('[POSFinalize] ✅ done, id=', createdOrderId);
           }
 
           {

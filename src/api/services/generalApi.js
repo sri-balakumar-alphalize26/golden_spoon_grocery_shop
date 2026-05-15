@@ -534,6 +534,43 @@ export const captureAndStoreOrderLocation = async (orderId) => {
   }
 };
 
+// Delete a draft pos.order from Odoo. Used by POSPayment when finalizing a
+// pre-existing draft (Place Order → POSPayment): we throw the draft away
+// and re-submit via sync_from_ui because the manual create+payment+write
+// +action_paid pipeline does not reliably create the stock.picking, so
+// stock never decrements. sync_from_ui DOES create the picking, so the
+// safest fix is to route every paid order through that single path.
+//
+// Tries unlink first; if Odoo refuses (record locked, ACL, payments
+// already attached), falls back to writing state='cancel' which is also
+// allowed and won't conflict with re-submission.
+export const deletePosOrderOdoo = async (orderId) => {
+  if (!orderId) return { result: true };
+  const url = `${getOdooUrl()}/web/dataset/call_kw`;
+  try {
+    const resp = await axios.post(url, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'pos.order', method: 'unlink', args: [[Number(orderId)]], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (!resp.data?.error) return { result: true };
+    console.warn('[POS] unlink draft failed, falling back to state=cancel:', resp.data.error?.data?.message || resp.data.error);
+  } catch (e) {
+    console.warn('[POS] unlink threw, falling back to state=cancel:', e?.message || e);
+  }
+  try {
+    const resp = await axios.post(url, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'pos.order', method: 'write', args: [[Number(orderId)], { state: 'cancel' }], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return { error: resp.data.error };
+    return { result: true };
+  } catch (e) {
+    return { error: { message: e?.message || 'Failed to discard draft' } };
+  }
+};
+
 export const validatePosOrderOdoo = async (orderId) => {
   try {
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {

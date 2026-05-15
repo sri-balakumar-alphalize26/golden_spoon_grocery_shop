@@ -15,6 +15,7 @@ import {
 import { useAuthStore } from '@stores/auth';
 import { formatCurrency } from '@utils/currency';
 import { FeatureGate } from '@components/FeatureGate';
+import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -55,6 +56,7 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
   const [busy, setBusy] = useState(false);
   const [linked, setLinked] = useState({ po: null, picking: null, bill: null, payments: [] });
   const [taxesById, setTaxesById] = useState({});
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -99,33 +101,33 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
     ]);
   };
 
-  const onConfirm = () => {
-    Alert.alert('Confirm Order', 'Confirm this purchase order?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Confirm',
-        onPress: async () => {
-          setBusy(true);
-          try {
-            // Disable auto_register_payment + auto_validate_bill on this
-            // draft before confirming. With either flag on, an order whose
-            // total is $0 (e.g. cashier saved a draft with no prices yet)
-            // makes Odoo's account.payment.register raise "nothing left to
-            // pay" and the whole confirm chain fails. The cashier can
-            // register payment manually later, or fix the price first.
-            try { await updateEasyPurchase(id, { auto_register_payment: false, auto_validate_bill: false }); }
-            catch (wErr) { console.warn('[EasyPurchase] update before confirm failed:', wErr?.message || wErr); }
-            await confirmEasyPurchase(id);
-            await load();
-            showToastMessage('Confirmed');
-          } catch (e) {
-            showToastMessage(e?.message || 'Failed to confirm');
-          } finally {
-            setBusy(false);
-          }
-        },
-      },
-    ]);
+  const onConfirm = () => setConfirmVisible(true);
+
+  const doConfirm = async () => {
+    setConfirmVisible(false);
+    setBusy(true);
+    try {
+      // Only suppress auto_register_payment / auto_validate_bill when the
+      // draft has no money on it ($0 total). For a normal-priced draft we
+      // leave the flags as the user originally saved them — typically
+      // both ON, so confirm creates the bill + payment and payment_state
+      // computes to 'paid', flipping the list badge from orange Unpaid
+      // to green Paid. With them forced OFF the payment_ids stay empty
+      // and easy_purchase.py's _compute_payment_state never returns
+      // 'paid', leaving the row stuck on Unpaid.
+      const total = Number(data?.amount_total || 0);
+      if (total <= 0) {
+        try { await updateEasyPurchase(id, { auto_register_payment: false, auto_validate_bill: false }); }
+        catch (wErr) { console.warn('[EasyPurchase] $0 flag override failed:', wErr?.message || wErr); }
+      }
+      await confirmEasyPurchase(id);
+      await load();
+      showToastMessage('Confirmed');
+    } catch (e) {
+      showToastMessage(e?.message || 'Failed to confirm');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onDraft = async () => {
@@ -347,6 +349,16 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
           </View>
         )}
       </View>
+
+      <StyledConfirmModal
+        isVisible={confirmVisible}
+        title="Confirm Order"
+        message="Confirm this purchase order?"
+        confirmLabel="Confirm"
+        cancelLabel="Cancel"
+        onConfirm={doConfirm}
+        onCancel={() => setConfirmVisible(false)}
+      />
     </SafeAreaView>
   );
 };
