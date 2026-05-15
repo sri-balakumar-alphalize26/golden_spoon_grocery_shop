@@ -137,14 +137,18 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
 
   const handleSubmit = async () => {
     if (!expense || expense.state !== 'draft') return;
+    console.log(`[EXPENSE:SUBMIT] handleSubmit id=${expense.id} state=${expense.state} sheet=${expense.sheet_id ?? 'null'}`);
     setSubmitting(true);
     try {
-      const resp = await submitExpenseOdoo(expense.id);
+      const resp = await submitExpenseOdoo(expense.id, expense.sheet_id || null);
       if (resp?.error) {
+        console.error('[EXPENSE:SUBMIT] handleSubmit error payload:', resp.error);
+        const errName = resp.error.data?.name || '';
+        const errMsg = resp.error.data?.message || resp.error.message || 'Unknown error';
         Toast.show({
           type: 'error',
           text1: 'Submit failed',
-          text2: resp.error.message || resp.error.data?.message || '',
+          text2: errName ? `${errName}: ${errMsg}` : errMsg,
           position: 'bottom',
         });
         return;

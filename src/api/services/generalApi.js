@@ -6214,26 +6214,35 @@ export const fetchSalesProfitOdoo = async ({ startDate = null, endDate = null } 
 
 // Submit a draft expense → bundles into an hr.expense.sheet via the standard
 // Odoo action. After this the expense moves to state='reported'.
-export const submitExpenseOdoo = async (expenseId) => {
+// Tries multiple model/method candidates because Odoo renamed these between
+// versions (17/18 → action_submit_expenses, 19 → action_submit, pre-18 sheet
+// flow); same pattern as approve/refuse below.
+export const submitExpenseOdoo = async (expenseId, sheetId = null) => {
   if (!expenseId) return { error: { message: 'expenseId is required' } };
-  const baseUrl = getOdooUrl();
-  try {
-    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'hr.expense',
-        method: 'action_submit_expenses',
-        args: [[expenseId]],
-        kwargs: {},
-      },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    if (resp.data && resp.data.error) return { error: resp.data.error };
-    return { result: resp.data.result };
-  } catch (e) {
-    console.error('submitExpenseOdoo error:', e?.message);
-    return { error: { message: e?.message || 'Submit failed' } };
+  console.log(`[EXPENSE:SUBMIT] start id=${expenseId} sheetId=${sheetId ?? 'null'}`);
+  const resp = await tryExpenseAction({
+    expenseId,
+    sheetId,
+    candidates: [
+      { model: 'hr.expense', method: 'action_submit_expenses' },
+      { model: 'hr.expense', method: 'action_submit' },
+      { model: 'hr.expense.sheet', method: 'action_submit_sheet' },
+    ],
+    fallbackState: 'reported',
+  });
+  if (resp?.error) {
+    console.error('[EXPENSE:SUBMIT] failed', {
+      message: resp.error.message,
+      name: resp.error.data?.name,
+      odooMessage: resp.error.data?.message,
+      debug: typeof resp.error.data?.debug === 'string'
+        ? resp.error.data.debug.slice(0, 500)
+        : undefined,
+    });
+  } else {
+    console.log('[EXPENSE:SUBMIT] success result=', resp?.result);
   }
+  return resp;
 };
 
 // Workflow-action dispatcher: tries each (model, method) candidate in
@@ -6254,7 +6263,11 @@ const tryExpenseAction = async ({ expenseId, sheetId, candidates, kwargs = {}, f
   let lastErr = null;
   for (const c of candidates) {
     const targetId = c.model === 'hr.expense.sheet' ? sheetId : expenseId;
-    if (!targetId) continue;
+    if (!targetId) {
+      console.warn(`[EXPENSE:ACTION] skip ${c.model}.${c.method} — no ${c.model === 'hr.expense.sheet' ? 'sheetId' : 'expenseId'}`);
+      continue;
+    }
+    console.log(`[EXPENSE:ACTION] trying ${c.model}.${c.method} id=${targetId}`);
     try {
       const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0',
@@ -6268,12 +6281,21 @@ const tryExpenseAction = async ({ expenseId, sheetId, candidates, kwargs = {}, f
       }, { headers: { 'Content-Type': 'application/json' } });
       if (resp.data && resp.data.error) {
         lastErr = resp.data.error;
+        console.warn(`[EXPENSE:ACTION] ${c.model}.${c.method} returned error`, {
+          name: resp.data.error.data?.name,
+          message: resp.data.error.data?.message || resp.data.error.message,
+        });
         // "Method does not exist" / "Invalid field" — try the next candidate.
         continue;
       }
+      console.log(`[EXPENSE:ACTION] ${c.model}.${c.method} ok`);
       return { result: resp.data.result };
     } catch (e) {
-      lastErr = { message: e?.message || `${c.method} failed` };
+      lastErr = { message: e?.message || `${c.method} failed`, status: e?.response?.status };
+      console.warn(`[EXPENSE:ACTION] ${c.model}.${c.method} threw`, {
+        message: e?.message,
+        status: e?.response?.status,
+      });
       continue;
     }
   }
