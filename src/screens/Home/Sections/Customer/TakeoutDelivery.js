@@ -5,7 +5,7 @@ import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import { COLORS } from '@constants/theme';
-import { fetchDiscountsOdoo, createPosOrderOdoo } from '@api/services/generalApi';
+import { fetchDiscountsOdoo, createPosOrderOdoo, cancelPosOrderOdoo } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,6 +25,18 @@ const TakeoutDelivery = ({ navigation, route }) => {
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [creatingOrder, setCreatingOrder] = useState(false);
+  // Persistent draft state lives in the product store so it survives
+  // screen unmounts (going back to MyOrders → coming back to this screen).
+  // The fingerprint is a hash of the cart contents — when the cart
+  // changes we treat it as a new sale and create a fresh draft.
+  const draftOrderId = useProductStore((s) => s.draftOrderId);
+  const draftCartFingerprint = useProductStore((s) => s.draftCartFingerprint);
+  const setDraftOrder = useProductStore((s) => s.setDraftOrder);
+  const clearDraftOrder = useProductStore((s) => s.clearDraftOrder);
+  // existingOrderId comes from MyOrders draft-resume — tap a draft row
+  // and it navigates here with this param. We treat it the same as a
+  // just-created draft.
+  const existingOrderId = route?.params?.existingOrderId || null;
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [customDiscountInput, setCustomDiscountInput] = useState('');
@@ -93,6 +105,31 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const total = useMemo(() => items.reduce((s, it) => s + (it.subtotal || (it.unit * it.qty)), 0), [items]);
   const discountApplied = Number(discountAmount) || 0;
   const finalTotal = Math.max(0, total - discountApplied);
+
+  // Fingerprint of the current cart — sorted by id then a tuple of
+  // (id, qty, price). Used to detect "same cart as the existing draft"
+  // so we can reuse the draft instead of creating duplicates.
+  const cartFingerprint = useMemo(() => {
+    const sig = (cart || [])
+      .map((c) => [String(c.remoteId || c.id), Number(c.quantity || c.qty || 0), Number(c.price || 0)])
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    return JSON.stringify(sig);
+  }, [cart]);
+
+  // Effective draft id for this screen instance — the route param wins
+  // (draft-resume from MyOrders), otherwise we read from the persistent
+  // store (set by a previous Save / Place Order with the same cart).
+  const activeDraftId = existingOrderId
+    || (draftCartFingerprint === cartFingerprint ? draftOrderId : null);
+
+  // Seed the store from existingOrderId on mount so subsequent Save /
+  // Confirm taps see it without needing route params.
+  useEffect(() => {
+    if (existingOrderId && draftOrderId !== existingOrderId) {
+      setDraftOrder(existingOrderId, cartFingerprint);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingOrderId]);
 
   // Persisted discount presets: load local first, fallback to Odoo fetch
   React.useEffect(() => {
@@ -223,19 +260,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
     navigation.navigate('POSProducts');
   };
 
-  const handlePlaceOrder = async () => {
-    if (!cart || cart.length === 0) {
-      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before placing order', position: 'bottom' });
-      return;
-    }
-
+  // Shared create logic — used by both Save and Place Order. Returns the
+  // new orderId on success, null on failure (after surfacing a toast).
+  const createDraft = async () => {
     const sessionId = route?.params?.sessionId;
     const posConfigId = route?.params?.registerId;
     const partnerId = customer?.id || customer?._id || null;
-
-    // Build line tuples for the draft. Use `remoteId || id` (raw Odoo
-    // product id) — POS submit ships product_id straight to Postgres which
-    // expects an INTEGER, so the prefixed cart key 'prod_<n>' would fail.
     const lines = cart.map((item) => ({
       product_id: item.remoteId || item.id,
       qty: item.quantity || item.qty || 1,
@@ -244,7 +274,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
       discount: Number(item.discount_percent || item.discount || 0),
       price_subtotal: typeof item.price_subtotal !== 'undefined' ? Number(item.price_subtotal) : undefined,
     }));
-
+    console.log('[PlaceOrder] payload partnerId=', partnerId,
+      'lines=', lines.length, 'amount_total=', finalTotal,
+      'discount=', discountApplied);
     setCreatingOrder(true);
     try {
       const resp = await createPosOrderOdoo({
@@ -255,6 +287,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
         discount: discountApplied,
         amount_total: finalTotal,
       });
+      console.log('[PlaceOrder] createPosOrderOdoo response:', JSON.stringify(resp));
       if (resp?.error) {
         Toast.show({
           type: 'error',
@@ -262,25 +295,113 @@ const TakeoutDelivery = ({ navigation, route }) => {
           text2: resp.error.message || JSON.stringify(resp.error) || 'Failed to create draft',
           position: 'bottom',
         });
-        return;
+        return null;
       }
       const orderId = resp?.result;
       if (!orderId) {
         Toast.show({ type: 'error', text1: 'Order Error', text2: 'No order ID returned', position: 'bottom' });
+        return null;
+      }
+      // Remember it in the store so navigation away + back doesn't
+      // re-create. Keyed by the cart fingerprint at create time.
+      setDraftOrder(orderId, cartFingerprint);
+      return orderId;
+    } catch (e) {
+      console.error('[PlaceOrder] threw:', e?.message || e);
+      Toast.show({ type: 'error', text1: 'Order Error', text2: e?.message || 'Failed to create draft', position: 'bottom' });
+      return null;
+    } finally {
+      setCreatingOrder(false);
+    }
+  };
+
+  const handlePlaceOrder = async () => {
+    console.log('[PlaceOrder] handlePlaceOrder fired, cart=', cart?.length || 0,
+      'sessionId=', route?.params?.sessionId, 'posConfigId=', route?.params?.registerId,
+      'activeDraftId=', activeDraftId);
+    if (!cart || cart.length === 0) {
+      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before placing order', position: 'bottom' });
+      return;
+    }
+
+    const sessionId = route?.params?.sessionId;
+    const posConfigId = route?.params?.registerId;
+
+    // Already saved this exact cart? Reuse the draft. No new orderId.
+    let orderId = activeDraftId;
+    if (!orderId) {
+      orderId = await createDraft();
+      if (!orderId) return;
+      Toast.show({ type: 'success', text1: 'Draft saved', text2: `Order #${orderId}`, position: 'bottom' });
+    }
+    navigation.navigate('POSPayment', {
+      orderId,
+      sessionId,
+      registerId: posConfigId,
+      totalAmount: finalTotal,
+      products: cart,
+      discountAmount: discountApplied,
+      customer,
+    });
+  };
+
+  // Save = create draft and STAY on screen. Action bar then shows
+  // Confirm Order + Cancel Order in place of Place Order.
+  const handleSaveDraft = async () => {
+    if (!cart || cart.length === 0) {
+      Toast.show({ type: 'error', text1: 'Cart Empty', text2: 'Add products before saving', position: 'bottom' });
+      return;
+    }
+    if (activeDraftId) {
+      Toast.show({ type: 'info', text1: 'Already saved', text2: `Draft #${activeDraftId}`, position: 'bottom' });
+      return;
+    }
+    const orderId = await createDraft();
+    if (!orderId) return;
+    Toast.show({ type: 'success', text1: 'Saved as draft', text2: `Order #${orderId}`, position: 'bottom' });
+  };
+
+  // Confirm Order = order is already in Odoo as a draft → navigate to
+  // POSPayment with the existing id; finalize happens there.
+  const handleConfirmOrder = () => {
+    if (!activeDraftId) {
+      Toast.show({ type: 'error', text1: 'Save the order first', position: 'bottom' });
+      return;
+    }
+    navigation.navigate('POSPayment', {
+      orderId: activeDraftId,
+      sessionId: route?.params?.sessionId,
+      registerId: route?.params?.registerId,
+      totalAmount: finalTotal,
+      products: cart,
+      discountAmount: discountApplied,
+      customer,
+    });
+  };
+
+  // Cancel Order = write state='cancel' to the draft, clear it from the
+  // store, pop back to MyOrders.
+  const handleCancelOrder = async () => {
+    if (!activeDraftId) {
+      navigation.goBack();
+      return;
+    }
+    setCreatingOrder(true);
+    try {
+      const resp = await cancelPosOrderOdoo(activeDraftId);
+      if (resp?.error) {
+        Toast.show({
+          type: 'error',
+          text1: 'Cancel failed',
+          text2: resp.error.message || JSON.stringify(resp.error) || '',
+          position: 'bottom',
+        });
         return;
       }
-      Toast.show({ type: 'success', text1: 'Draft saved', text2: `Order #${orderId}`, position: 'bottom' });
-      navigation.navigate('POSPayment', {
-        orderId,
-        sessionId,
-        registerId: posConfigId,
-        totalAmount: finalTotal,
-        products: cart,
-        discountAmount: discountApplied,
-        customer,
-      });
-    } catch (e) {
-      Toast.show({ type: 'error', text1: 'Order Error', text2: e?.message || 'Failed to create draft', position: 'bottom' });
+      Toast.show({ type: 'success', text1: 'Order cancelled', text2: `#${activeDraftId}`, position: 'bottom' });
+      clearDraftOrder();
+      try { clearProducts(); } catch (_) {}
+      navigation.goBack();
     } finally {
       setCreatingOrder(false);
     }
@@ -685,35 +806,113 @@ const TakeoutDelivery = ({ navigation, route }) => {
             <Text style={{ fontWeight: '900', color: '#fff', fontSize: 15, letterSpacing: 0.4 }}>Add Products</Text>
           </TouchableOpacity>
 
-          {/* Place Order — full width below Add Products */}
-          <TouchableOpacity
-            onPress={handlePlaceOrder}
-            disabled={creatingOrder}
-            activeOpacity={0.85}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: '#10b981',
-              paddingVertical: 14,
-              borderRadius: 14,
-              opacity: creatingOrder ? 0.6 : 1,
-              shadowColor: '#10b981',
-              shadowOffset: { width: 0, height: 5 },
-              shadowOpacity: 0.32,
-              shadowRadius: 10,
-              elevation: 7,
-            }}
-          >
-            {creatingOrder ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
-                <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          {/* Action bar — three modes:
+              (a) No draft yet: Save (blue) + Place Order (green, primary)
+              (b) Draft saved on this screen, or opened from MyOrders:
+                  Confirm Order (green) + Cancel Order (red)
+              The "Save" button stays visible in mode (b) but greyed out
+              so the user knows they can't save again. */}
+          {activeDraftId ? (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                onPress={handleCancelOrder}
+                disabled={creatingOrder}
+                activeOpacity={0.85}
+                style={{
+                  flex: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#ef4444',
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  opacity: creatingOrder ? 0.6 : 1,
+                }}
+              >
+                <MaterialIcons name="cancel" size={20} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={{ fontWeight: '900', fontSize: 15, color: '#fff', letterSpacing: 0.3 }}>Cancel Order</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleConfirmOrder}
+                disabled={creatingOrder}
+                activeOpacity={0.85}
+                style={{
+                  flex: 1.2,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#10b981',
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  opacity: creatingOrder ? 0.6 : 1,
+                  shadowColor: '#10b981',
+                  shadowOffset: { width: 0, height: 5 },
+                  shadowOpacity: 0.32,
+                  shadowRadius: 10,
+                  elevation: 7,
+                }}
+              >
+                {creatingOrder ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={{ fontWeight: '900', fontSize: 15, color: '#fff', letterSpacing: 0.3 }}>Confirm Order</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                onPress={handleSaveDraft}
+                disabled={creatingOrder}
+                activeOpacity={0.85}
+                style={{
+                  flex: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#3b82f6',
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  opacity: creatingOrder ? 0.6 : 1,
+                }}
+              >
+                <MaterialIcons name="save" size={20} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={{ fontWeight: '900', fontSize: 15, color: '#fff', letterSpacing: 0.3 }}>Save</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handlePlaceOrder}
+                disabled={creatingOrder}
+                activeOpacity={0.85}
+                style={{
+                  flex: 1.2,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#10b981',
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  opacity: creatingOrder ? 0.6 : 1,
+                  shadowColor: '#10b981',
+                  shadowOffset: { width: 0, height: 5 },
+                  shadowOpacity: 0.32,
+                  shadowRadius: 10,
+                  elevation: 7,
+                }}
+              >
+                {creatingOrder ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={{ fontWeight: '900', fontSize: 15, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </View>
 

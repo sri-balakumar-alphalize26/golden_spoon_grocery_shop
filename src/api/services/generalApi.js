@@ -189,6 +189,7 @@ export const getLocationPromise = (orderId) => {
 // By the time we re-check, the failed position attempt has refreshed the
 // services-enabled cache, so we get the real value.
 export const getCurrentDeviceLocation = async () => {
+  console.log('[POSLocation] gate start');
   let Location;
   try { Location = require('expo-location'); }
   catch (e) {
@@ -196,29 +197,118 @@ export const getCurrentDeviceLocation = async () => {
     return { error: 'expo_missing' };
   }
   try {
-    // 1. Permission — also nudges the OS to enable services on some Androids.
     const perm = await Location.requestForegroundPermissionsAsync();
-    if (perm?.status !== 'granted') return { error: 'permission_denied' };
+    console.log('[POSLocation] perm status =', perm?.status, 'canAskAgain=', perm?.canAskAgain);
+    if (perm?.status !== 'granted') {
+      console.log('[POSLocation] → permission_denied');
+      return { error: 'permission_denied' };
+    }
 
-    // 2. Try to get a position. Don't gate on services first — that check
-    //    lies on a cold cache.
+    // 2a. Last-known: drop strict requiredAccuracy and broaden maxAge to
+    //     5 minutes — any cached fix is better than nothing as a starting
+    //     point, and waiting for sub-200m accuracy was rejecting the cache
+    //     on most devices.
     let pos = null;
     try {
-      pos = await Location.getLastKnownPositionAsync({ maxAge: 60_000, requiredAccuracy: 200 });
-    } catch (_) { /* fall through */ }
+      pos = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60_000 });
+      console.log('[POSLocation] lastKnown =', pos ? `${pos.coords?.latitude},${pos.coords?.longitude}` : 'null');
+    } catch (e) {
+      console.warn('[POSLocation] lastKnown threw:', e?.message || e);
+    }
+
+    // 2b. Active fetch with Low accuracy + generous 15s timeout. Indoor
+    //     cold-start GPS commonly needs 10-20s for first fix; the previous
+    //     5s timeout was tripping on real GPS-on devices.
     if (!pos) {
+      console.log('[POSLocation] active fetch start (Low, timeout 15s)');
       pos = await Promise.race([
         Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy?.Low ?? 1,
-          timeout: 5000,
-        }).catch(() => null),
-        new Promise((r) => setTimeout(() => r(null), 5500)),
+          accuracy: Location.Accuracy?.Low ?? 2,
+          timeout: 15_000,
+        }).catch((e) => {
+          console.warn('[POSLocation] getCurrentPositionAsync(Low) rejected:', e?.message || e);
+          return null;
+        }),
+        new Promise((r) => setTimeout(() => {
+          console.warn('[POSLocation] hard timeout @16s (Low)');
+          r(null);
+        }, 16_000)),
       ]);
+      console.log('[POSLocation] Low result =', pos ? `${pos.coords?.latitude},${pos.coords?.longitude}` : 'null');
+    }
+
+    // 2c. Lowest accuracy fallback — passive/network positioning
+    //     (WiFi/cell). Bumped to 20s; on devices without WiFi positioning
+    //     hardware the network-based fallback also takes time to query.
+    if (!pos) {
+      console.log('[POSLocation] retry at Lowest accuracy (timeout 20s)');
+      pos = await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy?.Lowest ?? 1,
+          timeout: 20_000,
+        }).catch((e) => {
+          console.warn('[POSLocation] getCurrentPositionAsync(Lowest) rejected:', e?.message || e);
+          return null;
+        }),
+        new Promise((r) => setTimeout(() => {
+          console.warn('[POSLocation] hard timeout @21s (Lowest)');
+          r(null);
+        }, 21_000)),
+      ]);
+      console.log('[POSLocation] Lowest result =', pos ? `${pos.coords?.latitude},${pos.coords?.longitude}` : 'null');
+    }
+
+    // 2d. watchPositionAsync race — sometimes the one-shot getCurrentPositionAsync
+    //     hangs while a position-watcher fires within seconds. Open a watcher,
+    //     take the FIRST callback, then immediately stop watching. 10s race.
+    if (!pos) {
+      console.log('[POSLocation] watcher race start (10s)');
+      pos = await new Promise((resolve) => {
+        let resolved = false;
+        let sub = null;
+        const timer = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            if (sub) try { sub.remove(); } catch (_) {}
+            console.warn('[POSLocation] watcher hard timeout @10s');
+            resolve(null);
+          }
+        }, 10_000);
+        Location.watchPositionAsync(
+          { accuracy: Location.Accuracy?.Lowest ?? 1, timeInterval: 1000, distanceInterval: 0 },
+          (loc) => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            if (sub) try { sub.remove(); } catch (_) {}
+            console.log('[POSLocation] watcher first fix =',
+              loc?.coords?.latitude, loc?.coords?.longitude);
+            resolve(loc);
+          },
+        ).then((s) => {
+          sub = s;
+          if (resolved && sub) { try { sub.remove(); } catch (_) {} }
+        }).catch((e) => {
+          console.warn('[POSLocation] watcher start threw:', e?.message || e);
+          if (!resolved) { resolved = true; clearTimeout(timer); resolve(null); }
+        });
+      });
+    }
+
+    // 2e. Last-resort diagnostic — log what providers the device claims to
+    //     have. If both gps + network providers are reported `false`, the
+    //     device genuinely has no location capability and the popup is the
+    //     only path forward.
+    if (!pos) {
+      try {
+        const ps = await Location.getProviderStatusAsync();
+        console.log('[POSLocation] providers:', JSON.stringify(ps));
+      } catch (e) {
+        console.warn('[POSLocation] getProviderStatusAsync threw:', e?.message || e);
+      }
     }
 
     if (pos?.coords?.latitude != null) {
-      // We have a real fix → services are obviously on. Reverse-geocode
-      // and return success.
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
       let locationName = '';
@@ -230,20 +320,25 @@ export const getCurrentDeviceLocation = async () => {
                           p.district, p.city || p.subregion, p.region, p.country]
             .filter(Boolean).join(', ');
         }
-      } catch (_) {}
+      } catch (e) {
+        console.warn('[POSLocation] reverse geocode failed:', e?.message || e);
+      }
+      console.log('[POSLocation] → success', { lat, lon, locationName });
       return { latitude: lat, longitude: lon, locationName };
     }
 
-    // 3. No position. NOW check services — its cache is fresh after the
-    //    failed fetch attempt. Only classify as services_off when this
-    //    explicit check confirms it; otherwise it's a no-fix (indoors etc).
     let servicesOn = true;
     try { servicesOn = await Location.hasServicesEnabledAsync(); }
-    catch (_) { servicesOn = true; }
-    if (!servicesOn) return { error: 'services_off' };
+    catch (e) { console.warn('[POSLocation] hasServicesEnabledAsync threw:', e?.message || e); servicesOn = true; }
+    console.log('[POSLocation] post-fetch hasServicesEnabledAsync =', servicesOn);
+    if (!servicesOn) {
+      console.log('[POSLocation] → services_off');
+      return { error: 'services_off' };
+    }
+    console.log('[POSLocation] → no_fix');
     return { error: 'no_fix' };
   } catch (err) {
-    console.warn('[POSLocation] getCurrentDeviceLocation failed:', err?.message || err);
+    console.warn('[POSLocation] gate threw:', err?.message || err);
     return { error: 'no_fix' };
   }
 };
@@ -273,6 +368,29 @@ export const writeOrderLocationOdoo = async (orderId, fix) => {
   } catch (e) {
     console.warn('[POSLocation] write threw:', e?.message || e);
     return false;
+  }
+};
+
+// Cancel a draft pos.order. Just flips state to 'cancel'; no picking is
+// created. Used by the Cancel Order button on the draft-resume screen.
+export const cancelPosOrderOdoo = async (orderId) => {
+  if (!orderId) return { error: { message: 'orderId is required' } };
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'write',
+        args: [[Number(orderId)], { state: 'cancel' }],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return { error: resp.data.error };
+    return { result: true };
+  } catch (e) {
+    console.warn('cancelPosOrderOdoo error:', e?.message || e);
+    return { error: { message: e?.message || 'Cancel failed' } };
   }
 };
 
@@ -3884,12 +4002,12 @@ export const createPosOrderOdoo = async ({ partnerId = null, lines = [], session
     }, { headers: { 'Content-Type': 'application/json' } });
 
     if (response.data && response.data.error) {
-      console.error('Odoo create pos.order error:', response.data.error);
+      console.error('[PlaceOrder] Odoo create.pos.order error:', JSON.stringify(response.data.error, null, 2));
       return { error: response.data.error };
     }
 
     const createdId = response.data.result;
-    console.log('✅ POS Order created successfully with ID:', createdId);
+    console.log('[PlaceOrder] ✅ pos.order created id=', createdId, 'company_id=', vals.company_id);
     // Don't validate immediately - order will be validated after payment
     return { result: createdId };
   } catch (error) {

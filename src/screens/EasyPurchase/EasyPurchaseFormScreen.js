@@ -374,35 +374,59 @@ const EasyPurchaseFormScreen = ({ navigation }) => {
   const onRemoveLine = (id) =>
     setLines((cur) => cur.filter((l) => l.id !== id));
 
-  const submit = async () => {
-    if (!vendor) return showToastMessage('Select a vendor');
-    if (!paymentMethod) return showToastMessage('Select a payment method');
-    if (!warehouse) return showToastMessage('Select a warehouse');
-    if (!lines.length) return showToastMessage('Add at least one product line');
+  // Build the create payload from current form state.
+  const buildPayload = () => ({
+    date,
+    partner_id: vendor.id,
+    payment_method_id: paymentMethod.id,
+    warehouse_id: warehouse.id,
+    discount_type: discountType,
+    reference: reference || false,
+    notes: notes || false,
+    auto_validate_bill: !!autoValidateBill,
+    auto_register_payment: !!autoRegisterPayment,
+    ...(isCredit && paymentTerm ? { payment_term_id: paymentTerm.id } : {}),
+    lines: lines.map((l) => ({
+      product_id: l.product_id,
+      description: l.description || l.product_name,
+      quantity: num(l.quantity),
+      price_unit: num(l.price_unit),
+      discount: num(l.discount),
+      tax_ids: l.tax_ids || [],
+    })),
+  });
 
+  const validateForm = () => {
+    if (!vendor) { showToastMessage('Select a vendor'); return false; }
+    if (!paymentMethod) { showToastMessage('Select a payment method'); return false; }
+    if (!warehouse) { showToastMessage('Select a warehouse'); return false; }
+    if (!lines.length) { showToastMessage('Add at least one product line'); return false; }
+    return true;
+  };
+
+  // Save = create as draft, leave it unconfirmed. The user can come back
+  // later via EasyPurchase list and confirm/edit.
+  const saveAsDraft = async () => {
+    if (!validateForm()) return;
     setSubmitting(true);
     try {
-      const payload = {
-        date,
-        partner_id: vendor.id,
-        payment_method_id: paymentMethod.id,
-        warehouse_id: warehouse.id,
-        discount_type: discountType,
-        reference: reference || false,
-        notes: notes || false,
-        auto_validate_bill: !!autoValidateBill,
-        auto_register_payment: !!autoRegisterPayment,
-        ...(isCredit && paymentTerm ? { payment_term_id: paymentTerm.id } : {}),
-        lines: lines.map((l) => ({
-          product_id: l.product_id,
-          description: l.description || l.product_name,
-          quantity: num(l.quantity),
-          price_unit: num(l.price_unit),
-          discount: num(l.discount),
-          tax_ids: l.tax_ids || [],
-        })),
-      };
-      const id = await createEasyPurchase(payload);
+      const id = await createEasyPurchase(buildPayload());
+      showToastMessage('Saved as draft');
+      navigation.replace('EasyPurchaseDetail', { id });
+    } catch (e) {
+      console.error('[EasyPurchaseForm] saveAsDraft', e);
+      showToastMessage(e?.message || 'Failed to save draft');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Submit = create AND confirm in one shot (existing behaviour).
+  const submit = async () => {
+    if (!validateForm()) return;
+    setSubmitting(true);
+    try {
+      const id = await createEasyPurchase(buildPayload());
       await confirmEasyPurchase(id);
       showToastMessage('Purchase confirmed');
       navigation.replace('EasyPurchaseDetail', { id });
@@ -660,11 +684,26 @@ const EasyPurchaseFormScreen = ({ navigation }) => {
         </View>
       </ScrollView>
 
-      {/* Confirm CTA */}
-      <View style={styles.bottomBar}>
+      {/* Action bar — Save (creates as draft, no confirm) + Confirm Purchase
+          (existing behaviour: create + confirm in one go). */}
+      <View style={[styles.bottomBar, { flexDirection: 'row', gap: 8 }]}>
         <FeatureGate featureKey="easy_purchase.save">
           <TouchableOpacity
-            style={[styles.btn, styles.btnConfirm, submitting && { opacity: 0.6 }]}
+            style={[
+              styles.btn,
+              { flex: 1, backgroundColor: '#3b82f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+              submitting && { opacity: 0.6 },
+            ]}
+            disabled={submitting}
+            onPress={saveAsDraft}
+          >
+            <MaterialIcons name="save" size={20} color="#fff" />
+            <Text style={styles.btnConfirmText}>Save</Text>
+          </TouchableOpacity>
+        </FeatureGate>
+        <FeatureGate featureKey="easy_purchase.save">
+          <TouchableOpacity
+            style={[styles.btn, styles.btnConfirm, { flex: 1.2 }, submitting && { opacity: 0.6 }]}
             disabled={submitting}
             onPress={submit}
           >

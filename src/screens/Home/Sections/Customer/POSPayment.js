@@ -382,9 +382,30 @@ const POSPayment = ({ navigation, route }) => {
       // captured at the moment of payment — no "Location unavailable —
       // tap to retry" placeholder. If services are off or permission is
       // denied, popup with an Open Settings button (Google-Maps style)
-      // and BLOCK the payment.
-      const fix = await getCurrentDeviceLocation();
-      if (fix?.error) {
+      // and BLOCK the payment. If the device truly can't get a fix
+      // (no_fix), give the cashier a one-tap "Save without location"
+      // option so we never trap them.
+      let fix = await getCurrentDeviceLocation();
+      console.log('[POSLocation] gate result in handlePay:', JSON.stringify(fix));
+      if (fix?.error === 'no_fix') {
+        const proceedWithoutLocation = await new Promise((resolve) => {
+          Alert.alert(
+            'Location not ready',
+            "Couldn't get device location after several attempts. Save the order without location?",
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Save without location', onPress: () => resolve(true) },
+            ],
+            { cancelable: false },
+          );
+        });
+        if (!proceedWithoutLocation) { setPaying(false); return; }
+        // Mark fix so downstream knows to skip the writeOrderLocationOdoo call.
+        fix = { error: 'no_fix', skipped: true };
+      } else if (fix?.error) {
+        // services_off / permission_denied / expo_missing — block with an
+        // Alert that points to the OS settings the user can fix. (no_fix
+        // was already handled above with the opt-in flow.)
         if (fix.error === 'services_off' || fix.error === 'permission_denied') {
           const isOff = fix.error === 'services_off';
           Alert.alert(
@@ -401,9 +422,7 @@ const POSPayment = ({ navigation, route }) => {
           Toast.show({
             type: 'error',
             text1: 'Location unavailable',
-            text2: fix.error === 'no_fix'
-              ? 'Could not get a GPS fix. Move to a window or open sky and try again.'
-              : 'Location service error. Try again.',
+            text2: 'Location service error. Try again.',
           });
         }
         setPaying(false);
@@ -622,6 +641,8 @@ const POSPayment = ({ navigation, route }) => {
             // stock. Letting action_pos_order_paid do the draft→paid
             // transition itself guarantees the picking gets created.
 
+            console.log('[POSFinalize] finalize start, orderId=', createdOrderId,
+              'total=', total, 'payments=', payments.length);
             const paymentResp = await createPosPaymentOdoo({
               orderId: createdOrderId,
               payments,
@@ -629,6 +650,7 @@ const POSPayment = ({ navigation, route }) => {
               sessionId,
               companyId,
             });
+            console.log('[POSFinalize] payment response:', JSON.stringify(paymentResp));
             if (paymentResp?.error) {
               Toast.show({
                 type: 'error',
@@ -645,12 +667,14 @@ const POSPayment = ({ navigation, route }) => {
               amount_paid: total,
               partner_id: partnerId || false,
             });
+            console.log('[POSFinalize] update response:', JSON.stringify(updateResp));
             if (updateResp?.error) {
               Toast.show({ type: 'error', text1: 'Update Error', text2: 'Failed to update draft', position: 'bottom' });
               return;
             }
 
             const validateResp = await validatePosOrderOdoo(createdOrderId);
+            console.log('[POSFinalize] validate response:', JSON.stringify(validateResp));
             if (validateResp?.error) {
               Toast.show({
                 type: 'error',
@@ -660,19 +684,25 @@ const POSPayment = ({ navigation, route }) => {
               });
               return;
             }
-            console.log('✅ Draft order finalized, id:', createdOrderId);
+            console.log('[POSFinalize] ✅ done, id=', createdOrderId);
           }
 
           {
             // We already have the GPS fix (Strict location gate, top of
             // handlePay) — just persist it on the new pos.order. No
             // background promise, no race, no auto-update on the receipt.
-            await writeOrderLocationOdoo(createdOrderId, fix);
-            capturedLocation = {
-              latitude: fix.latitude,
-              longitude: fix.longitude,
-              locationName: fix.locationName,
-            };
+            // Skip the write if the cashier opted to "Save without
+            // location" — the order legitimately has no fix to record.
+            if (!fix?.skipped && !fix?.error) {
+              await writeOrderLocationOdoo(createdOrderId, fix);
+              capturedLocation = {
+                latitude: fix.latitude,
+                longitude: fix.longitude,
+                locationName: fix.locationName,
+              };
+            } else {
+              capturedLocation = null;
+            }
 
             // Read Odoo's freshly-allocated POS reference so the receipt
             // shows the real ref (e.g. "Shop/0001") instead of the "/"
@@ -768,8 +798,11 @@ const POSPayment = ({ navigation, route }) => {
       }
 
       // Clear the cart now that the order is paid + validated, so the
-      // register screen is empty next time the user navigates back.
+      // register screen is empty next time the user navigates back. Also
+      // clear the persistent draft id from the store — this sale is done,
+      // a fresh cart should produce a fresh draft.
       try { clearProducts(); } catch (_) {}
+      try { useProductStore.getState().clearDraftOrder(); } catch (_) {}
 
       // Tax is computed server-side by Odoo (account.move.line auto-fills
       // tax_ids from product.taxes_id). The receipt no longer renders a Tax

@@ -3,7 +3,18 @@ import { create } from 'zustand';
 const useProductStore = create((set, get) => ({
   currentCustomerId: null,
   cartItems: {}, // Object: {customerId: [...items]}
-  
+
+  // Persistent draft-order tracking for the POS Place Order flow. When the
+  // cashier taps Place Order or Save, we stash the resulting Odoo orderId
+  // here keyed by a fingerprint of the cart contents. Going back to the
+  // TakeoutDelivery screen with the same cart and tapping Place Order
+  // again finds the existing draft and reuses it instead of creating a
+  // new one (which is what produced the 63, 64, 65… duplicate problem).
+  draftOrderId: null,
+  draftCartFingerprint: null,
+  setDraftOrder: (id, fingerprint) => set({ draftOrderId: id, draftCartFingerprint: fingerprint }),
+  clearDraftOrder: () => set({ draftOrderId: null, draftCartFingerprint: null }),
+
   // Set current customer
   setCurrentCustomer: (customerId) => set({ currentCustomerId: customerId }),
   
