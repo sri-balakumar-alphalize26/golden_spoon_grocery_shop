@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, Modal, TextInput, Pressable } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
@@ -10,6 +10,7 @@ import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '@components/containers';
 import { formatCurrency } from '@utils/currency';
+import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
 
 // Render a money value with the Odoo-configured company currency.
 const displayNum = (n) => formatCurrency(n);
@@ -51,6 +52,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [createdOrderId, setCreatedOrderId] = useState(route?.params?.existingOrderId || null);
   const [submittedFingerprint, setSubmittedFingerprint] = useState(null);
   const [existingOrderRef, setExistingOrderRef] = useState(route?.params?.existingOrderRef || '');
+  const [qtyEditFor, setQtyEditFor] = useState(null);
+  const [qtyDraft, setQtyDraft] = useState('');
+  const qtyInputRef = useRef(null);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
 
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
@@ -195,6 +202,52 @@ const TakeoutDelivery = ({ navigation, route }) => {
       const newQty = item.qty - 1;
       addProduct({ ...item.rawItem, quantity: newQty, qty: newQty });
     }
+  };
+
+  const openQtyEditor = (item) => {
+    setQtyEditFor(item);
+    setQtyDraft(String(item.qty));
+  };
+
+  const closeQtyEditor = () => {
+    setQtyEditFor(null);
+    setQtyDraft('');
+  };
+
+  const confirmQtyEdit = () => {
+    if (!qtyEditFor) return;
+    const parsed = parseInt(qtyDraft, 10);
+    const n = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    if (n === 0) {
+      removeProduct(qtyEditFor.id);
+    } else {
+      addProduct({ ...qtyEditFor.rawItem, quantity: n, qty: n });
+    }
+    closeQtyEditor();
+  };
+
+  const enterMultiSelectWith = (item) => {
+    setMultiSelectMode(true);
+    setSelectedIds(new Set([item.id]));
+  };
+
+  const toggleSelected = (item) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+      return next;
+    });
+  };
+
+  const exitMultiSelect = () => {
+    setMultiSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const performBulkDelete = () => {
+    selectedIds.forEach(id => removeProduct(id));
+    exitMultiSelect();
+    setBulkConfirmOpen(false);
   };
 
   const handleNewOrder = () => {
@@ -379,6 +432,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
 
   const renderLine = ({ item }) => {
     const isSelected = selectedLine && String(selectedLine.id) === String(item.id);
+    const isChecked = selectedIds.has(item.id);
     // Accept either a fully-formed image url (data:/http) from the
     // template-based fetch, or a raw base64 `image_128` string from legacy
     // callers. RN's Image can't load Odoo's `/web/image?…` directly because
@@ -392,7 +446,14 @@ const TakeoutDelivery = ({ navigation, route }) => {
     return (
       <TouchableOpacity
         activeOpacity={0.85}
-        onPress={() => { setSelectedLine(prev => (prev && String(prev.id) === String(item.id) ? null : item)); }}
+        onLongPress={() => { if (!multiSelectMode) enterMultiSelectWith(item); }}
+        onPress={() => {
+          if (multiSelectMode) {
+            toggleSelected(item);
+          } else {
+            setSelectedLine(prev => (prev && String(prev.id) === String(item.id) ? null : item));
+          }
+        }}
         style={{
           flexDirection: 'row',
           alignItems: 'center',
@@ -402,7 +463,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
           borderRadius: 14,
           padding: 10,
           borderWidth: 1,
-          borderColor: isSelected ? '#2E294E' : '#eef0f5',
+          borderColor: multiSelectMode
+            ? (isChecked ? '#2E294E' : '#eef0f5')
+            : (isSelected ? '#2E294E' : '#eef0f5'),
           shadowColor: '#1a1a2e',
           shadowOpacity: 0.05,
           shadowRadius: 6,
@@ -410,6 +473,18 @@ const TakeoutDelivery = ({ navigation, route }) => {
           elevation: 2,
         }}
       >
+        {multiSelectMode && (
+          <View style={{
+            width: 22, height: 22, borderRadius: 11,
+            borderWidth: 2,
+            borderColor: isChecked ? '#2E294E' : '#c5c9d4',
+            backgroundColor: isChecked ? '#2E294E' : 'transparent',
+            alignItems: 'center', justifyContent: 'center',
+            marginRight: 10,
+          }}>
+            {isChecked && <MaterialCommunityIcons name="check" size={14} color="#fff" />}
+          </View>
+        )}
         {/* Thumbnail (image or letter) */}
         <View style={{
           width: 52, height: 52, borderRadius: 12,
@@ -453,27 +528,45 @@ const TakeoutDelivery = ({ navigation, route }) => {
           ) : null}
         </View>
 
-        {/* Qty stepper */}
-        <View style={{
-          flexDirection: 'row', alignItems: 'center',
-          backgroundColor: '#f6f7fb', borderRadius: 999,
-          marginRight: 10, paddingHorizontal: 2,
-        }}>
-          <TouchableOpacity onPress={() => handleDecrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: '#2E294E' }}>−</Text>
-          </TouchableOpacity>
-          <Text style={{ minWidth: 24, textAlign: 'center', fontWeight: '800', color: '#1a1a2e', fontSize: 13 }}>
-            {item.qty}
-          </Text>
-          <TouchableOpacity onPress={() => handleIncrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E294E' }}>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Qty stepper (hidden in multi-select) */}
+        {!multiSelectMode && (
+          <View style={{
+            flexDirection: 'row', alignItems: 'center',
+            backgroundColor: '#f6f7fb', borderRadius: 999,
+            marginRight: 10, paddingHorizontal: 2,
+          }}>
+            <TouchableOpacity onPress={() => handleDecrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#2E294E' }}>−</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => openQtyEditor(item)}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            >
+              <Text style={{ minWidth: 28, textAlign: 'center', fontWeight: '800', color: '#1a1a2e', fontSize: 13, paddingHorizontal: 4 }}>
+                {item.qty}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleIncrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E294E' }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Subtotal */}
         <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
           {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
         </Text>
+
+        {/* Per-row delete (hidden in multi-select) */}
+        {!multiSelectMode && (
+          <TouchableOpacity
+            onPress={() => removeProduct(item.id)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={{ marginLeft: 8, padding: 4 }}
+          >
+            <MaterialCommunityIcons name="trash-can-outline" size={20} color="#b91c1c" />
+          </TouchableOpacity>
+        )}
       </TouchableOpacity>
     );
   };
@@ -482,6 +575,33 @@ const TakeoutDelivery = ({ navigation, route }) => {
     <SafeAreaView backgroundColor={'#f6f7fb'}>
       <NavigationHeader title="Register" onBackPress={() => navigation.goBack()} />
       <View style={{ flex: 1, backgroundColor: '#f6f7fb' }}>
+        {multiSelectMode && (
+          <View style={{
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+            backgroundColor: '#fff',
+            borderBottomWidth: 1,
+            borderColor: '#eef0f5',
+          }}>
+            <TouchableOpacity onPress={exitMultiSelect}>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#2E294E' }}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={{ fontSize: 14, fontWeight: '800', color: '#1a1a2e' }}>
+              {selectedIds.size} selected
+            </Text>
+            <TouchableOpacity
+              disabled={selectedIds.size === 0}
+              onPress={() => setBulkConfirmOpen(true)}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '800', color: selectedIds.size === 0 ? '#fca5a5' : '#b91c1c' }}>
+                Delete
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <FlatList
           data={items}
           keyExtractor={i => i.id}
@@ -1117,6 +1237,94 @@ const TakeoutDelivery = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Quantity editor */}
+      <Modal
+        visible={!!qtyEditFor}
+        transparent
+        animationType="fade"
+        onRequestClose={closeQtyEditor}
+        onShow={() => {
+          qtyInputRef.current?.focus();
+          setTimeout(() => {
+            const end = qtyDraft.length;
+            qtyInputRef.current?.setNativeProps({ selection: { start: 0, end } });
+          }, 50);
+        }}
+      >
+        <Pressable
+          onPress={closeQtyEditor}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: '100%',
+              backgroundColor: '#fff',
+              borderRadius: 10,
+              borderColor: '#2E294E',
+              borderWidth: 2,
+              paddingVertical: 22,
+              paddingHorizontal: 16,
+              alignItems: 'center',
+            }}
+          >
+            <Text style={{ fontSize: 17, fontWeight: '800', color: '#2E294E', marginBottom: 8, textAlign: 'center' }}>
+              Set Quantity
+            </Text>
+            {qtyEditFor ? (
+              <Text style={{ fontSize: 13, color: '#8896ab', marginBottom: 12, textAlign: 'center' }} numberOfLines={1}>
+                {qtyEditFor.name}
+              </Text>
+            ) : null}
+            <TextInput
+              ref={qtyInputRef}
+              value={qtyDraft}
+              onChangeText={(t) => setQtyDraft(t.replace(/[^0-9]/g, ''))}
+              keyboardType="number-pad"
+              returnKeyType="done"
+              onSubmitEditing={confirmQtyEdit}
+              style={{
+                alignSelf: 'stretch',
+                borderWidth: 1,
+                borderColor: '#d0ceea',
+                borderRadius: 10,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                fontSize: 18,
+                fontWeight: '800',
+                color: '#1a1a2e',
+                textAlign: 'center',
+                marginBottom: 14,
+              }}
+            />
+            <View style={{ flexDirection: 'row', alignSelf: 'stretch' }}>
+              <TouchableOpacity
+                onPress={closeQtyEditor}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#f3f4f6', alignItems: 'center', marginRight: 5 }}
+              >
+                <Text style={{ color: '#6b7280', fontWeight: '800', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmQtyEdit}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#2E294E', alignItems: 'center', marginLeft: 5 }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Set</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <StyledConfirmModal
+        isVisible={bulkConfirmOpen}
+        title={`Delete ${selectedIds.size} ${selectedIds.size === 1 ? 'item' : 'items'}?`}
+        message="This will remove the selected lines from the cart."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={performBulkDelete}
+        onCancel={() => setBulkConfirmOpen(false)}
+      />
     </SafeAreaView>
   );
 };
