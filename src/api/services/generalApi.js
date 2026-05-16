@@ -204,73 +204,48 @@ export const getCurrentDeviceLocation = async () => {
       return { error: 'permission_denied' };
     }
 
-    let pos = null;
-
-    // 1) FAST PATH: any reasonably recent cached fix (≤120s). Returns in ~10ms.
-    //    Verbatim from employee_attendance/AttendanceService.js — confirmed to
-    //    succeed in production on cashier-class Android devices where
-    //    BestForNavigation rejects.
+    // Some Android devices report locationServicesEnabled === true while the
+    // user's "Location Mode" sub-setting is still "Device only" (GPS chip
+    // only, no Google Play Services network positioning). In that mode,
+    // Fused Location Provider rejects getCurrentPositionAsync with
+    // "Current location is unavailable" — exactly the failure we see when
+    // POSPayment is the first location-using screen of the session.
+    // enableNetworkProviderAsync pops a one-tap Google Play Services dialog
+    // that nudges the user to switch to High accuracy mode; after one OK,
+    // the device stays in that mode permanently and all subsequent calls
+    // resolve. Wrapped in try/catch because it throws on iOS (not supported)
+    // and on Android devices without Play Services.
     try {
-      const last = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
-      if (last?.coords) {
-        console.log('[POSLocation] CACHED fix accuracy:', last.coords.accuracy, 'm');
-        // Kick off a background refresh so the next call has a fresher cache.
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy?.Balanced ?? 3 })
-          .catch(() => {});
-        pos = last;
-      }
-    } catch (_) { /* fall through */ }
-
-    // 2) Quick Balanced live fetch — 3s timeout, cell + Wi-Fi triangulation.
-    //    Balanced (not BestForNavigation!) is the accuracy that actually works
-    //    on devices where the GPS chip can't lock a satellite (indoors /
-    //    power-save). Verbatim from employee_attendance.
-    if (!pos) {
-      try {
-        const live = await Promise.race([
-          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy?.Balanced ?? 3 }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('gps-timeout')), 3000)),
-        ]);
-        if (live?.coords) {
-          console.log('[POSLocation] LIVE-BALANCED fix accuracy:', live.coords.accuracy, 'm');
-          pos = live;
-        }
-      } catch (err) {
-        console.log('[POSLocation] live BALANCED fetch failed:', err?.message || err);
-      }
+      await Location.enableNetworkProviderAsync();
+      console.log('[POSLocation] network provider enabled');
+    } catch (e) {
+      console.log('[POSLocation] enableNetworkProviderAsync skipped:', e?.message || e);
     }
 
-    // 3) Any-age cache, last resort.
-    if (!pos) {
-      try {
-        const anyLast = await Location.getLastKnownPositionAsync({});
-        if (anyLast?.coords) {
-          console.log('[POSLocation] STALE cache fix accuracy:', anyLast.coords.accuracy, 'm');
-          pos = anyLast;
-        }
-      } catch (_) { /* ignore */ }
+    // VERBATIM port from employee_attendance/VisitForm.js — single call with
+    // no options. expo-location picks the default accuracy and waits as long
+    // as the OS needs to deliver a fix. No Promise.race, no timeout cap; that
+    // was prematurely failing on cold-start GPS lock on cashier devices.
+    let pos = null;
+    try {
+      pos = await Location.getCurrentPositionAsync({});
+    } catch (e) {
+      console.warn('[POSLocation] getCurrentPositionAsync failed:', e?.message || e);
     }
 
     if (pos?.coords?.latitude != null) {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
       let locationName = '';
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const places = await Promise.race([
-            Location.reverseGeocodeAsync({ latitude: lat, longitude: lon }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('reverse-geocode timeout')), 5000)),
-          ]);
-          const p = (places && places[0]) || null;
-          if (p) {
-            locationName = [p.name, p.street, p.city, p.region, p.country]
-              .filter(Boolean).join(', ');
-          }
-          if (locationName) break;
-        } catch (e) {
-          console.warn(`[POSLocation] reverse geocode attempt ${attempt} failed:`, e?.message || e);
+      try {
+        const reverseGeocode = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+        if (reverseGeocode && reverseGeocode.length > 0) {
+          const place = reverseGeocode[0];
+          locationName = [place.name, place.street, place.city, place.region, place.country]
+            .filter(Boolean).join(', ');
         }
-        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      } catch (geoError) {
+        console.warn('[POSLocation] reverse geocode failed:', geoError?.message || geoError);
       }
       console.log('[POSLocation] → success', { lat, lon, locationName });
       return { latitude: lat, longitude: lon, locationName };
