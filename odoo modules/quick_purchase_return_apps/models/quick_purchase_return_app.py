@@ -211,11 +211,37 @@ class QuickPurchaseReturnApp(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        """Override create to generate sequence"""
+        """Override create to generate sequence and auto-load invoice lines.
+
+        `@api.onchange` doesn't fire from JSON-RPC create calls (e.g. the
+        mobile app), so records created with source_invoice_id but no
+        explicit line_ids would otherwise stay with line_ids=[]. We replay
+        the onchange logic server-side here so mobile-created drafts have
+        lines from the start.
+        """
         for vals in vals_list:
             if vals.get('name', _('New')) == _('New'):
                 vals['name'] = self.env['ir.sequence'].next_by_code('quick.purchase.return.app') or _('New')
-        return super().create(vals_list)
+        records = super().create(vals_list)
+        for record in records:
+            if record.source_invoice_id and not record.line_ids:
+                record._load_invoice_lines()
+        return records
+
+    def write(self, vals):
+        """Auto-reload lines when source_invoice_id is changed via RPC.
+
+        Mirrors the onchange behavior for write() because @api.onchange
+        doesn't fire on RPC writes either — without this, swapping the
+        bill on a draft return via the mobile app would leave stale or
+        empty line_ids.
+        """
+        res = super().write(vals)
+        if 'source_invoice_id' in vals:
+            for record in self:
+                if record.state == 'draft' and record.source_invoice_id:
+                    record._load_invoice_lines()
+        return res
 
     @api.onchange('source_invoice_id')
     def _onchange_source_invoice_id(self):
