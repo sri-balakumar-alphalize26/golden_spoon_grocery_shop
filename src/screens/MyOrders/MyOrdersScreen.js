@@ -16,7 +16,17 @@ import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
 
-const MyOrdersScreen = ({ navigation }) => {
+const MyOrdersScreen = ({ navigation, route }) => {
+  // Optional filters passed in from the POSRegister kebab popover or from
+  // POSConfigSessions tapping into a single session. When absent the screen
+  // behaves exactly like before (all orders, unscoped).
+  const configId = route?.params?.configId || null;
+  const sessionId = route?.params?.sessionId || null;
+  const configName = route?.params?.configName || null;
+  const headerTitle = configName
+    ? `Orders — ${configName}`
+    : (sessionId ? 'Orders — this session' : 'Orders');
+
   const currency = useAuthStore((state) => state.currency);
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
   useEffect(() => { console.log('[CURRENCY:RENDER] MyOrdersScreen', currency); }, [currency]);
@@ -27,30 +37,33 @@ const MyOrdersScreen = ({ navigation }) => {
   const resumeDraftHidden = useFeatureHidden('orders.resume_draft');
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text }),
+    (text) => fetchData({ searchText: text, configId, sessionId }),
     500
   );
 
   const hasLoadedRef = useRef(false);
-  const lastParamsRef = useRef({ searchText: '' });
+  const lastParamsRef = useRef({ searchText: '', configId: null, sessionId: null });
   const hasAttemptedFetchRef = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
-      const paramsChanged = lastParamsRef.current.searchText !== searchText;
+      const paramsChanged =
+        lastParamsRef.current.searchText !== searchText ||
+        lastParamsRef.current.configId !== configId ||
+        lastParamsRef.current.sessionId !== sessionId;
 
       if (!hasLoadedRef.current || paramsChanged) {
         hasAttemptedFetchRef.current = true;
-        fetchData({ searchText });
+        fetchData({ searchText, configId, sessionId });
         hasLoadedRef.current = true;
-        lastParamsRef.current = { searchText };
+        lastParamsRef.current = { searchText, configId, sessionId };
       }
-    }, [searchText])
+    }, [searchText, configId, sessionId])
   );
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText });
-  }, [searchText, fetchMoreData]);
+    fetchMoreData({ searchText, configId, sessionId });
+  }, [searchText, configId, sessionId, fetchMoreData]);
 
   const getStatusColor = (state) => {
     switch (state) {
@@ -248,7 +261,7 @@ const MyOrdersScreen = ({ navigation }) => {
   return (
     <SafeAreaView>
       <NavigationHeader
-        title="Orders"
+        title={headerTitle}
         onBackPress={() => navigation.goBack()}
       />
       <SearchContainer

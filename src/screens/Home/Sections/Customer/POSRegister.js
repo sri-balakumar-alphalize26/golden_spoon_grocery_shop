@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -24,6 +25,7 @@ import {
   createPOSSesionOdoo,
   closePOSSesionOdoo,
   fetchSessionClosingDetails,
+  fetchSessionOngoing,
   fetchDraftPosOrders,
   unlinkPosOrders,
 } from '@api/services/generalApi';
@@ -100,6 +102,15 @@ const POSRegister = ({ navigation }) => {
   const [coinsModalVisible, setCoinsModalVisible] = useState(false);
   const [coinCounts, setCoinCounts] = useState({});             // { '500': 0, '200': 0, ... }
 
+  // Kebab popover state — the 3-dots menu on each register card. menuRegister
+  // is the register the user tapped so the popover knows where to navigate.
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [menuRegister, setMenuRegister] = useState(null);
+
+  // Live "Ongoing" totals per open session, fetched after the session list.
+  // Shape: { [sessionId]: { orderCount, orderTotal } }.
+  const [ongoingBySession, setOngoingBySession] = useState({});
+
   const loadRegistersAndSessions = async () => {
     console.log('[POSRegister] loading registers and open sessions');
     const t0 = Date.now();
@@ -117,6 +128,20 @@ const POSRegister = ({ navigation }) => {
       });
       setRegisters(Array.isArray(regs) ? regs : []);
       setOpenSessions(Array.isArray(sessions) ? sessions : []);
+
+      // Fan out one fetchSessionOngoing per open session in parallel — small
+      // payload each, so total wall time is roughly one network round-trip.
+      const list = Array.isArray(sessions) ? sessions : [];
+      if (list.length) {
+        const ongoingMap = {};
+        await Promise.all(list.map(async (sess) => {
+          const o = await fetchSessionOngoing({ sessionId: sess.id });
+          ongoingMap[sess.id] = o;
+        }));
+        setOngoingBySession(ongoingMap);
+      } else {
+        setOngoingBySession({});
+      }
     } catch (err) {
       console.error('[POSRegister] load error:', err);
       setError('Failed to load POS registers or sessions');
@@ -125,9 +150,13 @@ const POSRegister = ({ navigation }) => {
     }
   };
 
-  useEffect(() => {
-    loadRegistersAndSessions();
-  }, []);
+  // Refresh on every focus (not just mount) so navigating back from a sale,
+  // refund, or session-detail screen always shows the latest Ongoing total.
+  useFocusEffect(
+    useCallback(() => {
+      loadRegistersAndSessions();
+    }, []),
+  );
 
   // Tap "Open Register" → show Odoo-style Opening Control popup so the user
   // can enter the opening cash and a note before the session is advanced to
@@ -423,6 +452,21 @@ const POSRegister = ({ navigation }) => {
               {item.state === 'opening_control' ? 'OPENING' : 'ACTIVE'}
             </Text>
           </View>
+          <TouchableOpacity
+            onPress={() => {
+              // Open the kebab popover for the underlying register (config),
+              // not the session — Sessions/Orders are scoped by config_id.
+              const cfgId = Array.isArray(item.config_id) ? item.config_id[0] : item.config_id;
+              const cfgName = Array.isArray(item.config_id) ? item.config_id[1] : '';
+              setMenuRegister({ id: cfgId, name: cfgName || item.name });
+              setMenuVisible(true);
+            }}
+            style={s.kebabBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="more-vert" size={20} color="#374151" />
+          </TouchableOpacity>
         </View>
 
         {/* Separator */}
@@ -458,6 +502,24 @@ const POSRegister = ({ navigation }) => {
                     )
                   : '—'}
               </Text>
+            </View>
+          </View>
+          <View style={s.infoItem}>
+            <Text style={s.infoIcon}>📈</Text>
+            <View>
+              <Text style={s.infoLabel}>ONGOING</Text>
+              {(() => {
+                const ongoing = ongoingBySession[item.id] || { orderCount: 0, orderTotal: 0 };
+                const isNegative = ongoing.orderTotal < 0;
+                return (
+                  <Text style={[s.infoValue, s.amountValue, isNegative && s.amountNegative]}>
+                    {`${formatCurrency(
+                      ongoing.orderTotal,
+                      currency || { symbol: '', name: '', position: 'before' }
+                    )} (${ongoing.orderCount} order${ongoing.orderCount === 1 ? '' : 's'})`}
+                  </Text>
+                );
+              })()}
             </View>
           </View>
         </View>
@@ -502,6 +564,17 @@ const POSRegister = ({ navigation }) => {
           <View style={s.statusBadgeIdle}>
             <Text style={s.statusTextIdle}>AVAILABLE</Text>
           </View>
+          <TouchableOpacity
+            onPress={() => {
+              setMenuRegister({ id: item.id, name: item.name });
+              setMenuVisible(true);
+            }}
+            style={s.kebabBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="more-vert" size={20} color="#374151" />
+          </TouchableOpacity>
         </View>
 
         {/* Separator */}
@@ -857,6 +930,52 @@ const POSRegister = ({ navigation }) => {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Kebab popover — opens from the 3-dots on each register card. Two
+          shortcuts: Sessions (this register's pos.session list) and Orders
+          (this register's pos.order list, scoped by config_id). */}
+      <Modal
+        visible={menuVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={s.kebabModalBg}
+          activeOpacity={1}
+          onPress={() => setMenuVisible(false)}
+        >
+          <View style={s.kebabCard}>
+            <TouchableOpacity
+              style={s.kebabRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                const reg = menuRegister;
+                setMenuVisible(false);
+                if (!reg) return;
+                navigation.navigate('POSConfigSessions', { configId: reg.id, configName: reg.name });
+              }}
+            >
+              <MaterialIcons name="history" size={18} color="#374151" />
+              <Text style={s.kebabRowText}>Sessions</Text>
+            </TouchableOpacity>
+            <View style={s.kebabDivider} />
+            <TouchableOpacity
+              style={s.kebabRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                const reg = menuRegister;
+                setMenuVisible(false);
+                if (!reg) return;
+                navigation.navigate('MyOrdersScreen', { configId: reg.id, configName: reg.name });
+              }}
+            >
+              <MaterialIcons name="receipt-long" size={18} color="#374151" />
+              <Text style={s.kebabRowText}>Orders</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       {/* Opening Control modal — Odoo-style cash + note prompt */}
@@ -1486,6 +1605,36 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   dailySaleText: { color: '#374151', fontWeight: '700', fontSize: 14 },
+
+  // Kebab popover (3-dots → Sessions / Orders shortcuts) ───────────────────
+  kebabBtn: {
+    marginLeft: 6,
+    padding: 4,
+    borderRadius: 6,
+  },
+  kebabModalBg: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center', justifyContent: 'center',
+    padding: 16,
+  },
+  kebabCard: {
+    width: '70%', maxWidth: 280,
+    backgroundColor: '#fff', borderRadius: 10,
+    paddingVertical: 6,
+    borderWidth: 1, borderColor: '#e5e7eb',
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  kebabRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, paddingHorizontal: 16,
+  },
+  kebabRowText: { fontSize: 14, fontWeight: '600', color: '#111' },
+  kebabDivider: { height: 1, backgroundColor: '#e5e7eb', marginHorizontal: 12 },
+
+  // Negative ongoing total (refund-net session) — used in the open-session
+  // card's Ongoing value to flag a red total.
+  amountNegative: { color: '#dc2626' },
 });
 
 export default POSRegister;

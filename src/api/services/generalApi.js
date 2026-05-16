@@ -1142,6 +1142,67 @@ export const healStaleClosedSessions = async () => {
   }
 };
 
+// All pos.sessions for a specific config — drives the POSConfigSessions screen
+// (the in-app equivalent of Odoo's POS Sessions list, scoped to one register).
+export const fetchSessionsForConfig = async ({ configId, limit = 50, offset = 0 } = {}) => {
+  if (!configId) return [];
+  try {
+    const result = await _closeCallKw('pos.session', 'search_read', [
+      [['config_id', '=', Number(configId)]],
+    ], {
+      fields: [
+        'id', 'name', 'state', 'start_at', 'stop_at',
+        'cash_register_balance_start', 'cash_register_balance_end_real',
+        'config_id', 'user_id',
+      ],
+      order: 'id desc',
+      limit,
+      offset,
+    });
+    return Array.isArray(result) ? result : [];
+  } catch (e) {
+    console.warn('[POSRegister] fetchSessionsForConfig failed:', e?.message || e);
+    return [];
+  }
+};
+
+// Live order count + net total for the given open session. Used by the
+// open-session cards on POSRegister to render the "Ongoing $X (N orders)"
+// line. Counts refunds with their negative sign so a refund-only session
+// reads as a negative number — same behaviour as Odoo Web's dashboard.
+export const fetchSessionOngoing = async ({ sessionId } = {}) => {
+  if (!sessionId) return { orderCount: 0, orderTotal: 0 };
+  try {
+    const orders = await _closeCallKw('pos.order', 'search_read', [
+      [['session_id', '=', Number(sessionId)]],
+    ], { fields: ['id', 'amount_total'] });
+    const list = Array.isArray(orders) ? orders : [];
+    const orderTotal = list.reduce((s, o) => s + (Number(o.amount_total) || 0), 0);
+    return { orderCount: list.length, orderTotal };
+  } catch (e) {
+    console.warn('[POSRegister] fetchSessionOngoing failed:', e?.message || e);
+    return { orderCount: 0, orderTotal: 0 };
+  }
+};
+
+// Create a refund pos.order for the given orderId via Odoo's pos.order.refund
+// method. Odoo's action_dict response shape varies by version — we cover both
+// the `res_id` and `domain: [['id','in',[...]]]` forms.
+export const refundPosOrder = async ({ orderId } = {}) => {
+  if (!orderId) return { error: { message: 'orderId required' } };
+  try {
+    const action = await _closeCallKw('pos.order', 'refund', [[Number(orderId)]]);
+    let newOrderId = action?.res_id || null;
+    if (!newOrderId && Array.isArray(action?.domain)) {
+      const idClause = action.domain.find((d) => Array.isArray(d) && d[0] === 'id');
+      if (idClause && Array.isArray(idClause[2])) newOrderId = idClause[2][0];
+    }
+    return { success: true, newOrderId, action };
+  } catch (e) {
+    return { error: { message: e?.message || 'Refund failed', original: e?.odoo || e } };
+  }
+};
+
 // api/services/generalApi.js
 import axios from "axios";
 import ODOO_BASE_URL, { getOdooUrl } from '@api/config/odooConfig';
@@ -5611,7 +5672,7 @@ export const updateUserPasswordOdoo = async (userId, newPassword) => {
 };
 
 // Fetch POS orders from Odoo
-export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' } = {}) => {
+export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '', configId = null, sessionId = null } = {}) => {
   try {
     let domain = [];
 
@@ -5625,6 +5686,12 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' 
         ['user_id', 'ilike', term],
       ];
     }
+
+    // Scope filters used by the new kebab→Orders shortcut (configId) and the
+    // POSConfigSessions row tap (sessionId). Both are appended as additional
+    // AND-leaves so they combine cleanly with the search-text domain above.
+    if (sessionId) domain.push(['session_id', '=', Number(sessionId)]);
+    if (configId) domain.push(['config_id', '=', Number(configId)]);
 
     const companyId = getActiveCompanyId();
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -5693,6 +5760,11 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           // Location fields populated by the RN app at Validate Payment
           // time via the standalone pos_order_location module.
           'order_latitude', 'order_longitude', 'order_location_name',
+          // Refund linkage — `refunded_order_id` is set when THIS order is a
+          // refund of another; `refund_orders_count` is the number of refund
+          // children of THIS order. Used to disable the Return Products
+          // button when the order is already a refund or fully refunded.
+          'refunded_order_id', 'refund_orders_count',
         ],
         limit: 1,
       },

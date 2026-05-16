@@ -9,6 +9,7 @@ import {
   Platform,
   StatusBar,
   Modal,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from '@components/containers';
 import { SafeAreaView as SafeAreaViewNative } from 'react-native-safe-area-context';
@@ -19,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, refundPosOrder } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -93,6 +94,61 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // Holds the pending action ('preview' | 'download' | 'print') while the
   // PaperSizeModal is open. Cleared when the user picks a size or cancels.
   const [sizePicker, setSizePicker] = useState(null);
+
+  // Return-Products button state — true while the pos.order.refund RPC is in
+  // flight so the button can show a spinner and prevent double-taps.
+  const [refunding, setRefunding] = useState(false);
+
+  // True when this order is itself a refund of another order — drives the
+  // small red REFUND chip + "Refunded from {original}" link near the header.
+  const isRefund = !!(order?.refunded_order_id && (Array.isArray(order.refunded_order_id) ? order.refunded_order_id[0] : order.refunded_order_id));
+  const refundedOriginalId = isRefund ? (Array.isArray(order.refunded_order_id) ? order.refunded_order_id[0] : order.refunded_order_id) : null;
+  const refundedOriginalName = isRefund && Array.isArray(order.refunded_order_id) ? order.refunded_order_id[1] : '';
+
+  // Whether Return Products is allowed on this order. Disabled when:
+  // - the order is itself a refund (no re-refunding a refund),
+  // - the order has already been fully refunded once (`refund_orders_count > 0`),
+  // - or the order isn't in a "paid"/"done"/"invoiced" state.
+  const canRefund = order
+    && !isRefund
+    && (Number(order.refund_orders_count) || 0) === 0
+    && ['paid', 'done', 'invoiced'].includes(order.state);
+
+  const handleReturnProducts = () => {
+    if (!order || !canRefund || refunding) return;
+    Alert.alert(
+      'Return Products',
+      `Return all products in order ${order.name || `#${order.id}`}?\n\nA new refund order will be created with negative quantities, ready for payment.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Return',
+          style: 'destructive',
+          onPress: async () => {
+            setRefunding(true);
+            try {
+              const resp = await refundPosOrder({ orderId: order.id });
+              if (resp?.error) {
+                Alert.alert('Refund failed', resp.error.message || 'Try again later');
+                return;
+              }
+              if (resp.newOrderId) {
+                Toast.show({ type: 'success', text1: 'Refund created', text2: `New order ready for payment`, position: 'bottom' });
+                navigation.replace('OrderDetailScreen', { orderId: resp.newOrderId });
+              } else {
+                Alert.alert('Refund created', 'Pull-to-refresh the Orders list to see the new refund order.');
+                navigation.goBack();
+              }
+            } catch (e) {
+              Alert.alert('Refund failed', e?.message || 'Try again later');
+            } finally {
+              setRefunding(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   // Map the fetched pos.order + pos.payment[] into the params expected by the
   // shared `generateInvoiceHtml` helper. Kept inline because it depends on
@@ -303,9 +359,25 @@ const OrderDetailScreen = ({ navigation, route }) => {
               <MaterialIcons name="check-circle" size={26} color={badge.fg} />
             </View>
             <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={s.orderName}>{order.name || '—'}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                <Text style={s.orderName}>{order.name || '—'}</Text>
+                {isRefund ? (
+                  <View style={s.refundChip}>
+                    <Text style={s.refundChipText}>REFUND</Text>
+                  </View>
+                ) : null}
+              </View>
               {order.pos_reference ? (
                 <Text style={s.receiptText}>Receipt {order.pos_reference}</Text>
+              ) : null}
+              {isRefund && refundedOriginalId ? (
+                <TouchableOpacity
+                  onPress={() => navigation.replace('OrderDetailScreen', { orderId: refundedOriginalId })}
+                  activeOpacity={0.7}
+                  style={{ marginTop: 4 }}
+                >
+                  <Text style={s.refundedFromLink}>{`Refunded from ${refundedOriginalName || '#' + refundedOriginalId}`}</Text>
+                </TouchableOpacity>
               ) : null}
             </View>
             <View style={[s.statusPill, { backgroundColor: badge.bg }]}>
@@ -475,6 +547,30 @@ const OrderDetailScreen = ({ navigation, route }) => {
               )}
             </View>
             <Text style={s.invoiceChipText}>Print</Text>
+          </TouchableOpacity>
+
+          {/* Return Products — Odoo-style refund. Disabled when the order
+              can't be refunded (already a refund, already-refunded, or not
+              in a paid/done/invoiced state). Mirrors the button at the top
+              of Odoo's POS Order form. */}
+          <TouchableOpacity
+            onPress={handleReturnProducts}
+            disabled={!canRefund || refunding}
+            activeOpacity={0.85}
+            style={[
+              s.invoiceChip,
+              { borderColor: '#FECACA' },
+              (!canRefund || refunding) && { opacity: 0.45 },
+            ]}
+          >
+            <View style={s.invoiceChipIcon}>
+              {refunding ? (
+                <ActivityIndicator color="#B91C1C" size="small" />
+              ) : (
+                <MaterialIcons name="keyboard-return" size={20} color="#B91C1C" />
+              )}
+            </View>
+            <Text style={s.invoiceChipText}>Return Products</Text>
           </TouchableOpacity>
 
           {/* Location chip — opens the same popup as the post-payment
@@ -778,5 +874,25 @@ const s = StyleSheet.create({
     backgroundColor: '#F1F2F6',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // ── Refund chip + "Refunded from {original}" link in the hero card ──────
+  refundChip: {
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: '#FEE2E2',
+  },
+  refundChipText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#B91C1C',
+    letterSpacing: 0.6,
+  },
+  refundedFromLink: {
+    fontSize: 12,
+    color: '#1E88E5',
+    textDecorationLine: 'underline',
   },
 });

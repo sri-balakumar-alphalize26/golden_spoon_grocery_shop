@@ -19,6 +19,7 @@ import Scanner from "@components/Scanner";
 // import Barcode from "@components/Scanner"; // Uncomment and fix if Barcode is a named export or separate file
 import SalesOrderChoice from "@screens/Home/Sections/Customer/SalesOrderChoice";
 import POSRegister from "@screens/Home/Sections/Customer/POSRegister";
+import POSConfigSessions from "@screens/Home/Sections/Customer/POSConfigSessions";
 import POSOpenAmount from "@screens/Home/Sections/Customer/POSOpenAmount";
 import POSProducts from "@screens/Home/Sections/Customer/POSProducts";
 import IcecreamProducts from "@screens/Home/Sections/Customer/IcecreamProducts";
@@ -117,6 +118,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="POSRegister"
         component={POSRegister}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="POSConfigSessions"
+        component={POSConfigSessions}
         options={{ headerShown: false }}
       />
       <Stack.Screen
