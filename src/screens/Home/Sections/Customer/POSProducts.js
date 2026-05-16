@@ -9,8 +9,8 @@ import {
   fetchPosCategoryCountsOdoo,
   fetchProductTemplateCountOdoo,
   fetchPosConfigCategories,
+  fetchProductByBarcodeOdoo,
 } from '@api/services/generalApi';
-import { fetchProductDetailsByBarcode } from '@api/details/detailApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -241,56 +241,37 @@ const POSProducts = ({ navigation, route }) => {
     fetchMoreData({ searchText, posCategoryId: selectedPosCategory, allowedCategoryIds: allowedIds });
   }, [searchText, selectedPosCategory, fetchMoreData, allowedIds]);
 
-  // Scanner flow — opens the existing camera scanner. On a successful scan
-  // we look the product up by barcode and pipe it through the same
-  // handleQuickAdd that the `+` button uses, so the "Already Added" /
-  // product-added feedback toasts behave identically.
+  // Scanner flow — ported verbatim from employee_attendance Sales Order tile,
+  // which the user pointed at as the known-working reference. Calls
+  // product.product.search_read directly via fetchProductByBarcodeOdoo and
+  // pushes straight to the cart store. We still gate on the existing cart
+  // contents so the "Already Added" feedback matches the `+` button's UX.
   const addProductByBarcode = useCallback(async (barcode) => {
     if (!barcode) return;
     try {
-      const matches = await fetchProductDetailsByBarcode(String(barcode));
-      console.log('[POSProducts] barcode lookup result:', barcode, '→', matches);
-
-      // The barcode API returns either an array of rows or a single object —
-      // normalise so the downstream lookup is the same.
-      const list = Array.isArray(matches) ? matches : (matches ? [matches] : []);
-      if (list.length === 0) {
+      const results = await fetchProductByBarcodeOdoo(String(barcode));
+      console.log('[POSProducts] scan:', barcode, '→', results?.length || 0, 'hit(s)', results?.[0]);
+      if (!results || results.length === 0) {
         setNotFoundBarcode(String(barcode));
         setNotFoundVisible(true);
         return;
       }
-      const m = list[0];
-      // Pull the variant id out of whatever field shape this API returned.
-      // `product_id` can be a many2one tuple ([id, name]); pluck the int half.
-      const rawId =
-        m.id ??
-        (Array.isArray(m.product_id) ? m.product_id[0] : m.product_id) ??
-        (Array.isArray(m.variant_id) ? m.variant_id[0] : m.variant_id);
-      if (!rawId) {
-        setNotFoundBarcode(String(barcode));
-        setNotFoundVisible(true);
-        return;
-      }
+      const p = results[0];
       const item = {
-        id: rawId,
-        name: m.name || m.product_name || m.display_name || 'Product',
-        product_name: m.product_name || m.name || m.display_name,
-        default_code: m.default_code || m.product_code || m.code || '',
-        lst_price: Number(
-          m.lst_price ?? m.list_price ?? m.price ?? m.unit_price ?? m.price_unit ?? 0
-        ),
-        image_url: m.image_url || m.image_1920 || m.image || null,
-        categ_id: m.categ_id || false,
+        id: p.id,
+        name: p.product_name,
+        product_name: p.product_name,
+        default_code: p.code,
+        lst_price: Number(p.price || 0),
+        image_url: p.image_url || null,
+        categ_id: p.category ? [p.category.id, p.category.name] : false,
       };
       handleQuickAdd(item);
-      // Hop back to the register so the cashier sees the line appear — matches
-      // the scan-and-see mental model. Small delay keeps the success Toast on
-      // screen long enough to be visible during the transition.
-      setTimeout(() => navigation.goBack(), 350);
     } catch (e) {
+      console.error('[POSProducts] barcode scan error:', e?.message || e);
       Toast.show({ type: 'error', text1: 'Scan failed', text2: e?.message || 'Try again' });
     }
-  }, [handleQuickAdd, navigation]);
+  }, [handleQuickAdd]);
 
   const handleOpenScanner = useCallback(() => {
     navigation.navigate('Scanner', {

@@ -16,9 +16,10 @@ import { fetchQuickReturns } from '@api/services/quickPurchaseReturnApi';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
 import { formatCurrency } from '@utils/currency';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
-const RED = '#B91C1C';
+const ORANGE = '#F47B20';
 
 const STATE_STYLE = {
   draft: { bg: '#fff7ed', fg: '#b45309', label: 'DRAFT' },
@@ -98,85 +99,89 @@ const QuickPurchaseReturnListScreen = ({ navigation }) => {
   const keyExtractor = (item) => String(item.id);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <NavigationHeader title="Quick Return" onBackPress={() => navigation.goBack()} logo={false} />
+    <SafeAreaView backgroundColor={NAVY}>
+      <NavigationHeader title="Quick Return" onBackPress={() => navigation.goBack()} />
+      <View style={styles.container}>
+        {loading && data.length === 0 ? (
+          <View style={styles.loaderWrap}>
+            <ActivityIndicator size="large" color={ORANGE} />
+            <Text style={styles.loaderText}>Loading returns…</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={data}
+            renderItem={renderItem}
+            keyExtractor={keyExtractor}
+            contentContainerStyle={{ padding: 12, paddingBottom: 90 }}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
+            ListEmptyComponent={
+              !loading ? (
+                <View style={styles.emptyWrap}>
+                  <MaterialIcons name="assignment-return" size={56} color="#cbd5e1" />
+                  <Text style={styles.emptyTitle}>No returns yet</Text>
+                  <Text style={styles.emptyText}>Tap the + button to create your first vendor return.</Text>
+                </View>
+              ) : null
+            }
+          />
+        )}
 
-      {loading && data.length === 0 ? (
-        <View style={styles.loaderWrap}>
-          <ActivityIndicator size="large" color={RED} />
-          <Text style={styles.loaderText}>Loading returns…</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={data}
-          renderItem={renderItem}
-          keyExtractor={keyExtractor}
-          contentContainerStyle={{ padding: 12, paddingBottom: 90 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
-          ListEmptyComponent={
-            !loading ? (
-              <View style={styles.emptyWrap}>
-                <MaterialIcons name="assignment-return" size={56} color="#cbd5e1" />
-                <Text style={styles.emptyTitle}>No returns yet</Text>
-                <Text style={styles.emptyText}>Tap the + button to create your first vendor return.</Text>
-              </View>
-            ) : null
-          }
-        />
-      )}
-
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.85}
-        onPress={() => navigation.navigate('QuickPurchaseReturnForm')}
-      >
-        <MaterialIcons name="add" size={26} color="#fff" />
-      </TouchableOpacity>
+        <FeatureGate featureKey="quick_purchase_return.create">
+          <TouchableOpacity
+            style={styles.fab}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('QuickPurchaseReturnForm')}
+          >
+            <MaterialIcons name="add" size={26} color="#fff" />
+            <Text style={styles.fabText}>New Return</Text>
+          </TouchableOpacity>
+        </FeatureGate>
+      </View>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f3f4f6' },
+  container: { flex: 1, backgroundColor: '#f6f7fb' },
   loaderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loaderText: { marginTop: 10, color: '#6b7280' },
+  loaderText: { marginTop: 10, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistMedium },
 
   card: {
-    backgroundColor: '#fff', borderRadius: 12,
-    paddingVertical: 12, paddingHorizontal: 14,
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingVertical: 14, paddingHorizontal: 14,
     marginBottom: 10,
-    borderWidth: 1, borderColor: '#e5e7eb',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
   },
   cardTop: {
     flexDirection: 'row', alignItems: 'center',
     marginBottom: 10,
   },
-  refText: { fontSize: 15, fontWeight: '800', color: '#111' },
-  subText: { fontSize: 12, color: '#6b7280', marginTop: 2 },
-  statePill: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999, marginLeft: 8 },
-  statePillText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  refText: { fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold, color: NAVY },
+  subText: { fontSize: 12, color: '#6b7280', marginTop: 2, fontFamily: FONT_FAMILY.urbanistMedium },
+  statePill: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, marginLeft: 8 },
+  statePillText: { fontSize: 11, fontFamily: FONT_FAMILY.urbanistBold, letterSpacing: 0.4 },
 
   cardMeta: {
     flexDirection: 'row', justifyContent: 'space-between',
-    paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6',
+    paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f2f6',
   },
   metaCell: { flex: 1, paddingHorizontal: 2 },
-  metaLabel: { fontSize: 10, color: '#9ca3af', letterSpacing: 0.6, fontWeight: '700' },
-  metaValue: { marginTop: 2, fontSize: 12, color: '#111' },
-  totalValue: { marginTop: 2, fontSize: 14, color: NAVY, fontWeight: '800' },
+  metaLabel: { fontSize: 10, color: '#9ca3af', letterSpacing: 0.6, fontFamily: FONT_FAMILY.urbanistBold },
+  metaValue: { marginTop: 2, fontSize: 12, color: '#111', fontFamily: FONT_FAMILY.urbanistMedium },
+  totalValue: { marginTop: 2, fontSize: 14, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
 
   emptyWrap: { paddingVertical: 80, alignItems: 'center', paddingHorizontal: 32 },
-  emptyTitle: { marginTop: 14, color: '#111', fontSize: 16, fontWeight: '700' },
-  emptyText: { marginTop: 6, color: '#6b7280', fontSize: 13, textAlign: 'center', lineHeight: 19 },
+  emptyTitle: { marginTop: 14, color: '#111', fontSize: 16, fontFamily: FONT_FAMILY.urbanistBold },
+  emptyText: { marginTop: 6, color: '#6b7280', fontSize: 13, textAlign: 'center', lineHeight: 19, fontFamily: FONT_FAMILY.urbanistMedium },
 
   fab: {
-    position: 'absolute', bottom: 24, right: 20,
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: RED,
-    alignItems: 'center', justifyContent: 'center',
-    elevation: 8,
-    shadowColor: RED, shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
+    position: 'absolute', right: 16, bottom: 24,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: ORANGE, paddingVertical: 12, paddingHorizontal: 18, borderRadius: 28,
+    shadowColor: ORANGE, shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 8,
   },
+  fabText: { color: '#fff', fontFamily: FONT_FAMILY.urbanistBold, fontSize: 14, marginLeft: 4 },
 });
 
 export default QuickPurchaseReturnListScreen;

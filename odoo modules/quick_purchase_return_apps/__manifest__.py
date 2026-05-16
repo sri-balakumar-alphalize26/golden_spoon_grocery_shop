@@ -43,6 +43,7 @@ Workflow:
         'security/ir.model.access.csv',
         'security/quick_purchase_return_apps_security.xml',
         'data/currency_data.xml',
+        'data/quick_purchase_return_app_features.xml',
         'views/quick_purchase_return_apps_views.xml',
         'views/quick_purchase_return_apps_menus.xml',
     ],

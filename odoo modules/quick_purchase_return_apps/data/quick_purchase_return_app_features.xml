@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Per-user gateable features for the Quick Purchase Return flow.
+         Records register on app.feature.app (provided by
+         user_privilege_manager_apps). Once installed, an admin can toggle
+         these in the app's "Apps Privileges" screen and the matching
+         <FeatureGate featureKey="..."> wrappers in React Native hide the
+         corresponding UI. noupdate=1 keeps admin-edited labels intact
+         across module upgrades. -->
+    <data noupdate="1">
+
+        <!-- Top-level Quick Return tile on the home screen. -->
+        <record id="feat_home_tile_quick_purchase_return" model="app.feature.app">
+            <field name="feature_key">home.tile.quick_purchase_return</field>
+            <field name="name">Quick Return Tile</field>
+            <field name="description">Home tile that opens the Quick Purchase Return list.</field>
+            <field name="sequence">70</field>
+        </record>
+
+        <!-- Per-action gates inside Quick Return. parent_id groups them
+             under the home tile in the admin tree. -->
+        <record id="feat_quick_purchase_return_create" model="app.feature.app">
+            <field name="feature_key">quick_purchase_return.create</field>
+            <field name="name">Quick Return: Create</field>
+            <field name="description">Add a new vendor return entry.</field>
+            <field name="parent_id" ref="feat_home_tile_quick_purchase_return"/>
+            <field name="sequence">71</field>
+        </record>
+
+        <record id="feat_quick_purchase_return_confirm" model="app.feature.app">
+            <field name="feature_key">quick_purchase_return.confirm</field>
+            <field name="name">Quick Return: Confirm</field>
+            <field name="description">Confirm a Quick Return (create credit note + return picking).</field>
+            <field name="parent_id" ref="feat_home_tile_quick_purchase_return"/>
+            <field name="sequence">72</field>
+        </record>
+
+        <record id="feat_quick_purchase_return_save" model="app.feature.app">
+            <field name="feature_key">quick_purchase_return.save</field>
+            <field name="name">Quick Return: Save Draft</field>
+            <field name="description">Save a Quick Return as draft without confirming.</field>
+            <field name="parent_id" ref="feat_home_tile_quick_purchase_return"/>
+            <field name="sequence">73</field>
+        </record>
+
+        <record id="feat_quick_purchase_return_delete_line" model="app.feature.app">
+            <field name="feature_key">quick_purchase_return.delete_line</field>
+            <field name="name">Quick Return: Delete Line</field>
+            <field name="description">Remove a product line from a draft Quick Return.</field>
+            <field name="parent_id" ref="feat_home_tile_quick_purchase_return"/>
+            <field name="sequence">74</field>
+        </record>
+
+        <record id="feat_quick_purchase_return_draft" model="app.feature.app">
+            <field name="feature_key">quick_purchase_return.draft</field>
+            <field name="name">Quick Return: Reset to Draft</field>
+            <field name="description">Reset a confirmed Quick Return back to draft state.</field>
+            <field name="parent_id" ref="feat_home_tile_quick_purchase_return"/>
+            <field name="sequence">75</field>
+        </record>
+
+    </data>
+</odoo>

@@ -21,12 +21,10 @@ import { COLORS } from '@constants/theme';
 // to the pos.order.state value Odoo expects (or null for "all"). Drafts are
 // treated as the user-facing "Unpaid" bucket.
 const STATE_FILTERS = [
-  { key: null,       label: 'All' },
-  { key: 'paid',     label: 'Paid' },
-  { key: 'draft',    label: 'Unpaid' },
-  { key: 'done',     label: 'Done' },
-  { key: 'invoiced', label: 'Invoiced' },
-  { key: 'cancel',   label: 'Cancelled' },
+  { key: null,    label: 'All' },
+  { key: 'paid',  label: 'Paid' },
+  { key: 'draft', label: 'Unpaid' },
+  { key: 'done',  label: 'Done' },
 ];
 
 const MyOrdersScreen = ({ navigation, route }) => {

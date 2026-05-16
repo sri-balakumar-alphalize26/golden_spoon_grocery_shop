@@ -88,11 +88,9 @@ import {
   PaymentMethodFormScreen,
   BarcodePrintScreen,
 } from '@screens/EasyPurchase';
-import {
-  QuickPurchaseReturnListScreen,
-  QuickPurchaseReturnFormScreen,
-  QuickPurchaseReturnDetailScreen,
-} from '@screens/QuickPurchaseReturn';
+import QuickPurchaseReturnListScreen from '../screens/QuickPurchaseReturn/QuickPurchaseReturnListScreen';
+import QuickPurchaseReturnFormScreen from '../screens/QuickPurchaseReturn/QuickPurchaseReturnFormScreen';
+import QuickPurchaseReturnDetailScreen from '../screens/QuickPurchaseReturn/QuickPurchaseReturnDetailScreen';
 
 
 

@@ -237,12 +237,31 @@ export const getCurrentDeviceLocation = async () => {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
       let locationName = '';
-      // Retry the reverse-geocode up to 3 times. Android's Geocoder
-      // intermittently returns IOException / "Service not available" for
-      // a few seconds after a cold app start — without the retry, the
-      // single call often returns empty and the UI falls back to raw
-      // lat/lng. Cap each attempt at 5s so we don't stall the cashier.
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      // Cache key by 4-decimal-rounded coordinates (~11m radius) so a
+      // cashier ringing receipts from the same store doesn't re-geocode
+      // every order. 24h TTL — drops stale data if the device is moved.
+      const cacheKey = `posLocationCache:${lat.toFixed(4)},${lon.toFixed(4)}`;
+      try {
+        const cached = await AsyncStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.locationName && parsed?.savedAt && (Date.now() - parsed.savedAt) < 24 * 60 * 60 * 1000) {
+            console.log('[POSLocation] cache hit:', parsed.locationName);
+            return { latitude: lat, longitude: lon, locationName: parsed.locationName };
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('[POSLocation] cache read failed:', cacheErr?.message || cacheErr);
+      }
+
+      // Retry the reverse-geocode up to 4 times with increasing backoff
+      // BEFORE each attempt. Android's Geocoder intermittently returns
+      // IOException / "Service not available" for a few seconds after
+      // a cold app start — back-to-back retries hit the cold geocoder
+      // every time, so we space them out (~600ms, 1s, 1.4s, 1.8s) to
+      // let the underlying Google Play Services Geocoder warm up.
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        await new Promise((r) => setTimeout(r, 200 + attempt * 400));
         try {
           const places = await Promise.race([
             Location.reverseGeocodeAsync({ latitude: lat, longitude: lon }),
@@ -250,8 +269,6 @@ export const getCurrentDeviceLocation = async () => {
           ]);
           const place = (places && places[0]) || null;
           if (place) {
-            // Try the rich field set first; if empty, broaden to additional
-            // fields some Android Geocoders return instead of city/region.
             locationName = [place.name, place.street, place.city, place.region, place.country]
               .filter(Boolean).join(', ');
             if (!locationName) {
@@ -263,8 +280,49 @@ export const getCurrentDeviceLocation = async () => {
         } catch (geoError) {
           console.warn(`[POSLocation] reverse-geocode attempt ${attempt} failed:`, geoError?.message || geoError);
         }
-        if (attempt < 3) await new Promise((r) => setTimeout(r, 600));
       }
+
+      // Fallback to OpenStreetMap Nominatim if Android Geocoder gave us
+      // nothing. Free, no API key, requires a User-Agent header per their
+      // ToS. Single attempt with a 3s timeout — we don't want to chain
+      // failure modes if their server is slow.
+      if (!locationName) {
+        try {
+          console.log('[POSLocation] geocoder empty, falling back to Nominatim');
+          const ctrl = new AbortController();
+          const tid = setTimeout(() => ctrl.abort(), 3000);
+          const resp = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14&addressdetails=1`,
+            {
+              method: 'GET',
+              headers: { 'User-Agent': 'GroceryShopPOS/1.0', 'Accept-Language': 'en' },
+              signal: ctrl.signal,
+            }
+          ).catch((e) => { console.warn('[POSLocation] Nominatim fetch failed:', e?.message); return null; });
+          clearTimeout(tid);
+          if (resp && resp.ok) {
+            const json = await resp.json().catch(() => null);
+            const a = json?.address || {};
+            locationName = [
+              a.road || a.pedestrian || a.neighbourhood,
+              a.suburb || a.village || a.town || a.city,
+              a.state_district || a.state,
+              a.country,
+            ].filter(Boolean).join(', ') || json?.display_name || '';
+          }
+        } catch (nErr) {
+          console.warn('[POSLocation] Nominatim fallback errored:', nErr?.message || nErr);
+        }
+      }
+
+      if (locationName) {
+        try {
+          await AsyncStorage.setItem(cacheKey, JSON.stringify({ locationName, savedAt: Date.now() }));
+        } catch (cacheWrErr) {
+          console.warn('[POSLocation] cache write failed:', cacheWrErr?.message || cacheWrErr);
+        }
+      }
+
       console.log('[POSLocation] → success', { lat, lon, locationName });
       return { latitude: lat, longitude: lon, locationName };
     }
@@ -7553,3 +7611,49 @@ export const postExpenseEntriesOdoo = (sheetId, expenseId) =>
     ],
     fallbackState: 'done',
   });
+
+// Barcode lookup mirroring the employee_attendance Sales Order pattern that
+// the user pointed at as the known-working reference. Hits product.product
+// search_read directly (no detail-API round trip) so the scanner can push
+// straight to the cart store without losing fields in translation.
+export const fetchProductByBarcodeOdoo = async (barcode) => {
+  if (!barcode) return [];
+  const baseUrl = getOdooUrl();
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.product',
+        method: 'search_read',
+        args: [[['barcode', '=', String(barcode)]]],
+        kwargs: {
+          fields: [
+            'id', 'name', 'list_price', 'lst_price', 'standard_price',
+            'default_code', 'barcode', 'uom_id', 'image_128', 'categ_id',
+          ],
+          limit: 1,
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data && resp.data.error) {
+      console.warn('[fetchProductByBarcodeOdoo] Odoo error:', resp.data.error);
+      return [];
+    }
+    const rows = Array.isArray(resp.data?.result) ? resp.data.result : [];
+    return rows.map((p) => ({
+      id: p.id,
+      product_name: p.name || '',
+      price: Number(p.list_price ?? p.lst_price ?? 0),
+      standard_price: Number(p.standard_price || 0),
+      code: p.default_code || '',
+      barcode: p.barcode || '',
+      uom: Array.isArray(p.uom_id) ? { id: p.uom_id[0], name: p.uom_id[1] } : null,
+      category: Array.isArray(p.categ_id) ? { id: p.categ_id[0], name: p.categ_id[1] } : null,
+      image_url: `${baseUrl}/web/image?model=product.product&id=${p.id}&field=image_128`,
+    }));
+  } catch (e) {
+    console.error('[fetchProductByBarcodeOdoo] request failed:', e?.message || e);
+    return [];
+  }
+};

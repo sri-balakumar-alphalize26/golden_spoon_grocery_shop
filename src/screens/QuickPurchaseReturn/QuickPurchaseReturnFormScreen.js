@@ -31,6 +31,7 @@ import {
   returnFullQuantity,
 } from '@api/services/quickPurchaseReturnApi';
 import { fetchWarehouses } from '@api/services/easyPurchaseApi';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const RED = '#B91C1C';
@@ -95,6 +96,7 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
   const handlePickBill = async (b) => {
     setBillPickerVisible(false);
     setBill(b);
+    console.log('[QuickReturn] bill picked:', { id: b?.id, name: b?.name, partner: b?.partner_id });
     setBusy(true);
     try {
       let id = draftId;
@@ -111,8 +113,18 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
         await updateQuickReturn(id, { source_invoice_id: b.id });
       }
       const detail = await fetchQuickReturnDetail(id);
+      console.log('[QuickReturn] detail fetched:', {
+        id,
+        linesCount: detail?.lines?.length || 0,
+        lines: detail?.lines,
+      });
       setLines(detail?.lines || []);
       if (detail?.lines?.length === 0) {
+        console.log(
+          '[QuickReturn] EMPTY — server returned 0 returnable rows for bill',
+          b?.id,
+          '— check Odoo: invoice posted? lines have qty_invoiced > qty_returned?'
+        );
         showToastMessage('No returnable products on this bill');
       }
     } catch (e) {
@@ -214,10 +226,10 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
   const totalReturn = lines.reduce((s, l) => s + Number(l.total || 0), 0);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <NavigationHeader title="New Quick Return" onBackPress={() => navigation.goBack()} logo={false} />
+    <SafeAreaView backgroundColor={NAVY}>
+      <NavigationHeader title="New Quick Return" onBackPress={() => navigation.goBack()} />
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 110 }}>
+      <ScrollView style={styles.container} contentContainerStyle={{ padding: 14, paddingBottom: 110 }}>
         {/* Vendor Bill picker */}
         <Text style={styles.sectionLabel}>VENDOR BILL</Text>
         <TouchableOpacity
@@ -356,26 +368,30 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
 
       {/* Footer actions */}
       <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.footerBtnGhost]}
-          activeOpacity={0.85}
-          onPress={handleSaveDraft}
-          disabled={busy || confirming || !draftId}
-        >
-          <Text style={styles.footerBtnGhostText}>Save Draft</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.footerBtnPrimary, (confirming || !draftId) && { opacity: 0.6 }]}
-          activeOpacity={0.85}
-          onPress={handleConfirm}
-          disabled={busy || confirming || !draftId}
-        >
-          {confirming ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={styles.footerBtnPrimaryText}>Confirm Return</Text>
-          )}
-        </TouchableOpacity>
+        <FeatureGate featureKey="quick_purchase_return.save">
+          <TouchableOpacity
+            style={[styles.footerBtn, styles.footerBtnGhost]}
+            activeOpacity={0.85}
+            onPress={handleSaveDraft}
+            disabled={busy || confirming || !draftId}
+          >
+            <Text style={styles.footerBtnGhostText}>Save Draft</Text>
+          </TouchableOpacity>
+        </FeatureGate>
+        <FeatureGate featureKey="quick_purchase_return.confirm">
+          <TouchableOpacity
+            style={[styles.footerBtn, styles.footerBtnPrimary, (confirming || !draftId) && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+            onPress={handleConfirm}
+            disabled={busy || confirming || !draftId}
+          >
+            {confirming ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.footerBtnPrimaryText}>Confirm Return</Text>
+            )}
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
 
       {/* Bill picker modal */}

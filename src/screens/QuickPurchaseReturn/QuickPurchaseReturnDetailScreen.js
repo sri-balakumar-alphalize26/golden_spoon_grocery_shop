@@ -23,6 +23,7 @@ import {
   readReturnPicking,
   readSourceInvoice,
 } from '@api/services/quickPurchaseReturnApi';
+import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
 const RED = '#B91C1C';
@@ -100,7 +101,7 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
 
   if (loading && !record) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView backgroundColor={NAVY}>
         <NavigationHeader title="Return" onBackPress={() => navigation.goBack()} logo={false} />
         <View style={styles.loaderWrap}>
           <ActivityIndicator size="large" color={RED} />
@@ -112,7 +113,7 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
 
   if (!record) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView backgroundColor={NAVY}>
         <NavigationHeader title="Return" onBackPress={() => navigation.goBack()} logo={false} />
         <View style={styles.emptyWrap}>
           <Text style={styles.emptyText}>Return not found.</Text>
@@ -127,10 +128,10 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <NavigationHeader title={record.name || 'Return'} onBackPress={() => navigation.goBack()} logo={false} />
+      <NavigationHeader title={record.name || 'Return'} onBackPress={() => navigation.goBack()} />
 
       <ScrollView
-        style={{ flex: 1 }}
+        style={styles.container}
         contentContainerStyle={{ padding: 14, paddingBottom: 30 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
       >
@@ -228,10 +229,12 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
 
         {/* State actions */}
         {record.state === 'cancelled' ? (
-          <TouchableOpacity style={[styles.actionBtn, styles.actionBtnGhost]} onPress={handleResetToDraft} activeOpacity={0.85}>
-            <MaterialIcons name="refresh" size={18} color={NAVY} />
-            <Text style={styles.actionBtnGhostText}>Reset to Draft</Text>
-          </TouchableOpacity>
+          <FeatureGate featureKey="quick_purchase_return.draft">
+            <TouchableOpacity style={[styles.actionBtn, styles.actionBtnGhost]} onPress={handleResetToDraft} activeOpacity={0.85}>
+              <MaterialIcons name="refresh" size={18} color={NAVY} />
+              <Text style={styles.actionBtnGhostText}>Reset to Draft</Text>
+            </TouchableOpacity>
+          </FeatureGate>
         ) : null}
         {record.state === 'draft' ? (
           <TouchableOpacity style={[styles.actionBtn, styles.actionBtnDanger]} onPress={handleCancel} activeOpacity={0.85}>
