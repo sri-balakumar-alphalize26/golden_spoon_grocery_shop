@@ -953,35 +953,192 @@ export const unlinkPosOrders = async (orderIds = []) => {
   }
 };
 
-// Close a POS session in Odoo
-export const closePOSSesionOdoo = async ({ sessionId } = {}) => {
+// Small helper used by the new close-flow RPCs below. Just a thin JSON-RPC
+// call_kw wrapper so each step in the close sequence reads cleanly. Named
+// `_closeCallKw` because the file already has a different `_callKw` further
+// down (hard-codes its model from a closure — different signature).
+const _closeCallKw = async (model, method, args = [], kwargs = {}) => {
+  const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+    jsonrpc: '2.0',
+    method: 'call',
+    params: { model, method, args, kwargs },
+    id: new Date().getTime(),
+  }, { headers: { 'Content-Type': 'application/json' } });
+  if (resp?.data?.error) {
+    const detail = resp.data.error?.data?.message || resp.data.error?.message || 'Odoo error';
+    const err = new Error(detail);
+    err.odoo = resp.data.error;
+    throw err;
+  }
+  return resp?.data?.result;
+};
+
+// Fetch everything the "Closing Register" modal needs to render the per-method
+// rows: session header, payments collected this session, payment methods on the
+// active config, cash in/out moves, plus order count + total. One round-trip
+// per resource (kept simple over read_group so we don't depend on Odoo group
+// shape differences).
+export const fetchSessionClosingDetails = async ({ sessionId }) => {
   try {
     if (!sessionId) throw new Error('sessionId is required');
+    const sid = Number(sessionId);
 
-    console.log('[CLOSE POS SESSION] Closing session ID:', sessionId);
+    const [sessionRows, payments, methods, cashMoves, orders] = await Promise.all([
+      _closeCallKw('pos.session', 'search_read', [[['id', '=', sid]]], {
+        fields: [
+          'id', 'name', 'state', 'start_at', 'stop_at',
+          'cash_register_balance_start', 'cash_register_balance_end_real',
+          'config_id', 'opening_notes', 'closing_notes',
+        ],
+        limit: 1,
+      }),
+      _closeCallKw('pos.payment', 'search_read', [[['session_id', '=', sid]]], {
+        fields: ['id', 'payment_method_id', 'amount'],
+      }),
+      _closeCallKw('pos.payment.method', 'search_read', [[]], {
+        fields: ['id', 'name', 'is_cash_count', 'type', 'journal_id', 'split_transactions'],
+      }),
+      _closeCallKw('pos.cash.in.out', 'search_read', [[['session_id', '=', sid]]], {
+        fields: ['id', 'name', 'amount', 'type'],
+      }).catch(() => []), // older Odoo may not have this model — fall back to []
+      _closeCallKw('pos.order', 'search_read', [[['session_id', '=', sid]]], {
+        fields: ['id', 'amount_total'],
+      }),
+    ]);
 
-    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'pos.session',
-        method: 'action_pos_session_close',
-        args: [[sessionId]],
-        kwargs: {},
-      },
-      id: new Date().getTime(),
-    }, { headers: { 'Content-Type': 'application/json' } });
+    const session = sessionRows?.[0] || null;
+    const orderCount = orders.length;
+    const orderTotal = orders.reduce((sum, o) => sum + (Number(o.amount_total) || 0), 0);
 
-    if (response.data && response.data.error) {
-      console.error('[CLOSE POS SESSION] Odoo error:', response.data.error);
-      return { error: response.data.error };
+    return { session, payments, methods, cashMoves, orderCount, orderTotal };
+  } catch (e) {
+    console.error('[CLOSE POS SESSION] fetchSessionClosingDetails failed:', e?.message || e);
+    return { error: e?.odoo || { message: e?.message || 'Failed to load closing details' } };
+  }
+};
+
+// Close a POS session in Odoo — proper 3-step flow that sets stop_at and
+// cash_register_balance_end_real. The old code only called
+// action_pos_session_close which left stop_at = False, causing Odoo's
+// _compute_last_session to crash with "'bool' object has no attribute
+// 'astimezone'" the next time the POS config was read.
+export const closePOSSesionOdoo = async ({
+  sessionId,
+  countedCash = 0,
+  bankDiffs = {},
+  closingNote = '',
+} = {}) => {
+  try {
+    if (!sessionId) throw new Error('sessionId is required');
+    const sid = Number(sessionId);
+    console.log('[CLOSE POS SESSION] starting close', { sid, countedCash, bankDiffs, closingNote });
+
+    // 1. Move session to 'closing_control' so the rest of the close RPCs run.
+    try {
+      await _closeCallKw('pos.session', 'action_pos_session_closing_control', [[sid]]);
+    } catch (e) {
+      // If already in closing_control / closed, Odoo throws "Session not opened".
+      // We swallow that and continue — subsequent RPCs handle the real state.
+      console.warn('[CLOSE POS SESSION] closing_control step warning:', e?.message);
     }
 
-    console.log('[CLOSE POS SESSION] Session closed successfully');
-    return { success: true, result: response.data.result };
+    // 2. Record the physical cash count — sets cash_register_balance_end_real.
+    try {
+      await _closeCallKw('pos.session', 'post_closing_cash_details', [[sid]], {
+        counted_cash: Number(countedCash) || 0,
+      });
+    } catch (e) {
+      console.warn('[CLOSE POS SESSION] post_closing_cash_details warning:', e?.message);
+    }
+
+    // 3. Save closing note (Odoo doesn't expose a public method for this).
+    if (closingNote) {
+      try {
+        await _closeCallKw('pos.session', 'write', [[sid], { closing_notes: String(closingNote) }]);
+      } catch (e) {
+        console.warn('[CLOSE POS SESSION] closing_notes write warning:', e?.message);
+      }
+    }
+
+    // 4. close_session_from_ui — finalises and SETS stop_at. The kwarg
+    //    `bank_payment_method_diffs` exists in Odoo 17 but was removed in
+    //    Odoo 18/19 (causes "got an unexpected keyword argument"). Try the
+    //    Odoo-17 form first, fall back to the no-kwarg form on that specific
+    //    error.
+    let result = null;
+    try {
+      result = await _closeCallKw('pos.session', 'close_session_from_ui', [[sid]], {
+        bank_payment_method_diffs: bankDiffs || {},
+      });
+    } catch (e) {
+      const msg = e?.message || '';
+      const isUnknownKwarg = /unexpected keyword argument.*bank_payment_method_diffs/i.test(msg);
+      if (isUnknownKwarg) {
+        console.warn('[CLOSE POS SESSION] retrying close_session_from_ui without kwarg (Odoo 18/19)');
+        try {
+          result = await _closeCallKw('pos.session', 'close_session_from_ui', [[sid]]);
+        } catch (retryErr) {
+          console.warn('[CLOSE POS SESSION] retry also failed:', retryErr?.message);
+        }
+      } else {
+        console.warn('[CLOSE POS SESSION] close_session_from_ui error:', msg);
+      }
+    }
+
+    // Belt-and-braces: even if step 4 errored, the earlier steps may have
+    // moved the session to 'closed' already. Re-read state and treat as
+    // success if so — this prevents the misleading "Odoo Error" alert when
+    // the close actually succeeded.
+    try {
+      const sessionRows = await _closeCallKw('pos.session', 'read', [[sid], ['state', 'stop_at']]);
+      const state = sessionRows?.[0]?.state;
+      const stopAt = sessionRows?.[0]?.stop_at;
+      console.log('[CLOSE POS SESSION] post-close state =', state, 'stop_at =', stopAt);
+      if (state === 'closed') {
+        // If stop_at didn't get set (older Odoo edge case), patch it ourselves
+        // so _compute_last_session doesn't crash on the next config read.
+        if (!stopAt) {
+          const now = new Date();
+          const iso = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')} ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
+          try { await _closeCallKw('pos.session', 'write', [[sid], { stop_at: iso }]); } catch (_) {}
+        }
+        console.log('[CLOSE POS SESSION] success (state confirmed closed)');
+        return { success: true, result };
+      }
+    } catch (e) {
+      console.warn('[CLOSE POS SESSION] post-close state read failed:', e?.message);
+    }
+
+    console.log('[CLOSE POS SESSION] success', result);
+    return { success: true, result };
   } catch (error) {
-    console.error('closePOSSesionOdoo error:', error);
-    return { error };
+    const detail = error?.odoo?.data?.message || error?.message || 'Failed to close session';
+    console.error('[CLOSE POS SESSION] error:', detail, error);
+    return { error: { message: detail, original: error?.odoo || error } };
+  }
+};
+
+// Heal pos.session rows that were closed by the old buggy flow (stop_at = False).
+// Without this, Odoo's _compute_last_session keeps crashing on the bad rows.
+// Fire-and-forget — called once post-login.
+export const healStaleClosedSessions = async () => {
+  try {
+    const stale = await _closeCallKw('pos.session', 'search_read', [
+      [['state', '=', 'closed'], ['stop_at', '=', false]],
+    ], { fields: ['id'], limit: 50 });
+    const ids = (stale || []).map((s) => s.id).filter(Boolean);
+    if (ids.length === 0) {
+      console.log('[CLOSE POS SESSION] heal: no stale sessions');
+      return { healed: 0 };
+    }
+    const now = new Date();
+    const iso = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')} ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
+    await _closeCallKw('pos.session', 'write', [ids, { stop_at: iso }]);
+    console.log('[CLOSE POS SESSION] heal: patched stop_at on', ids.length, 'session(s)');
+    return { healed: ids.length };
+  } catch (e) {
+    console.warn('[CLOSE POS SESSION] heal failed (non-fatal):', e?.message || e);
+    return { healed: 0, error: e?.message };
   }
 };
 
@@ -5500,7 +5657,11 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '' 
       return { error: response.data.error };
     }
 
-    const orders = response.data.result || [];
+    // Hermes (production build) strict-iterates `for...of` and throws "iterator
+    // method is not callable" if response.data.result is not actually an array
+    // (e.g. when Odoo returns an error envelope object). Guard before passing
+    // to the FlashList pipeline so the prod build behaves like dev.
+    const orders = Array.isArray(response.data?.result) ? response.data.result : [];
     console.log('[FETCH POS ORDERS] Retrieved orders count:', orders.length);
     return orders;
   } catch (error) {

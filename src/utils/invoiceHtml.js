@@ -220,4 +220,156 @@ export const generateInvoiceHtml = ({
   return html;
 };
 
+// Daily Sale summary — generated from the Closing Register modal in
+// POSRegister.js. Prints a one-page A4 breakdown of the current session's
+// takings (orders, payments by method, cash drawer reconciliation) so the
+// cashier has a paper trail of the day's totals to file/hand off.
+export const generateDailySaleHtml = ({
+  session = {},
+  closeDetails = {},
+  countedCash = 0,
+  closingNote = '',
+  companyProfile = null,
+  cashierName = 'Cashier',
+} = {}) => {
+  const _cur = getActiveCurrency();
+  const CURRENCY_SYMBOL = _cur.symbol || _cur.name || '';
+  const fmt = (n) => {
+    const v = Number(n);
+    const safe = Number.isFinite(v) ? v : 0;
+    return CURRENCY_SYMBOL ? `${CURRENCY_SYMBOL} ${safe.toFixed(2)}` : safe.toFixed(2);
+  };
+
+  const methods = closeDetails.methods || [];
+  const payments = closeDetails.payments || [];
+  const cashMoves = closeDetails.cashMoves || [];
+  const orderCount = closeDetails.orderCount || 0;
+  const orderTotal = closeDetails.orderTotal || 0;
+
+  const openingCash = Number(session.cash_register_balance_start) || 0;
+  const cashInOutTotal = cashMoves.reduce((s, m) => s + (Number(m.amount) || 0), 0);
+  const cashMethod = methods.find((m) => m.is_cash_count) || null;
+  const sumForMethod = (mid) => payments
+    .filter((p) => Array.isArray(p.payment_method_id) && p.payment_method_id[0] === mid)
+    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const paymentsInCash = cashMethod ? sumForMethod(cashMethod.id) : 0;
+  const cashExpected = openingCash + cashInOutTotal + paymentsInCash;
+  const cashCountedNum = Number(countedCash) || 0;
+  const cashDiff = cashCountedNum - cashExpected;
+
+  const sessionName = escapeHtml(session.name || '—');
+  const registerName = Array.isArray(session.config_id) ? escapeHtml(session.config_id[1] || '—') : '—';
+  const startAt = session.start_at ? escapeHtml(String(session.start_at)) : '—';
+  const generatedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const companyName = escapeHtml(companyProfile?.name || 'Company');
+
+  const methodRows = methods.map((m) => {
+    const amount = sumForMethod(m.id);
+    const tag = m.is_cash_count ? 'Cash' : (m.split_transactions ? 'Customer Account' : 'Bank');
+    return `<tr>
+      <td>${escapeHtml(m.name || '—')}</td>
+      <td style="color:#6b7280;">${tag}</td>
+      <td style="text-align:right;">${fmt(amount)}</td>
+    </tr>`;
+  }).join('');
+
+  const cashMovesRows = cashMoves.length
+    ? cashMoves.map((c) => `<tr>
+        <td>${escapeHtml(c.name || '—')}</td>
+        <td style="text-align:right;">${fmt(c.amount)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="2" style="text-align:center; color:#9ca3af;">No cash in/out moves</td></tr>';
+
+  const closingNoteBlock = closingNote
+    ? `<div class="section">
+         <div class="sectionTitle">Closing Note</div>
+         <div class="note">${escapeHtml(closingNote)}</div>
+       </div>`
+    : '';
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Daily Sale</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #111; }
+  .doc { width: 100%; box-sizing: border-box; }
+  .header { display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 10px; border-bottom: 2px solid #111; }
+  .titleBlock h1 { margin: 0; font-size: 22px; }
+  .titleBlock .sub { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .meta { font-size: 11px; color: #6b7280; text-align: right; line-height: 1.6; }
+  .section { margin-top: 18px; }
+  .sectionTitle { font-size: 14px; font-weight: 700; color: #111; margin-bottom: 8px;
+                  border-left: 4px solid #7c3aed; padding-left: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 7px 8px; border-bottom: 1px solid #e5e7eb; }
+  th { text-align: left; color: #374151; background: #f9fafb; }
+  .summaryRow { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; }
+  .summaryRow .lbl { color: #6b7280; }
+  .summaryRow .val { font-weight: 700; }
+  .grand { border-top: 2px solid #111; margin-top: 6px; padding-top: 8px; font-size: 14px; }
+  .diffNeg { color: #dc2626; font-weight: 700; }
+  .note { font-size: 12px; color: #111; background: #f9fafb; border: 1px solid #e5e7eb;
+          border-radius: 6px; padding: 10px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <div class="doc">
+    <div class="header">
+      <div class="titleBlock">
+        <h1>Daily Sale Report</h1>
+        <div class="sub">${companyName}</div>
+      </div>
+      <div class="meta">
+        <div><strong>Register:</strong> ${registerName}</div>
+        <div><strong>Session:</strong> ${sessionName}</div>
+        <div><strong>Cashier:</strong> ${escapeHtml(cashierName)}</div>
+        <div><strong>Opened:</strong> ${startAt}</div>
+        <div><strong>Generated:</strong> ${generatedAt}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">Orders Summary</div>
+      <div class="summaryRow"><div class="lbl">Number of orders</div><div class="val">${orderCount}</div></div>
+      <div class="summaryRow grand"><div class="lbl">Total sales</div><div class="val">${fmt(orderTotal)}</div></div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">Payments by Method</div>
+      <table>
+        <thead><tr><th>Method</th><th>Type</th><th style="text-align:right;">Amount</th></tr></thead>
+        <tbody>${methodRows || '<tr><td colspan="3" style="text-align:center; color:#9ca3af;">No payments</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">Cash Drawer</div>
+      <div class="summaryRow"><div class="lbl">Opening</div><div class="val">${fmt(openingCash)}</div></div>
+      <div class="summaryRow"><div class="lbl">Payments in Cash</div><div class="val">${fmt(paymentsInCash)}</div></div>
+      <div class="summaryRow"><div class="lbl">Cash In / Out</div><div class="val">${cashInOutTotal >= 0 ? '+ ' : ''}${fmt(cashInOutTotal)}</div></div>
+      <div class="summaryRow"><div class="lbl">Expected</div><div class="val">${fmt(cashExpected)}</div></div>
+      <div class="summaryRow"><div class="lbl">Counted</div><div class="val">${fmt(cashCountedNum)}</div></div>
+      <div class="summaryRow grand">
+        <div class="lbl">Difference</div>
+        <div class="val ${cashDiff !== 0 ? 'diffNeg' : ''}">${fmt(cashDiff)}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="sectionTitle">Cash In / Out Moves</div>
+      <table>
+        <thead><tr><th>Reason</th><th style="text-align:right;">Amount</th></tr></thead>
+        <tbody>${cashMovesRows}</tbody>
+      </table>
+    </div>
+
+    ${closingNoteBlock}
+  </div>
+</body>
+</html>`;
+};
+
 export default generateInvoiceHtml;

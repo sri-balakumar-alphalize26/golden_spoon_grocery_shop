@@ -13,6 +13,7 @@ import {
   Modal,
   TextInput,
   Dimensions,
+  ScrollView,
 } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
@@ -22,12 +23,16 @@ import {
   fetchPOSSessions,
   createPOSSesionOdoo,
   closePOSSesionOdoo,
+  fetchSessionClosingDetails,
   fetchDraftPosOrders,
   unlinkPosOrders,
 } from '@api/services/generalApi';
 import useAuthStore from '@stores/auth/useAuthStore';
 import { formatCurrency } from '@utils/currency';
 import { FeatureGate } from '@components/FeatureGate';
+import * as Print from 'expo-print';
+import { generateDailySaleHtml } from '@utils/invoiceHtml';
+import Toast from 'react-native-toast-message';
 
 // 3D Animated card wrapper — matches the Restaurantnexgenn reference
 const Card3D = ({ children, style, delay = 0 }) => {
@@ -75,9 +80,25 @@ const POSRegister = ({ navigation }) => {
   const [openingNote, setOpeningNote] = useState('');
   const [openingSubmitting, setOpeningSubmitting] = useState(false);
 
-  // Close confirmation modal state — shown when user taps "Close" on an active session
+  // Closing Register modal state — shown when user taps "Close" on an active
+  // session. Mirrors the Odoo Web POS "Closing Register" modal: per-payment-
+  // method rows with Counted + Difference, plus a Cash Count input and Closing
+  // note. The state below is populated from fetchSessionClosingDetails() the
+  // moment the modal opens.
   const [closeModalVisible, setCloseModalVisible] = useState(false);
   const [closeTargetId, setCloseTargetId] = useState(null);
+  const [closeDetails, setCloseDetails] = useState(null);       // { session, payments, methods, cashMoves, orderCount, orderTotal }
+  const [closeLoading, setCloseLoading] = useState(false);      // fetching closing details
+  const [closing, setClosing] = useState(false);                 // submitting the close
+  const [countedCash, setCountedCash] = useState('');
+  const [bankCounted, setBankCounted] = useState({});           // { [methodId]: '<string>' }
+  const [closingNote, setClosingNote] = useState('');
+
+  // Coins/Notes popup state — secondary modal that opens from the cash icon
+  // next to the Cash Count field. Each row counts a denomination, the live
+  // total goes into Cash Count on Confirm.
+  const [coinsModalVisible, setCoinsModalVisible] = useState(false);
+  const [coinCounts, setCoinCounts] = useState({});             // { '500': 0, '200': 0, ... }
 
   const loadRegistersAndSessions = async () => {
     console.log('[POSRegister] loading registers and open sessions');
@@ -151,8 +172,9 @@ const POSRegister = ({ navigation }) => {
       setOpeningModalVisible(false);
       const sessionLabel = resp.sessionId ? `Session ID: ${resp.sessionId}` : 'Session opened';
       Alert.alert('Register Opened', sessionLabel);
-      const sessions = await fetchPOSSessions({ state: 'opened' });
-      setOpenSessions(Array.isArray(sessions) ? sessions : []);
+      // Full screen refresh: pulls fresh fetchPOSRegisters + fetchPOSSessions
+      // so the closed-registers list updates as well as the open-sessions list.
+      await loadRegistersAndSessions();
     } catch (err) {
       console.error('[POSRegister] open register exception:', err);
       Alert.alert('Error', err?.message || 'Failed to open register');
@@ -161,34 +183,156 @@ const POSRegister = ({ navigation }) => {
     }
   };
 
-  // Open the styled "Close Register?" confirmation modal (replaces native Alert).
-  const handleCloseRegisterSession = (sessionId) => {
+  // Open the Odoo-style Closing Register modal. Fetches the session's
+  // payments / methods / cash moves / order totals first so the modal can
+  // render expected vs counted per payment method.
+  const handleCloseRegisterSession = async (sessionId) => {
     setCloseTargetId(sessionId);
     setCloseModalVisible(true);
+    setCloseLoading(true);
+    setCloseDetails(null);
+    setCountedCash('');
+    setBankCounted({});
+    setClosingNote('');
+    try {
+      const details = await fetchSessionClosingDetails({ sessionId });
+      if (details?.error) {
+        Alert.alert('Close Register', details.error.message || 'Could not load closing details');
+        setCloseModalVisible(false);
+        return;
+      }
+      // Seed bank-method counted amounts to the expected total so a zero-diff
+      // close is one tap. Cashier overrides if they actually counted less/more.
+      const seeded = {};
+      (details.methods || []).forEach((m) => {
+        if (m.is_cash_count) return;
+        const expected = (details.payments || [])
+          .filter((p) => Array.isArray(p.payment_method_id) && p.payment_method_id[0] === m.id)
+          .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+        seeded[m.id] = String(expected.toFixed(2));
+      });
+      setBankCounted(seeded);
+      setCloseDetails(details);
+    } catch (e) {
+      Alert.alert('Close Register', e?.message || 'Could not load closing details');
+      setCloseModalVisible(false);
+    } finally {
+      setCloseLoading(false);
+    }
   };
 
-  const confirmCloseRegister = () => {
-    const id = closeTargetId;
+  const handleDiscardClose = () => {
+    if (closing) return;
     setCloseModalVisible(false);
     setCloseTargetId(null);
-    if (id) doCloseRegister(id);
+    setCloseDetails(null);
+    setCountedCash('');
+    setBankCounted({});
+    setClosingNote('');
+    setCoinCounts({});
   };
 
-  // Tries to close. If Odoo refuses with "still orders in draft state",
-  // offers the user a one-tap "Discard X drafts and retry close" path.
-  const doCloseRegister = async (sessionId) => {
-    console.log('[POSRegister] Close Register confirmed', { sessionId });
-    setLoading(true);
+  // Coins/Notes popup — denominations the cashier can count by physically
+  // sorting the drawer. Defaults are INR-appropriate; symbol pulled from
+  // formatCurrency below so it adapts if the org switches currency.
+  const COIN_DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5];
+
+  const openCoinsModal = () => {
+    // Reset per-denomination counts every time so the popup is a clean slate.
+    setCoinCounts({});
+    setCoinsModalVisible(true);
+  };
+
+  const incCoin = (d, delta) => {
+    setCoinCounts((c) => {
+      const cur = Number(c[d]) || 0;
+      const next = Math.max(0, cur + delta);
+      return { ...c, [d]: next };
+    });
+  };
+
+  const setCoinQty = (d, raw) => {
+    const v = parseInt(String(raw).replace(/[^0-9]/g, ''), 10);
+    setCoinCounts((c) => ({ ...c, [d]: Number.isFinite(v) ? v : 0 }));
+  };
+
+  const coinsTotal = COIN_DENOMINATIONS.reduce(
+    (sum, d) => sum + d * (Number(coinCounts[d]) || 0),
+    0,
+  );
+
+  const confirmCoinsModal = () => {
+    setCountedCash(coinsTotal > 0 ? coinsTotal.toFixed(2) : '');
+    setCoinsModalVisible(false);
+  };
+
+  // Daily Sale button — generate an A4 PDF summary of the current session's
+  // takings and open the OS print/share sheet via expo-print. Reuses
+  // generateDailySaleHtml + the company profile + cashier name from the auth
+  // store (same source the receipt printer uses).
+  const handleDailySale = async () => {
+    if (!closeDetails?.session) {
+      Toast.show({ type: 'error', text1: 'Daily Sale', text2: 'Session details not loaded yet' });
+      return;
+    }
     try {
-      const resp = await closePOSSesionOdoo({ sessionId });
-      console.log('[POSRegister] closePOSSesionOdoo response:', resp);
-      if (resp && resp.error) {
-        const msg = resp.error.data?.message || resp.error.message || 'Failed to close register';
-        console.error('[POSRegister] close register error:', msg);
+      const authState = useAuthStore.getState();
+      const companyProfile = authState.companyProfile || null;
+      const cashierName = authState.user?.name || authState.user?.login || 'Cashier';
+      const html = generateDailySaleHtml({
+        session: closeDetails.session,
+        closeDetails,
+        countedCash: parseFloat(countedCash) || 0,
+        closingNote,
+        companyProfile,
+        cashierName,
+      });
+      await Print.printAsync({ html });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Print failed', text2: e?.message || 'Try again' });
+    }
+  };
+
+  // Copy-expected button: one-tap fill the Cash Count field with the cashier-
+  // side expected total (Opening + Payments-in-Cash + Cash In/Out).
+  const handleCopyExpectedCash = () => {
+    if (!closeDetails) return;
+    const methods = closeDetails.methods || [];
+    const payments = closeDetails.payments || [];
+    const cashMethod = methods.find((m) => m.is_cash_count) || null;
+    if (!cashMethod) return;
+    const opening = Number(closeDetails.session?.cash_register_balance_start) || 0;
+    const cashInOut = (closeDetails.cashMoves || []).reduce((sum, m) => sum + (Number(m.amount) || 0), 0);
+    const paymentsInCash = payments
+      .filter((p) => Array.isArray(p.payment_method_id) && p.payment_method_id[0] === cashMethod.id)
+      .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const expected = opening + cashInOut + paymentsInCash;
+    setCountedCash(expected.toFixed(2));
+  };
+
+  // Submit the close via the new 3-step RPC. On Odoo "draft order" error,
+  // offer to discard drafts and retry (preserves the old recovery path).
+  const handleConfirmClose = async () => {
+    if (!closeTargetId || closing) return;
+    setClosing(true);
+    try {
+      const bankDiffs = {};
+      (closeDetails?.methods || []).forEach((m) => {
+        if (m.is_cash_count) return;
+        const v = parseFloat(bankCounted[m.id]);
+        bankDiffs[m.id] = Number.isFinite(v) ? v : 0;
+      });
+      const resp = await closePOSSesionOdoo({
+        sessionId: closeTargetId,
+        countedCash: parseFloat(countedCash) || 0,
+        bankDiffs,
+        closingNote,
+      });
+      if (resp?.error) {
+        const msg = resp.error.message || 'Failed to close register';
         const isDraftError = /draft state/i.test(msg) && /Pay or cancel/i.test(msg);
         if (isDraftError) {
-          // Offer to discard the drafts and retry
-          const drafts = await fetchDraftPosOrders(sessionId);
+          const drafts = await fetchDraftPosOrders(closeTargetId);
           const count = drafts.length;
           Alert.alert(
             'Draft Orders Block Close',
@@ -202,29 +346,28 @@ const POSRegister = ({ navigation }) => {
                     text: `Discard ${count} & Retry`,
                     style: 'destructive',
                     onPress: async () => {
-                      setLoading(true);
+                      setClosing(true);
                       try {
                         const ids = drafts.map((d) => d.id);
-                        console.log('[POSRegister] discarding drafts', ids);
                         const r = await unlinkPosOrders(ids);
-                        if (r?.error) {
-                          Alert.alert('Discard Error', r.error);
-                          return;
-                        }
-                        // Retry close
-                        const retryResp = await closePOSSesionOdoo({ sessionId });
+                        if (r?.error) { Alert.alert('Discard Error', r.error); return; }
+                        const retryResp = await closePOSSesionOdoo({
+                          sessionId: closeTargetId,
+                          countedCash: parseFloat(countedCash) || 0,
+                          bankDiffs,
+                          closingNote,
+                        });
                         if (retryResp?.error) {
-                          const retryMsg = retryResp.error.data?.message || retryResp.error.message || 'Failed to close register';
-                          Alert.alert('Odoo Error', retryMsg);
+                          Alert.alert('Odoo Error', retryResp.error.message || 'Failed to close register');
                           return;
                         }
                         Alert.alert('Register Closed', 'Drafts discarded and session closed.');
-                        const sessions = await fetchPOSSessions({ state: 'opened' });
-                        setOpenSessions(Array.isArray(sessions) ? sessions : []);
+                        handleDiscardClose();
+                        await loadRegistersAndSessions();
                       } catch (e) {
                         Alert.alert('Error', e?.message || 'Failed to discard drafts');
                       } finally {
-                        setLoading(false);
+                        setClosing(false);
                       }
                     },
                   },
@@ -234,16 +377,15 @@ const POSRegister = ({ navigation }) => {
         } else {
           Alert.alert('Odoo Error', msg);
         }
-      } else {
-        Alert.alert('Register Closed', 'Session closed successfully');
-        const sessions = await fetchPOSSessions({ state: 'opened' });
-        setOpenSessions(Array.isArray(sessions) ? sessions : []);
+        return;
       }
+      Alert.alert('Register Closed', 'Session closed successfully');
+      handleDiscardClose();
+      await loadRegistersAndSessions();
     } catch (err) {
-      console.error('[POSRegister] close register exception:', err);
       Alert.alert('Error', err?.message || 'Failed to close register');
     } finally {
-      setLoading(false);
+      setClosing(false);
     }
   };
 
@@ -448,37 +590,270 @@ const POSRegister = ({ navigation }) => {
         />
       )}
 
-      {/* Close Register confirmation — styled like LogoutModal */}
+      {/* Closing Register modal — mirrors the Odoo Web POS "Closing Register"
+          dialog. Renders per-payment-method rows (Cash with Opening / Cash In-
+          Out / Counted / Difference; non-cash with Counted / Difference), a
+          Cash Count input, a Closing note text area, and an order-count badge
+          on the right of the header. Tapping Close Register submits via the
+          3-step RPC that sets stop_at and ending balance correctly. */}
       <Modal
         visible={closeModalVisible}
         animationType="fade"
         transparent
-        onRequestClose={() => setCloseModalVisible(false)}
+        onRequestClose={handleDiscardClose}
       >
-        <View style={s.alertBg}>
-          <View style={s.alertCard}>
-            <View style={s.alertIconDisk}>
-              <MaterialIcons name="warning-amber" size={28} color="#dc2626" />
+        <View style={s.closeModalBg}>
+          <View style={s.closeModalCard}>
+            <View style={s.closeHeaderRow}>
+              <Text style={s.closeTitle}>Closing Register</Text>
+              <Text style={s.closeOrders}>
+                {`${closeDetails?.orderCount ?? 0} orders: ${formatCurrency(closeDetails?.orderTotal || 0)}`}
+              </Text>
             </View>
-            <Text style={s.alertTitle}>Close Register?</Text>
-            <Text style={s.alertText}>
-              This will end the current POS session. Make sure all orders are paid or cancelled before closing.
-            </Text>
-            <View style={s.alertBtnRow}>
+
+            {closeLoading ? (
+              <View style={s.closeLoadingWrap}>
+                <ActivityIndicator size="large" color="#7c3aed" />
+                <Text style={s.closeLoadingText}>Loading closing details…</Text>
+              </View>
+            ) : (
+              <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.55 }}>
+                {(() => {
+                  // Derive everything the rows need from closeDetails.
+                  const methods = closeDetails?.methods || [];
+                  const payments = closeDetails?.payments || [];
+                  const cashMoves = closeDetails?.cashMoves || [];
+                  const openingCashAmt = Number(closeDetails?.session?.cash_register_balance_start) || 0;
+                  const cashInOutTotal = cashMoves.reduce((sum, m) => sum + (Number(m.amount) || 0), 0);
+
+                  // Expected per method (sum of pos.payment.amount for that method)
+                  const expectedByMethod = {};
+                  methods.forEach((m) => {
+                    expectedByMethod[m.id] = payments
+                      .filter((p) => Array.isArray(p.payment_method_id) && p.payment_method_id[0] === m.id)
+                      .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                  });
+
+                  const cashMethod = methods.find((m) => m.is_cash_count) || null;
+                  const cashExpected = openingCashAmt + cashInOutTotal + (cashMethod ? expectedByMethod[cashMethod.id] || 0 : 0);
+                  const cashCountedNum = parseFloat(countedCash) || 0;
+                  const cashDiff = cashCountedNum - cashExpected;
+                  const bankMethods = methods.filter((m) => !m.is_cash_count);
+
+                  return (
+                    <>
+                      {/* Cash section */}
+                      {cashMethod ? (
+                        <View style={s.methodSection}>
+                          <View style={s.methodHeaderRow}>
+                            <Text style={s.methodName}>{cashMethod.name || 'Cash'}</Text>
+                            <Text style={s.methodAmount}>{formatCurrency(cashExpected)}</Text>
+                          </View>
+                          <View style={s.closeRow}>
+                            <Text style={s.closeRowLabel}>Opening</Text>
+                            <Text style={s.closeRowValue}>{formatCurrency(openingCashAmt)}</Text>
+                          </View>
+                          <View style={s.closeRow}>
+                            <Text style={s.closeRowLabel}>Payments in Cash</Text>
+                            <Text style={s.closeRowValue}>{formatCurrency(expectedByMethod[cashMethod.id] || 0)}</Text>
+                          </View>
+                          <View style={s.closeRow}>
+                            <Text style={s.closeRowLabel}>Cash In / Out</Text>
+                            <Text style={s.closeRowValue}>{`${cashInOutTotal >= 0 ? '+ ' : ''}${formatCurrency(cashInOutTotal)}`}</Text>
+                          </View>
+                          <View style={s.closeRow}>
+                            <Text style={s.closeRowLabel}>Counted</Text>
+                            <Text style={s.closeRowValue}>{formatCurrency(cashCountedNum)}</Text>
+                          </View>
+                          <View style={s.closeRow}>
+                            <Text style={[s.closeRowLabel, cashDiff !== 0 && s.closeRowRed]}>Difference</Text>
+                            <Text style={[s.closeRowValue, cashDiff !== 0 && s.closeRowRed]}>{formatCurrency(cashDiff)}</Text>
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {/* Non-cash methods (Card, Credit, Customer Account, etc.) */}
+                      {bankMethods.map((m) => {
+                        const expected = expectedByMethod[m.id] || 0;
+                        const counted = parseFloat(bankCounted[m.id]) || 0;
+                        const diff = counted - expected;
+                        return (
+                          <View key={m.id} style={s.methodSection}>
+                            <View style={s.methodHeaderRow}>
+                              <Text style={s.methodName}>{m.name}</Text>
+                              <Text style={s.methodAmount}>{formatCurrency(expected)}</Text>
+                            </View>
+                            <View style={s.closeRow}>
+                              <Text style={s.closeRowLabel}>Counted</Text>
+                              <TextInput
+                                style={s.closeRowInput}
+                                value={bankCounted[m.id] ?? ''}
+                                onChangeText={(t) => setBankCounted({ ...bankCounted, [m.id]: t.replace(/[^0-9.\-]/g, '') })}
+                                keyboardType="decimal-pad"
+                                placeholder="0"
+                              />
+                            </View>
+                            <View style={s.closeRow}>
+                              <Text style={[s.closeRowLabel, diff !== 0 && s.closeRowRed]}>Difference</Text>
+                              <Text style={[s.closeRowValue, diff !== 0 && s.closeRowRed]}>{formatCurrency(diff)}</Text>
+                            </View>
+                          </View>
+                        );
+                      })}
+
+                      {/* Cash Count input row — text input + X clear + Coins/Notes
+                          icon + Copy-expected icon. Mirrors the Odoo Web layout. */}
+                      <Text style={s.closeFieldLabel}>Cash Count</Text>
+                      <View style={s.cashCountRow}>
+                        <View style={s.cashCountInputWrap}>
+                          <TextInput
+                            style={s.cashCountInput}
+                            value={countedCash}
+                            onChangeText={(t) => setCountedCash(t.replace(/[^0-9.]/g, ''))}
+                            keyboardType="decimal-pad"
+                            placeholder="0"
+                            placeholderTextColor="#9ca3af"
+                          />
+                          {countedCash ? (
+                            <TouchableOpacity
+                              onPress={() => setCountedCash('')}
+                              style={s.cashCountClearBtn}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <MaterialIcons name="close" size={16} color="#6b7280" />
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                        <TouchableOpacity
+                          onPress={openCoinsModal}
+                          style={s.cashCountIconBtn}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialCommunityIcons name="cash-multiple" size={20} color="#374151" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={handleCopyExpectedCash}
+                          style={s.cashCountIconBtn}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialIcons name="content-copy" size={18} color="#374151" />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Closing note */}
+                      <Text style={s.closeFieldLabel}>Closing note</Text>
+                      <TextInput
+                        style={s.closingNoteInput}
+                        value={closingNote}
+                        onChangeText={setClosingNote}
+                        multiline
+                        numberOfLines={3}
+                        placeholder="Add a closing note..."
+                        placeholderTextColor="#9ca3af"
+                      />
+                    </>
+                  );
+                })()}
+              </ScrollView>
+            )}
+
+            <View style={s.closeFooterRow}>
               <TouchableOpacity
-                onPress={() => { setCloseModalVisible(false); setCloseTargetId(null); }}
-                style={[s.alertBtn, s.alertBtnGhost]}
+                onPress={handleConfirmClose}
+                style={[s.closeRegisterBtn, (closing || closeLoading) && { opacity: 0.55 }]}
+                disabled={closing || closeLoading}
                 activeOpacity={0.85}
               >
-                <Text style={s.alertBtnGhostText}>NO</Text>
+                {closing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={s.closeRegisterText}>Close Register</Text>
+                )}
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={confirmCloseRegister}
-                style={[s.alertBtn, s.alertBtnDanger]}
+                onPress={handleDiscardClose}
+                style={s.discardBtn}
+                disabled={closing}
                 activeOpacity={0.85}
               >
-                <Text style={s.alertBtnDangerText}>YES, CLOSE</Text>
+                <Text style={s.discardText}>Discard</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDailySale}
+                style={s.dailySaleBtn}
+                disabled={closing || closeLoading || !closeDetails?.session}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons name="file-download" size={16} color="#374151" />
+                <Text style={s.dailySaleText}>Daily Sale</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Coins/Notes popup — opens from the cash icon next to Cash Count. The
+          cashier increments each denomination row physically counted; Confirm
+          writes the running total into the Cash Count field. */}
+      <Modal
+        visible={coinsModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setCoinsModalVisible(false)}
+      >
+        <View style={s.coinsModalBg}>
+          <View style={s.coinsModalCard}>
+            <View style={s.coinsHeaderRow}>
+              <Text style={s.coinsTitle}>Coins/Notes</Text>
+              <TouchableOpacity
+                onPress={() => setCoinsModalVisible(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <MaterialIcons name="close" size={20} color="#374151" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.55 }}>
+              <View style={s.coinsGrid}>
+                {COIN_DENOMINATIONS.map((d) => {
+                  const qty = Number(coinCounts[d]) || 0;
+                  return (
+                    <View key={d} style={s.coinRow}>
+                      <TouchableOpacity
+                        onPress={() => incCoin(d, -1)}
+                        style={s.coinStepBtn}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="remove" size={16} color="#374151" />
+                      </TouchableOpacity>
+                      <TextInput
+                        style={s.coinQtyInput}
+                        value={String(qty)}
+                        onChangeText={(v) => setCoinQty(d, v)}
+                        keyboardType="number-pad"
+                        textAlign="center"
+                      />
+                      <TouchableOpacity
+                        onPress={() => incCoin(d, +1)}
+                        style={s.coinStepBtn}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="add" size={16} color="#374151" />
+                      </TouchableOpacity>
+                      <Text style={s.coinDenomLabel}>{formatCurrency(d)}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+            <View style={s.coinsFooterRow}>
+              <TouchableOpacity
+                onPress={confirmCoinsModal}
+                style={s.coinsConfirmBtn}
+                activeOpacity={0.85}
+              >
+                <Text style={s.coinsConfirmText}>Confirm</Text>
+              </TouchableOpacity>
+              <Text style={s.coinsTotalText}>{`Total ${formatCurrency(coinsTotal)}`}</Text>
             </View>
           </View>
         </View>
@@ -954,6 +1329,163 @@ const s = StyleSheet.create({
   },
   opBtnInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   opBtnPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 14, letterSpacing: 0.3, marginLeft: 6 },
+
+  // ── Closing Register modal — mirrors the Odoo Web POS dialog ─────────────
+  closeModalBg: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center', justifyContent: 'center', padding: 16,
+  },
+  closeModalCard: {
+    width: '100%', maxWidth: 520, backgroundColor: '#fff',
+    borderRadius: 14, paddingVertical: 18, paddingHorizontal: 18,
+    maxHeight: '92%',
+  },
+  closeHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderBottomWidth: 1, borderBottomColor: '#e5e7eb',
+    paddingBottom: 12, marginBottom: 6,
+  },
+  closeTitle: { fontSize: 18, fontWeight: '800', color: '#111' },
+  closeOrders: { fontSize: 13, fontWeight: '700', color: '#111' },
+  closeLoadingWrap: { paddingVertical: 40, alignItems: 'center' },
+  closeLoadingText: { marginTop: 10, color: '#6b7280', fontSize: 13 },
+
+  methodSection: {
+    paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#e5e7eb',
+  },
+  methodHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  methodName: { fontSize: 16, fontWeight: '700', color: '#111' },
+  methodAmount: { fontSize: 15, fontWeight: '700', color: '#111' },
+
+  closeRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 4, paddingLeft: 12,
+  },
+  closeRowLabel: { fontSize: 13, color: '#6b7280' },
+  closeRowValue: { fontSize: 13, color: '#111' },
+  closeRowRed: { color: '#dc2626', fontWeight: '700' },
+  closeRowInput: {
+    minWidth: 100, paddingHorizontal: 8, paddingVertical: 4,
+    borderBottomWidth: 1, borderBottomColor: '#cbd5e1',
+    fontSize: 13, color: '#111', textAlign: 'right',
+  },
+
+  closeFieldLabel: {
+    marginTop: 14, marginBottom: 6, fontSize: 13, fontWeight: '600', color: '#111',
+  },
+  cashCountRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  cashCountInputWrap: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8,
+    paddingHorizontal: 12,
+  },
+  cashCountInput: {
+    flex: 1, paddingVertical: 10, fontSize: 14, color: '#111',
+  },
+  cashCountClearBtn: {
+    width: 22, height: 22, borderRadius: 11,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  cashCountIconBtn: {
+    width: 38, height: 38, borderRadius: 8,
+    borderWidth: 1, borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // ── Coins/Notes popup ────────────────────────────────────────────────────
+  coinsModalBg: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center', justifyContent: 'center', padding: 16,
+  },
+  coinsModalCard: {
+    width: '100%', maxWidth: 460, backgroundColor: '#fff',
+    borderRadius: 14, paddingVertical: 16, paddingHorizontal: 16,
+    maxHeight: '92%',
+  },
+  coinsHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderBottomWidth: 1, borderBottomColor: '#e5e7eb',
+    paddingBottom: 10, marginBottom: 8,
+  },
+  coinsTitle: { fontSize: 16, fontWeight: '800', color: '#111' },
+  coinsGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    paddingVertical: 4,
+  },
+  coinRow: {
+    flexDirection: 'row', alignItems: 'center',
+    width: '50%',
+    paddingVertical: 6, paddingHorizontal: 4,
+  },
+  coinStepBtn: {
+    width: 28, height: 28, borderRadius: 6,
+    borderWidth: 1, borderColor: '#cbd5e1',
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  coinQtyInput: {
+    width: 50, height: 30, marginHorizontal: 4,
+    borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 6,
+    paddingVertical: 0, paddingHorizontal: 4,
+    fontSize: 13, color: '#111',
+  },
+  coinDenomLabel: {
+    flex: 1, marginLeft: 8, fontSize: 13, color: '#111', fontWeight: '600',
+  },
+  coinsFooterRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 12, paddingTop: 10,
+    borderTopWidth: 1, borderTopColor: '#e5e7eb',
+  },
+  coinsConfirmBtn: {
+    paddingVertical: 10, paddingHorizontal: 20,
+    backgroundColor: '#7c3aed', borderRadius: 8,
+  },
+  coinsConfirmText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  coinsTotalText: { fontSize: 14, fontWeight: '700', color: '#111' },
+  closingNoteInput: {
+    borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8,
+    paddingVertical: 10, paddingHorizontal: 12, fontSize: 13, color: '#111',
+    textAlignVertical: 'top', minHeight: 64,
+  },
+
+  closeFooterRow: {
+    flexDirection: 'row', gap: 10,
+    marginTop: 16, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: '#e5e7eb',
+  },
+  closeRegisterBtn: {
+    flex: 1,
+    backgroundColor: '#7c3aed',
+    paddingVertical: 12, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  closeRegisterText: { color: '#fff', fontWeight: '700', fontSize: 14, letterSpacing: 0.3 },
+  discardBtn: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderWidth: 1, borderColor: '#cbd5e1',
+    paddingVertical: 12, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  discardText: { color: '#374151', fontWeight: '700', fontSize: 14 },
+  dailySaleBtn: {
+    flexDirection: 'row', gap: 6,
+    flex: 1,
+    backgroundColor: '#fff',
+    borderWidth: 1, borderColor: '#cbd5e1',
+    paddingVertical: 12, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  dailySaleText: { color: '#374151', fontWeight: '700', fontSize: 14 },
 });
 
 export default POSRegister;

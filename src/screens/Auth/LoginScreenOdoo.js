@@ -17,7 +17,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 
 import { Button } from "@components/common/Button";
 import { post } from "@api/services/utils";
-import { fetchPOSRegisters, fetchPOSSessions } from "@api/services/generalApi";
+import { fetchPOSRegisters, fetchPOSSessions, healStaleClosedSessions } from "@api/services/generalApi";
 import Text from "@components/Text";
 import { TextInput } from "@components/common/TextInput";
 import { RoundedScrollContainer, SafeAreaView } from "@components/containers";
@@ -356,6 +356,12 @@ const LoginScreenOdoo = () => {
             .catch((e) => {
               console.error('[POSRegister] preload error after login:', e?.message || e);
             });
+
+          // Fire-and-forget: heal any pos.session rows that the old buggy
+          // close-flow left with stop_at = False. Without this Odoo POS keeps
+          // crashing on _compute_last_session ("'bool' has no attribute
+          // 'astimezone'") until the bad rows are patched.
+          healStaleClosedSessions().catch(() => {});
 
           navigation.navigate("AppNavigator");
         } else {
