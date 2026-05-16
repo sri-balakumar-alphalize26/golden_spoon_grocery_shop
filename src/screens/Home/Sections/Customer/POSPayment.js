@@ -502,9 +502,15 @@ const POSPayment = ({ navigation, route }) => {
           console.log('[PAYMENT] pos.config payment methods:', posMethods);
 
           const cashMethod = posMethods.find((m) => m.is_cash_count === true);
-          const cardMethod = posMethods.find(
+          // Card / Credit are both bank-type pos.payment.methods, distinguished
+          // by name. Fall back to the first bank-type method if the exact name
+          // isn't found (keeps single-bank-method shops working).
+          const bankMethods = posMethods.filter(
             (m) => m.is_cash_count === false && m.split_transactions !== true
           );
+          const findByName = (n) => bankMethods.find((m) => (m.name || '').toLowerCase() === n);
+          const cardMethod = findByName('card') || bankMethods.find((m) => (m.name || '').toLowerCase() !== 'credit') || bankMethods[0];
+          const creditMethod = findByName('credit') || bankMethods.find((m) => (m.name || '').toLowerCase() !== 'card') || bankMethods[1] || bankMethods[0];
 
           const payments = [];
 
@@ -542,8 +548,11 @@ const POSPayment = ({ navigation, route }) => {
             paymentMethodLabel = `Split (${slot1Method.name} + ${slot2Method.name})`;
             console.log(`🪓 Split payment: ${slot1Method.name} ${payments[0].amount} + ${slot2Method.name} ${payments[1].amount} = ${total}`);
           } else {
-            // Single-method (cash or card) — existing flow.
-            let method = paymentMode === 'cash' ? cashMethod : cardMethod;
+            // Single-method (cash / card / credit) — existing flow.
+            let method =
+              paymentMode === 'cash'   ? cashMethod   :
+              paymentMode === 'credit' ? creditMethod :
+                                         cardMethod;
             if (!method && posMethods.length > 0) {
               method = posMethods.find((m) => m.split_transactions !== true) || posMethods[0];
             }
@@ -565,8 +574,15 @@ const POSPayment = ({ navigation, route }) => {
             } else if (paymentMode === 'card') {
               payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
               console.log(`💳 Card payment: Total=${total}`);
+            } else if (paymentMode === 'credit') {
+              payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
+              console.log(`💳 Credit payment: Total=${total}`);
             }
-            paymentMethodLabel = method.name || (paymentMode === 'card' ? 'Card' : 'Cash');
+            paymentMethodLabel = method.name || (
+              paymentMode === 'card'   ? 'Card'   :
+              paymentMode === 'credit' ? 'Credit' :
+                                         'Cash'
+            );
           }
           payments.forEach((p, idx) => {
             const type = p.amount > 0 ? 'RECEIVED' : 'CHANGE';
@@ -1003,6 +1019,12 @@ const POSPayment = ({ navigation, route }) => {
                 }
               }, 100);
             })}
+            {renderModeCard('credit', 'Credit', 'credit-score', () => {
+              // Credit is a bank-type pos.payment.method in Odoo. handlePay
+              // looks it up by name from the cached posPaymentMethods list,
+              // so no journal lookup is needed here.
+              setPaymentMode('credit');
+            })}
             {renderModeCard('split', 'Partial\nPayment', 'call-split', () => {
               setPaymentMode('split');
               // Default slot 2 amount to (total - slot1) on first open so the
@@ -1362,6 +1384,17 @@ const POSPayment = ({ navigation, route }) => {
                 </View>
               ))
             )}
+
+            {/* Inline same-method error — appears the instant both slots
+                reference the same pos.payment.method so the cashier doesn't
+                have to tap Confirm to discover the problem. */}
+            {splitSlot1.methodId != null &&
+              splitSlot2.methodId != null &&
+              splitSlot1.methodId === splitSlot2.methodId ? (
+              <Text style={styles.splitSameMethodError}>
+                Please select two different payment methods
+              </Text>
+            ) : null}
 
             {/* Live sum indicator */}
             <View
@@ -2246,6 +2279,14 @@ letterSpacing: 0.4,
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
+  },
+  splitSameMethodError: {
+    color: '#b91c1c',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center',
+    marginTop: 10,
+    letterSpacing: 0.2,
   },
   splitSumText: {
     fontSize: 12,
