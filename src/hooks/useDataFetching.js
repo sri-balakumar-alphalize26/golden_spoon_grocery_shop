@@ -7,7 +7,11 @@ const defaultGetKey = (item) => (item ? item.id : null);
 const dedupeBy = (items, getKey) => {
   const seen = new Set();
   const out = [];
-  for (const it of items || []) {
+  // Hermes (production engine) throws "iterator method is not callable" on
+  // for-of when `items` is a truthy non-iterable (e.g. an Odoo `{ error: ... }`
+  // envelope). Guard with Array.isArray so a bad fetch never crashes the list.
+  const safe = Array.isArray(items) ? items : [];
+  for (const it of safe) {
     if (it == null) continue;
     const k = getKey(it);
     if (k === undefined || k === null || k === '') {
@@ -40,7 +44,9 @@ const useDataFetching = (fetchDataCallback, options = {}) => {
       // fresh fetch: start at item offset 0
       const params = { offset: 0, limit, ...newFilters };
       const fetchedData = await fetchDataCallback(params);
-      const list = fetchedData || [];
+      // Normalize: only Arrays count as a list. Error envelopes like
+      // `{ error: ... }` are coerced to [] so dedupeBy never iterates them.
+      const list = Array.isArray(fetchedData) ? fetchedData : [];
       setData(dedupeBy(list, getDedupeKey));
       setAllDataLoaded(list.length < limit);
       setOffset(0);
@@ -66,7 +72,7 @@ const useDataFetching = (fetchDataCallback, options = {}) => {
       const nextOffset = offset + limit;
       const params = { offset: nextOffset, limit, ...newFilters };
       const fetchedData = await fetchDataCallback(params);
-      const list = fetchedData || [];
+      const list = Array.isArray(fetchedData) ? fetchedData : [];
       if (list.length === 0) {
         setAllDataLoaded(true);
       } else {

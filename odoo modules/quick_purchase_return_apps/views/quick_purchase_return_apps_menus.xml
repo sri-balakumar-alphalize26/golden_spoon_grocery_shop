@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Root Menu - shows in the left sidebar as a standalone app -->
+    <menuitem id="quick_purchase_return_apps_menu_root"
+              name="Quick Purchase Return Apps"
+              sequence="46"
+              web_icon="quick_purchase_return_apps,static/description/icon.png"
+              groups="quick_purchase_return_apps.group_quick_purchase_return_apps_user"/>
+
+    <!-- Sub Menu - Returns -->
+    <menuitem id="quick_purchase_return_apps_menu_returns"
+              name="Returns"
+              parent="quick_purchase_return_apps_menu_root"
+              sequence="10"/>
+
+    <!-- Action Menu Item - All Returns -->
+    <menuitem id="quick_purchase_return_apps_menu_action"
+              name="Purchase Returns"
+              parent="quick_purchase_return_apps_menu_returns"
+              action="quick_purchase_return_app_action"
+              sequence="5"/>
+
+    <!-- Quick New Return -->
+    <menuitem id="quick_purchase_return_apps_menu_new"
+              name="New Return"
+              parent="quick_purchase_return_apps_menu_returns"
+              action="quick_purchase_return_app_action_new"
+              sequence="20"/>
+
+</odoo>

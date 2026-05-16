@@ -237,15 +237,33 @@ export const getCurrentDeviceLocation = async () => {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
       let locationName = '';
-      try {
-        const reverseGeocode = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-        if (reverseGeocode && reverseGeocode.length > 0) {
-          const place = reverseGeocode[0];
-          locationName = [place.name, place.street, place.city, place.region, place.country]
-            .filter(Boolean).join(', ');
+      // Retry the reverse-geocode up to 3 times. Android's Geocoder
+      // intermittently returns IOException / "Service not available" for
+      // a few seconds after a cold app start — without the retry, the
+      // single call often returns empty and the UI falls back to raw
+      // lat/lng. Cap each attempt at 5s so we don't stall the cashier.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const places = await Promise.race([
+            Location.reverseGeocodeAsync({ latitude: lat, longitude: lon }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('reverse-geocode timeout')), 5000)),
+          ]);
+          const place = (places && places[0]) || null;
+          if (place) {
+            // Try the rich field set first; if empty, broaden to additional
+            // fields some Android Geocoders return instead of city/region.
+            locationName = [place.name, place.street, place.city, place.region, place.country]
+              .filter(Boolean).join(', ');
+            if (!locationName) {
+              locationName = [place.subregion, place.district, place.postalCode, place.isoCountryCode, place.country]
+                .filter(Boolean).join(', ');
+            }
+          }
+          if (locationName) break;
+        } catch (geoError) {
+          console.warn(`[POSLocation] reverse-geocode attempt ${attempt} failed:`, geoError?.message || geoError);
         }
-      } catch (geoError) {
-        console.warn('[POSLocation] reverse geocode failed:', geoError?.message || geoError);
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 600));
       }
       console.log('[POSLocation] → success', { lat, lon, locationName });
       return { latitude: lat, longitude: lon, locationName };
@@ -1223,25 +1241,74 @@ export const refundPosOrder = async ({ orderId } = {}) => {
   }
 };
 
-// Count how many refund pos.orders reference `orderId` as their
-// `refunded_order_id`. Used by OrderDetailScreen to hide the Return
-// Products button after an order has already been refunded — the stock
-// `refund_orders_count` field isn't always populated on the order read
-// in newer Odoo versions, so this is the reliable check.
-export const countRefundsForOrder = async ({ orderId } = {}) => {
+// Detect whether a pos.order has any refund children. We check TWO places
+// because Odoo's `pos.order.refund()` writes the link differently across
+// versions — newer builds set `pos.order.refunded_order_id`, older ones
+// only set `pos.order.line.refunded_orderline_id`. We return the larger of
+// the two counts so a refund is detected regardless of which field is
+// populated. OrderDetailScreen uses this to hide the Return Products
+// button on already-refunded orders.
+export const countRefundsForOrder = async ({ orderId, lineIds = [] } = {}) => {
   if (!orderId) return 0;
+  let orderLevel = 0;
+  let lineLevel = 0;
+  // Approach A: pos.order.refunded_order_id (Odoo 17+).
   try {
-    const result = await _closeCallKw('pos.order', 'search_count',
-      [[['refunded_order_id', '=', Number(orderId)], ['state', '!=', 'cancel']]]);
-    return Number(result) || 0;
+    orderLevel = Number(await _closeCallKw(
+      'pos.order', 'search_count',
+      [[['refunded_order_id', '=', Number(orderId)], ['state', '!=', 'cancel']]],
+    )) || 0;
   } catch (e) {
-    console.warn('[Refund] countRefundsForOrder failed:', e?.message);
-    return 0;
+    console.warn('[Refund] order-level count failed:', e?.message);
+  }
+  // Approach B: pos.order.line.refunded_orderline_id (older versions). Only
+  // fires when we know the original order's line ids to compare against.
+  if (Array.isArray(lineIds) && lineIds.length > 0) {
+    try {
+      lineLevel = Number(await _closeCallKw(
+        'pos.order.line', 'search_count',
+        [[['refunded_orderline_id', 'in', lineIds.map(Number)]]],
+      )) || 0;
+    } catch (e) {
+      console.warn('[Refund] line-level count failed:', e?.message);
+    }
+  }
+  const total = Math.max(orderLevel, lineLevel);
+  console.log('[Refund] count for', orderId, '→ order:', orderLevel, 'line:', lineLevel, 'total:', total);
+  return total;
+};
+
+// AsyncStorage-backed memory of orders we've refunded from THIS device.
+// Used by OrderDetailScreen as an instant truth source — independent of
+// whether Odoo's read-back is reliable.
+const REFUND_MARKED_KEY = 'pos_refunded_order_ids_v1';
+
+export const markOrderAsRefunded = async (orderId) => {
+  if (!orderId) return;
+  try {
+    const raw = await AsyncStorage.getItem(REFUND_MARKED_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const next = Array.isArray(arr) ? Array.from(new Set([...arr, Number(orderId)])) : [Number(orderId)];
+    await AsyncStorage.setItem(REFUND_MARKED_KEY, JSON.stringify(next));
+  } catch (e) {
+    console.warn('[Refund] markOrderAsRefunded failed:', e?.message);
+  }
+};
+
+export const isOrderMarkedRefunded = async (orderId) => {
+  if (!orderId) return false;
+  try {
+    const raw = await AsyncStorage.getItem(REFUND_MARKED_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) && arr.map(Number).includes(Number(orderId));
+  } catch (e) {
+    return false;
   }
 };
 
 // api/services/generalApi.js
 import axios from "axios";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import ODOO_BASE_URL, { getOdooUrl } from '@api/config/odooConfig';
 
 

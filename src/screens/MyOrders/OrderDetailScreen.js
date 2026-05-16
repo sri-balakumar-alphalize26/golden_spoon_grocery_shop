@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, refundPosOrder, countRefundsForOrder } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -101,27 +101,39 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // the app's popups (LogoutModal / Close Register).
   const [refunding, setRefunding] = useState(false);
   const [returnConfirmVisible, setReturnConfirmVisible] = useState(false);
-  // Live count of refund pos.orders that reference this order. When > 0 the
-  // Return Products button is hidden — Odoo's stock `refund_orders_count`
-  // field isn't always exposed, so we compute it ourselves on every order
-  // load. Also re-fetched on focus so re-opening this order right after
-  // refunding from the same screen reflects the new state.
-  const [refundExistsCount, setRefundExistsCount] = useState(0);
+  // Force-hide flag for the Return Products button on already-refunded
+  // orders. Three signals feed into it:
+  //  1. Local AsyncStorage marker — instant truth if we created the refund
+  //     from this app (independent of Odoo round-trip reliability).
+  //  2. pos.order.refunded_order_id count (Odoo 17+ link).
+  //  3. pos.order.line.refunded_orderline_id count (older Odoo line-level link).
+  // Any one of these turning truthy hides the button.
+  const [refundDetected, setRefundDetected] = useState(false);
 
-  // After the order loads (or refocuses), check Odoo for any refund orders
-  // that reference this one. Recomputing on every order id change covers
-  // the user flow: refund this order → goBack → re-open → button is gone.
+  // Multi-source refund detection: local AsyncStorage marker first (instant,
+  // works even if Odoo can't read the link back), then server-side counts
+  // at both order- and line-level. Any positive signal flips refundDetected
+  // → true and hides the Return Products button.
   useEffect(() => {
-    if (!order?.id) {
-      setRefundExistsCount(0);
-      return;
-    }
+    if (!order?.id) { setRefundDetected(false); return; }
     let alive = true;
-    countRefundsForOrder({ orderId: order.id })
-      .then((n) => { if (alive) setRefundExistsCount(Number(n) || 0); })
-      .catch(() => { if (alive) setRefundExistsCount(0); });
+    (async () => {
+      try {
+        const localMarked = await isOrderMarkedRefunded(order.id);
+        if (!alive) return;
+        if (localMarked) { setRefundDetected(true); return; }
+        const orderLineIds = Array.isArray(order.lines)
+          ? order.lines.map((l) => l?.id).filter(Boolean)
+          : [];
+        const n = await countRefundsForOrder({ orderId: order.id, lineIds: orderLineIds });
+        if (alive && Number(n) > 0) setRefundDetected(true);
+      } catch (_) {
+        // Soft-fail: leave refundDetected as-is rather than flipping back to
+        // false on a transient network error.
+      }
+    })();
     return () => { alive = false; };
-  }, [order?.id]);
+  }, [order?.id, order?.lines]);
 
   // True when this order is itself a refund of another order — drives the
   // small red REFUND chip + "Refunded from {original}" link near the header.
@@ -135,7 +147,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // - or the order isn't in a "paid"/"done"/"invoiced" state.
   const canRefund = order
     && !isRefund
-    && refundExistsCount === 0
+    && !refundDetected
     && (Number(order.refund_orders_count) || 0) === 0
     && ['paid', 'done', 'invoiced'].includes(order.state);
 
@@ -157,6 +169,10 @@ const OrderDetailScreen = ({ navigation, route }) => {
         Toast.show({ type: 'error', text1: 'Refund failed', text2: resp.error.message || 'Try again later', position: 'bottom' });
         return;
       }
+      // Persist that this order has been refunded so the next visit instantly
+      // hides Return Products, even if Odoo's read-back is unreliable.
+      try { await markOrderAsRefunded(order.id); } catch (_) {}
+      setRefundDetected(true);
       Toast.show({
         type: 'success',
         text1: 'Products returned',

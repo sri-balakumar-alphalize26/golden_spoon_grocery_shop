@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="privilege_quick_purchase_return_apps" model="res.groups.privilege">
+        <field name="name">Quick Purchase Return Apps</field>
+    </record>
+
+    <record id="group_quick_purchase_return_apps_user" model="res.groups">
+        <field name="name">User</field>
+        <field name="privilege_id" ref="privilege_quick_purchase_return_apps"/>
+    </record>
+
+    <record id="group_quick_purchase_return_apps_manager" model="res.groups">
+        <field name="name">Manager</field>
+        <field name="privilege_id" ref="privilege_quick_purchase_return_apps"/>
+        <field name="implied_ids" eval="[(4, ref('group_quick_purchase_return_apps_user'))]"/>
+        <field name="user_ids" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+    </record>
+</odoo>

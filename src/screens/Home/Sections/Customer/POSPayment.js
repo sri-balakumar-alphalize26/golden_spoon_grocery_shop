@@ -905,6 +905,17 @@ const POSPayment = ({ navigation, route }) => {
   const splitMethods = posPaymentMethods.filter(
     (m) => m.split_transactions !== true,
   );
+  // One-time debug so the user can confirm Credit is actually present on the
+  // active register's pos.config.payment_method_ids when the split popup
+  // opens. If `splitMethods` here doesn't include Credit, the register's
+  // Odoo configuration is missing it — fix it in Odoo Web (Point of Sale →
+  // Configuration → Point of Sale → this register → Payment Methods).
+  useEffect(() => {
+    if (posPaymentMethods.length > 0) {
+      console.log('[PAYMENT] posPaymentMethods=', posPaymentMethods.map((m) => `${m.id}:${m.name}`).join(', '));
+      console.log('[PAYMENT] splitMethods=', splitMethods.map((m) => m.name).join(', '));
+    }
+  }, [posPaymentMethods]);
   const iconForMethod = (m) => {
     if (!m) return 'help-outline';
     if (m.is_cash_count === true) return 'payments';

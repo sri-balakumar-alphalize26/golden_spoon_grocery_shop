@@ -213,10 +213,7 @@ const LineEditor = ({ visible, line, taxes, onSave, onClose, onPickProduct }) =>
               <Text style={styles.subtotalValue}>{fmt(subtotal)}</Text>
             </View>
           </ScrollView>
-          <View style={{ flexDirection: 'row', gap: 8, padding: 12 }}>
-            <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={onClose}>
-              <Text style={styles.btnGhostText}>Cancel</Text>
-            </TouchableOpacity>
+          <View style={{ padding: 12 }}>
             <TouchableOpacity
               style={[styles.btn, styles.btnPrimary, { flex: 1 }]}
               onPress={() => {
