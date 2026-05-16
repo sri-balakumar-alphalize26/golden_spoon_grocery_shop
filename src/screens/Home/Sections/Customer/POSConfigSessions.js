@@ -39,15 +39,15 @@ const fmtDate = (raw) => {
 const statusPalette = (state) => {
   switch (state) {
     case 'opened':
-      return { bg: '#dcfce7', fg: '#15803d', label: 'OPENED' };
+      return { bg: '#dcfce7', fg: '#15803d', label: 'OPENED', accent: '#22c55e' };
     case 'opening_control':
-      return { bg: '#fef3c7', fg: '#b45309', label: 'OPENING CONTROL' };
+      return { bg: '#fef3c7', fg: '#b45309', label: 'OPENING CONTROL', accent: '#f59e0b' };
     case 'closing_control':
-      return { bg: '#dbeafe', fg: '#1d4ed8', label: 'CLOSING CONTROL' };
+      return { bg: '#dbeafe', fg: '#1d4ed8', label: 'CLOSING CONTROL', accent: '#3b82f6' };
     case 'closed':
-      return { bg: '#e5e7eb', fg: '#374151', label: 'CLOSED & POSTED' };
+      return { bg: '#e5e7eb', fg: '#374151', label: 'CLOSED & POSTED', accent: '#9ca3af' };
     default:
-      return { bg: '#f3f4f6', fg: '#6b7280', label: String(state || '—').toUpperCase() };
+      return { bg: '#f3f4f6', fg: '#6b7280', label: String(state || '—').toUpperCase(), accent: '#9ca3af' };
   }
 };
 
@@ -115,36 +115,44 @@ const POSConfigSessions = ({ navigation, route }) => {
       <TouchableOpacity
         onPress={() => navigation.navigate('MyOrdersScreen', { sessionId: item.id, configName: `${configName} • ${item.name}` })}
         activeOpacity={0.85}
-        style={s.row}
+        style={s.rowWrap}
       >
-        <View style={s.rowTop}>
-          <Text style={s.sessionName} numberOfLines={1}>{item.name || `Session #${item.id}`}</Text>
-          <View style={[s.statusPill, { backgroundColor: pal.bg }]}>
-            <Text style={[s.statusPillText, { color: pal.fg }]}>{pal.label}</Text>
+        {/* Left accent strip — colour mirrors the status pill so the cashier
+            can spot open vs closed sessions at a glance. */}
+        <View style={[s.accentStrip, { backgroundColor: pal.accent }]} />
+        <View style={s.rowInner}>
+          <View style={s.rowTop}>
+            <Text style={s.sessionName} numberOfLines={1}>{item.name || `Session #${item.id}`}</Text>
+            <View style={[s.statusPill, { backgroundColor: pal.bg }]}>
+              <Text style={[s.statusPillText, { color: pal.fg }]}>{pal.label}</Text>
+            </View>
           </View>
-        </View>
-        <View style={s.rowMetaGrid}>
-          <View style={s.metaCol}>
-            <Text style={s.metaLabel}>Opened by</Text>
-            <Text style={s.metaValue} numberOfLines={1}>{openedBy}</Text>
+          <View style={s.rowMetaGrid}>
+            <View style={s.metaCol}>
+              <Text style={s.metaLabel}>Opened by</Text>
+              <Text style={s.metaValue} numberOfLines={1}>{openedBy}</Text>
+            </View>
+            <View style={s.metaDivider} />
+            <View style={s.metaCol}>
+              <Text style={s.metaLabel}>Opening</Text>
+              <Text style={s.metaValue}>{fmtDate(item.start_at)}</Text>
+            </View>
+            <View style={s.metaDivider} />
+            <View style={s.metaCol}>
+              <Text style={s.metaLabel}>Closing</Text>
+              <Text style={s.metaValue}>{fmtDate(item.stop_at)}</Text>
+            </View>
           </View>
-          <View style={s.metaCol}>
-            <Text style={s.metaLabel}>Opening</Text>
-            <Text style={s.metaValue}>{fmtDate(item.start_at)}</Text>
-          </View>
-          <View style={s.metaCol}>
-            <Text style={s.metaLabel}>Closing</Text>
-            <Text style={s.metaValue}>{fmtDate(item.stop_at)}</Text>
-          </View>
-        </View>
-        <View style={s.balanceRow}>
-          <View style={s.balanceCol}>
-            <Text style={s.metaLabel}>Starting Balance</Text>
-            <Text style={s.balanceValue}>{formatCurrency(start)}</Text>
-          </View>
-          <View style={s.balanceCol}>
-            <Text style={s.metaLabel}>Ending Balance</Text>
-            <Text style={s.balanceValue}>{formatCurrency(end)}</Text>
+          <View style={s.balancePill}>
+            <View style={s.balanceCol}>
+              <Text style={s.balanceLabel}>Starting Balance</Text>
+              <Text style={s.balanceValue}>{formatCurrency(start)}</Text>
+            </View>
+            <View style={s.balanceDivider} />
+            <View style={s.balanceCol}>
+              <Text style={s.balanceLabel}>Ending Balance</Text>
+              <Text style={s.balanceValue}>{formatCurrency(end)}</Text>
+            </View>
           </View>
         </View>
       </TouchableOpacity>
@@ -182,8 +190,9 @@ const POSConfigSessions = ({ navigation, route }) => {
           ListEmptyComponent={
             !loading ? (
               <View style={s.emptyWrap}>
-                <MaterialIcons name="history" size={40} color="#9ca3af" />
-                <Text style={s.emptyText}>No sessions yet for this register.</Text>
+                <MaterialIcons name="history" size={64} color="#cbd5e1" />
+                <Text style={s.emptyTitle}>No sessions yet</Text>
+                <Text style={s.emptyText}>This register hasn{`'`}t had any sessions yet. Open a register from the POS Register screen to start your first one.</Text>
               </View>
             ) : null
           }
@@ -198,42 +207,60 @@ const s = StyleSheet.create({
   loaderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loaderText: { marginTop: 10, color: '#6b7280' },
   footerLoader: { paddingVertical: 16, alignItems: 'center' },
-  emptyWrap: { paddingVertical: 80, alignItems: 'center' },
-  emptyText: { marginTop: 10, color: '#6b7280', fontSize: 14 },
+  emptyWrap: { paddingVertical: 80, alignItems: 'center', paddingHorizontal: 32 },
+  emptyTitle: { marginTop: 16, color: '#111', fontSize: 16, fontWeight: '700' },
+  emptyText: { marginTop: 8, color: '#6b7280', fontSize: 13, textAlign: 'center', lineHeight: 19 },
 
-  row: {
+  rowWrap: {
+    flexDirection: 'row',
     backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    marginBottom: 10,
+    borderRadius: 14,
+    marginBottom: 12,
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
+  accentStrip: {
+    width: 4,
+  },
+  rowInner: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
   rowTop: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  sessionName: { flex: 1, fontSize: 15, fontWeight: '800', color: '#111', marginRight: 8 },
+  sessionName: { flex: 1, fontSize: 16, fontWeight: '800', color: '#111', marginRight: 8, letterSpacing: 0.2 },
   statusPill: {
-    paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999,
+    paddingVertical: 5, paddingHorizontal: 12, borderRadius: 999,
   },
   statusPillText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
 
   rowMetaGrid: {
-    flexDirection: 'row', gap: 12,
-    paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f3f4f6',
+    flexDirection: 'row',
+    paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6',
   },
-  metaCol: { flex: 1 },
+  metaCol: { flex: 1, paddingHorizontal: 4 },
+  metaDivider: { width: 1, backgroundColor: '#f3f4f6', marginVertical: 2 },
   metaLabel: { fontSize: 10, color: '#9ca3af', letterSpacing: 0.6, fontWeight: '700', textTransform: 'uppercase' },
-  metaValue: { marginTop: 2, fontSize: 12, color: '#111' },
+  metaValue: { marginTop: 4, fontSize: 12, color: '#111' },
 
-  balanceRow: {
-    flexDirection: 'row', gap: 12,
-    marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6',
+  balancePill: {
+    flexDirection: 'row',
+    marginTop: 12,
+    backgroundColor: '#f9fafb',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
   },
-  balanceCol: { flex: 1 },
-  balanceValue: { marginTop: 2, fontSize: 13, color: '#111', fontWeight: '800' },
+  balanceCol: { flex: 1, paddingHorizontal: 4 },
+  balanceDivider: { width: 1, backgroundColor: '#e5e7eb', marginVertical: 2 },
+  balanceLabel: { fontSize: 10, color: '#6b7280', letterSpacing: 0.6, fontWeight: '700', textTransform: 'uppercase' },
+  balanceValue: { marginTop: 4, fontSize: 14, color: '#111', fontWeight: '800' },
 });
 
 export default POSConfigSessions;

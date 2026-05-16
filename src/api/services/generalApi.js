@@ -1142,6 +1142,26 @@ export const healStaleClosedSessions = async () => {
   }
 };
 
+// Read the `iface_available_categ_ids` + `limit_categories` from a single
+// pos.config. POSProducts uses this to scope its category tabs + product grid
+// to just the categories this register is configured for, matching Odoo Web.
+export const fetchPosConfigCategories = async ({ configId } = {}) => {
+  if (!configId) return { limit: false, categoryIds: [] };
+  try {
+    const rows = await _closeCallKw('pos.config', 'read',
+      [[Number(configId)], ['id', 'name', 'limit_categories', 'iface_available_categ_ids']]);
+    const cfg = Array.isArray(rows) && rows[0] ? rows[0] : null;
+    if (!cfg) return { limit: false, categoryIds: [] };
+    return {
+      limit: !!cfg.limit_categories,
+      categoryIds: Array.isArray(cfg.iface_available_categ_ids) ? cfg.iface_available_categ_ids : [],
+    };
+  } catch (e) {
+    console.warn('[POSProducts] fetchPosConfigCategories failed:', e?.message || e);
+    return { limit: false, categoryIds: [] };
+  }
+};
+
 // All pos.sessions for a specific config — drives the POSConfigSessions screen
 // (the in-app equivalent of Odoo's POS Sessions list, scoped to one register).
 export const fetchSessionsForConfig = async ({ configId, limit = 50, offset = 0 } = {}) => {
@@ -1335,6 +1355,11 @@ export const fetchProductsByTemplateOdoo = async ({
   posCategoryId = null,
   categoryId = null,
   posOnly = false,
+  // When provided (and non-empty), scope the result to products whose
+  // pos_categ_ids intersect this list. Used by POSProducts to honour
+  // pos.config.iface_available_categ_ids when the active register has
+  // limit_categories = True.
+  allowedCategoryIds = null,
 } = {}) => {
   try {
     let domain = [];
@@ -1346,6 +1371,10 @@ export const fetchProductsByTemplateOdoo = async ({
       domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
     } else if (categoryId) {
       domain = domain.concat([['categ_id', '=', Number(categoryId)]]);
+    } else if (Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0) {
+      // Only apply when not already scoped to a single category — the user
+      // tapping a category chip should still see only that one.
+      domain = domain.concat([['pos_categ_ids', 'in', allowedCategoryIds.map(Number)]]);
     }
     if (posOnly) {
       domain = domain.concat([['available_in_pos', '=', true]]);
@@ -1470,9 +1499,14 @@ export const fetchProductCategoriesOdoo = async () => {
 
 // Fetch pos.category — the POS cashier-screen grouping. Includes the integer
 // `color` field so the Products screen can tint each filter chip with the
-// same palette the cashier sees in Odoo.
-export const fetchPosCategoriesOdoo = async () => {
+// same palette the cashier sees in Odoo. When `allowedCategoryIds` is non-
+// empty, scope the result to just those ids (used by POSProducts to honour
+// pos.config.iface_available_categ_ids).
+export const fetchPosCategoriesOdoo = async ({ allowedCategoryIds = null } = {}) => {
   const baseUrl = getOdooUrl();
+  const scopedDomain = Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0
+    ? [['id', 'in', allowedCategoryIds.map(Number)]]
+    : [];
   const callRead = async (model, fields) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
@@ -1480,7 +1514,7 @@ export const fetchPosCategoriesOdoo = async () => {
       params: {
         model,
         method: 'search_read',
-        args: [[]],
+        args: [scopedDomain],
         kwargs: { fields, order: 'name asc', limit: 200 },
       },
     }, { headers: { 'Content-Type': 'application/json' } });

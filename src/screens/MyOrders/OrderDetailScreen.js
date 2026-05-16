@@ -96,8 +96,11 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const [sizePicker, setSizePicker] = useState(null);
 
   // Return-Products button state — true while the pos.order.refund RPC is in
-  // flight so the button can show a spinner and prevent double-taps.
+  // flight so the button can show a spinner and prevent double-taps. The
+  // confirm dialog is a styled Modal (not native Alert) to match the rest of
+  // the app's popups (LogoutModal / Close Register).
   const [refunding, setRefunding] = useState(false);
+  const [returnConfirmVisible, setReturnConfirmVisible] = useState(false);
 
   // True when this order is itself a refund of another order — drives the
   // small red REFUND chip + "Refunded from {original}" link near the header.
@@ -116,38 +119,34 @@ const OrderDetailScreen = ({ navigation, route }) => {
 
   const handleReturnProducts = () => {
     if (!order || !canRefund || refunding) return;
-    Alert.alert(
-      'Return Products',
-      `Return all products in order ${order.name || `#${order.id}`}?\n\nA new refund order will be created with negative quantities, ready for payment.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Return',
-          style: 'destructive',
-          onPress: async () => {
-            setRefunding(true);
-            try {
-              const resp = await refundPosOrder({ orderId: order.id });
-              if (resp?.error) {
-                Alert.alert('Refund failed', resp.error.message || 'Try again later');
-                return;
-              }
-              if (resp.newOrderId) {
-                Toast.show({ type: 'success', text1: 'Refund created', text2: `New order ready for payment`, position: 'bottom' });
-                navigation.replace('OrderDetailScreen', { orderId: resp.newOrderId });
-              } else {
-                Alert.alert('Refund created', 'Pull-to-refresh the Orders list to see the new refund order.');
-                navigation.goBack();
-              }
-            } catch (e) {
-              Alert.alert('Refund failed', e?.message || 'Try again later');
-            } finally {
-              setRefunding(false);
-            }
-          },
-        },
-      ],
-    );
+    setReturnConfirmVisible(true);
+  };
+
+  // Confirm step from the styled popup. Runs the refund RPC and bounces back
+  // to the Orders list (which refreshes on focus) rather than navigating to
+  // the new refund order, per the user's UX request.
+  const confirmReturnProducts = async () => {
+    setReturnConfirmVisible(false);
+    if (!order) return;
+    setRefunding(true);
+    try {
+      const resp = await refundPosOrder({ orderId: order.id });
+      if (resp?.error) {
+        Toast.show({ type: 'error', text1: 'Refund failed', text2: resp.error.message || 'Try again later', position: 'bottom' });
+        return;
+      }
+      Toast.show({
+        type: 'success',
+        text1: 'Products returned',
+        text2: 'A refund order has been created.',
+        position: 'bottom',
+      });
+      navigation.goBack();
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Refund failed', text2: e?.message || 'Try again later', position: 'bottom' });
+    } finally {
+      setRefunding(false);
+    }
   };
 
   // Map the fetched pos.order + pos.payment[] into the params expected by the
@@ -549,29 +548,31 @@ const OrderDetailScreen = ({ navigation, route }) => {
             <Text style={s.invoiceChipText}>Print</Text>
           </TouchableOpacity>
 
-          {/* Return Products — Odoo-style refund. Disabled when the order
-              can't be refunded (already a refund, already-refunded, or not
-              in a paid/done/invoiced state). Mirrors the button at the top
-              of Odoo's POS Order form. */}
-          <TouchableOpacity
-            onPress={handleReturnProducts}
-            disabled={!canRefund || refunding}
-            activeOpacity={0.85}
-            style={[
-              s.invoiceChip,
-              { borderColor: '#FECACA' },
-              (!canRefund || refunding) && { opacity: 0.45 },
-            ]}
-          >
-            <View style={s.invoiceChipIcon}>
-              {refunding ? (
-                <ActivityIndicator color="#B91C1C" size="small" />
-              ) : (
-                <MaterialIcons name="keyboard-return" size={20} color="#B91C1C" />
-              )}
-            </View>
-            <Text style={s.invoiceChipText}>Return Products</Text>
-          </TouchableOpacity>
+          {/* Return Products — Odoo-style refund. Rendered ONLY when the
+              order is eligible: already-refunded / refund-of / non-paid
+              orders hide the chip entirely so the cashier never sees an
+              option that won't work. Mirrors the Odoo POS Order form. */}
+          {canRefund ? (
+            <TouchableOpacity
+              onPress={handleReturnProducts}
+              disabled={refunding}
+              activeOpacity={0.85}
+              style={[
+                s.invoiceChip,
+                { borderColor: '#FECACA' },
+                refunding && { opacity: 0.55 },
+              ]}
+            >
+              <View style={s.invoiceChipIcon}>
+                {refunding ? (
+                  <ActivityIndicator color="#B91C1C" size="small" />
+                ) : (
+                  <MaterialIcons name="keyboard-return" size={20} color="#B91C1C" />
+                )}
+              </View>
+              <Text style={s.invoiceChipText}>Return Products</Text>
+            </TouchableOpacity>
+          ) : null}
 
           {/* Location chip — opens the same popup as the post-payment
               receipt. Disabled (greyed) when this order didn't capture
@@ -657,6 +658,44 @@ const OrderDetailScreen = ({ navigation, route }) => {
         }}
         onCancel={() => setSizePicker(null)}
       />
+
+      {/* Return Products confirmation popup — styled like LogoutModal /
+          Close Register: navy-bordered white card, red icon disk, Cancel
+          (navy outline) + Return (red filled). Replaces the native Alert. */}
+      <Modal
+        visible={returnConfirmVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setReturnConfirmVisible(false)}
+      >
+        <View style={s.returnConfirmBg}>
+          <View style={s.returnConfirmCard}>
+            <View style={s.returnConfirmIconDisk}>
+              <MaterialIcons name="keyboard-return" size={28} color="#B91C1C" />
+            </View>
+            <Text style={s.returnConfirmTitle}>Return Products?</Text>
+            <Text style={s.returnConfirmText}>
+              {`A new refund order will be created for ${order?.name || 'this order'} with negative quantities and shown in the Orders list, ready for payment.`}
+            </Text>
+            <View style={s.returnConfirmBtnRow}>
+              <TouchableOpacity
+                onPress={() => setReturnConfirmVisible(false)}
+                style={[s.returnConfirmBtn, s.returnConfirmBtnGhost]}
+                activeOpacity={0.85}
+              >
+                <Text style={s.returnConfirmBtnGhostText}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmReturnProducts}
+                style={[s.returnConfirmBtn, s.returnConfirmBtnDanger]}
+                activeOpacity={0.85}
+              >
+                <Text style={s.returnConfirmBtnDangerText}>RETURN</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -894,5 +933,77 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: '#1E88E5',
     textDecorationLine: 'underline',
+  },
+
+  // ── Return Products confirmation modal — LogoutModal-style ───────────────
+  returnConfirmBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  returnConfirmCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: NAVY,
+    paddingVertical: 22,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+  },
+  returnConfirmIconDisk: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 12,
+  },
+  returnConfirmTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#1a1a2e',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  returnConfirmText: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 18,
+  },
+  returnConfirmBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  returnConfirmBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  returnConfirmBtnGhost: {
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+  },
+  returnConfirmBtnGhostText: {
+    color: NAVY,
+    fontWeight: '800',
+    fontSize: 13,
+    letterSpacing: 0.3,
+  },
+  returnConfirmBtnDanger: {
+    backgroundColor: '#B91C1C',
+  },
+  returnConfirmBtnDangerText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
+    letterSpacing: 0.4,
   },
 });

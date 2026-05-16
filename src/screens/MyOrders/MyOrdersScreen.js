@@ -42,22 +42,18 @@ const MyOrdersScreen = ({ navigation, route }) => {
   );
 
   const hasLoadedRef = useRef(false);
-  const lastParamsRef = useRef({ searchText: '', configId: null, sessionId: null });
   const hasAttemptedFetchRef = useRef(false);
 
+  // Refresh on every focus (not just when params change). Without this, a
+  // refund flow that goBacks to this screen wouldn't show the new refund
+  // order in the list. The orders payload is small enough that the extra
+  // round-trip on every navigation isn't an issue, and matches the user's
+  // expectation: "the orders page should get refreshed".
   useFocusEffect(
     useCallback(() => {
-      const paramsChanged =
-        lastParamsRef.current.searchText !== searchText ||
-        lastParamsRef.current.configId !== configId ||
-        lastParamsRef.current.sessionId !== sessionId;
-
-      if (!hasLoadedRef.current || paramsChanged) {
-        hasAttemptedFetchRef.current = true;
-        fetchData({ searchText, configId, sessionId });
-        hasLoadedRef.current = true;
-        lastParamsRef.current = { searchText, configId, sessionId };
-      }
+      hasAttemptedFetchRef.current = true;
+      fetchData({ searchText, configId, sessionId });
+      hasLoadedRef.current = true;
     }, [searchText, configId, sessionId])
   );
 

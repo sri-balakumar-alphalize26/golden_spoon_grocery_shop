@@ -8,6 +8,8 @@ import {
   fetchPosCategoriesOdoo,
   fetchPosCategoryCountsOdoo,
   fetchProductTemplateCountOdoo,
+  fetchPosConfigCategories,
+  fetchProductDetailsByBarcode,
 } from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
@@ -66,7 +68,11 @@ const productTemplateKey = (item) => {
   return item.id;
 };
 
-const POSProducts = ({ navigation }) => {
+const POSProducts = ({ navigation, route }) => {
+  // Active register id — passed through from TakeoutDelivery so we can scope
+  // categories and products to just this pos.config (matches Odoo Web POS).
+  const registerId = route?.params?.registerId || null;
+
   const { data, loading, fetchData, fetchMoreData } = useDataFetching(
     fetchProductsByTemplateOdoo,
     { getDedupeKey: productTemplateKey }
@@ -77,9 +83,18 @@ const POSProducts = ({ navigation }) => {
   const [selectedPosCategory, setSelectedPosCategory] = useState(null);
   const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
   const [totalCount, setTotalCount] = useState(0);
+  // pos.config.iface_available_categ_ids snapshot. When `limit` is true we
+  // pass `allowedCategoryIds` to every product + category fetch so the cashier
+  // only sees what's configured for this register.
+  const [configFilter, setConfigFilter] = useState({ limit: false, categoryIds: [] });
+  const configLoadedRef = useRef(false);
+
+  const allowedIds = configFilter.limit && configFilter.categoryIds.length
+    ? configFilter.categoryIds
+    : null;
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, posCategoryId: selectedPosCategory }),
+    (text) => fetchData({ searchText: text, posCategoryId: selectedPosCategory, allowedCategoryIds: allowedIds }),
     500
   );
 
@@ -92,36 +107,60 @@ const POSProducts = ({ navigation }) => {
     useCallback(() => {
       try { setCurrentCustomer('pos_guest'); } catch (_) {}
 
-      const searchChanged = lastSearchRef.current !== searchText;
-      const categoryChanged = lastCategoryRef.current !== selectedPosCategory;
-      if (!hasLoadedRef.current || searchChanged || categoryChanged) {
-        hasAttemptedFetchRef.current = true;
-        fetchData({ searchText, posCategoryId: selectedPosCategory });
-        hasLoadedRef.current = true;
-        lastSearchRef.current = searchText;
-        lastCategoryRef.current = selectedPosCategory;
-      }
-
-      // Total templates matching the current filter — drives "Showing X / Y".
-      fetchProductTemplateCountOdoo({
-        searchText,
-        posCategoryId: selectedPosCategory,
-      }).then((total) => setTotalCount(total)).catch(() => setTotalCount(0));
-
-      // Refresh POS category chips + their per-category counts on focus so
-      // newly added/edited categories show up without requiring an app restart.
-      (async () => {
+      // One-shot lookup of pos.config.iface_available_categ_ids the first
+      // time POSProducts focuses. Cached in state for the lifetime of the
+      // screen — registers don't change category config mid-session.
+      const ensureConfigFilter = async () => {
+        if (configLoadedRef.current || !registerId) return null;
         try {
-          const cats = await fetchPosCategoriesOdoo();
+          const f = await fetchPosConfigCategories({ configId: registerId });
+          configLoadedRef.current = true;
+          setConfigFilter(f);
+          return f;
+        } catch (_) {
+          configLoadedRef.current = true;
+          return null;
+        }
+      };
+
+      const doFetch = async () => {
+        const f = await ensureConfigFilter();
+        const allowed = (f && f.limit && f.categoryIds.length)
+          ? f.categoryIds
+          : allowedIds;
+
+        const searchChanged = lastSearchRef.current !== searchText;
+        const categoryChanged = lastCategoryRef.current !== selectedPosCategory;
+        if (!hasLoadedRef.current || searchChanged || categoryChanged) {
+          hasAttemptedFetchRef.current = true;
+          fetchData({ searchText, posCategoryId: selectedPosCategory, allowedCategoryIds: allowed });
+          hasLoadedRef.current = true;
+          lastSearchRef.current = searchText;
+          lastCategoryRef.current = selectedPosCategory;
+        }
+
+        // Total templates matching the current filter — drives "Showing X / Y".
+        fetchProductTemplateCountOdoo({
+          searchText,
+          posCategoryId: selectedPosCategory,
+          allowedCategoryIds: allowed,
+        }).then((total) => setTotalCount(total)).catch(() => setTotalCount(0));
+
+        // Refresh POS category chips + their per-category counts on focus so
+        // newly added/edited categories show up without requiring an app restart.
+        try {
+          const cats = await fetchPosCategoriesOdoo({ allowedCategoryIds: allowed });
           const ids = (cats || []).map((c) => c.id).filter(Boolean);
           const counts = await fetchPosCategoryCountsOdoo(ids);
           setPosCategories(cats || []);
           setCategoryCounts(counts || { all: 0 });
-        } catch (e) {
+        } catch (_) {
           // best-effort; chip bar simply hides if it fails
         }
-      })();
-    }, [searchText, selectedPosCategory])
+      };
+
+      doFetch();
+    }, [searchText, selectedPosCategory, registerId, allowedIds])
   );
 
   useEffect(() => {
@@ -195,8 +234,47 @@ const POSProducts = ({ navigation }) => {
   }, [navigation]);
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText, posCategoryId: selectedPosCategory });
-  }, [searchText, selectedPosCategory, fetchMoreData]);
+    fetchMoreData({ searchText, posCategoryId: selectedPosCategory, allowedCategoryIds: allowedIds });
+  }, [searchText, selectedPosCategory, fetchMoreData, allowedIds]);
+
+  // Scanner flow — opens the existing camera scanner. On a successful scan
+  // we look the product up by barcode and pipe it through the same
+  // handleQuickAdd that the `+` button uses, so the "Already Added" /
+  // product-added feedback toasts behave identically.
+  const addProductByBarcode = useCallback(async (barcode) => {
+    if (!barcode) return;
+    try {
+      const matches = await fetchProductDetailsByBarcode(String(barcode));
+      if (!matches || matches.length === 0) {
+        Toast.show({ type: 'error', text1: 'Not found', text2: `No product for barcode ${barcode}` });
+        return;
+      }
+      // Map the barcode-API shape to the shape handleQuickAdd expects.
+      const m = matches[0];
+      const item = {
+        id: m.id || m.product_id || m.variant_id,
+        name: m.name || m.product_name || m.display_name || 'Product',
+        product_name: m.product_name || m.name,
+        default_code: m.default_code || m.product_code || '',
+        lst_price: Number(m.lst_price ?? m.list_price ?? m.price ?? 0),
+        image_url: m.image_url || m.image_1920 || null,
+        categ_id: m.categ_id || false,
+      };
+      handleQuickAdd(item);
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Scan failed', text2: e?.message || 'Try again' });
+    }
+  }, [handleQuickAdd]);
+
+  const handleOpenScanner = useCallback(() => {
+    navigation.navigate('Scanner', {
+      onScan: async (barcode) => {
+        // Close the scanner first so the user lands back on POSProducts.
+        navigation.goBack();
+        await addProductByBarcode(String(barcode || ''));
+      },
+    });
+  }, [navigation, addProductByBarcode]);
 
   const renderItem = useCallback(({ item }) => {
     if (item.empty) {
@@ -276,7 +354,19 @@ const POSProducts = ({ navigation }) => {
 
   return (
     <SafeAreaView>
-      <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
+      <View style={posHeaderStyles.row}>
+        <View style={{ flex: 1 }}>
+          <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
+        </View>
+        <TouchableOpacity
+          onPress={handleOpenScanner}
+          style={posHeaderStyles.scanBtn}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <MaterialIcons name="qr-code-scanner" size={22} color={NAVY} />
+        </TouchableOpacity>
+      </View>
       <SearchContainer
         placeholder="Search Products"
         onChangeText={handleSearchTextChange}
@@ -404,6 +494,27 @@ const floatingStyles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 15,
     letterSpacing: 0.3,
+  },
+});
+
+// Header row with the back-arrow / "Products" title on the left and a scan
+// icon on the right — opens the camera scanner to add by barcode.
+const posHeaderStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  scanBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
 });
 
