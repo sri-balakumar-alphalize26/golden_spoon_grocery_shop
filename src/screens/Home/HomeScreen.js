@@ -53,6 +53,7 @@ const SECTIONS = [
     accent: '#0EA5E9',
     items: [
       { id: 'easy-purchase', title: 'Easy Purchase', screen: 'EasyPurchaseList', featureKey: 'home.tile.easy_purchase', icon: require('@assets/images/Home/section/easypurchase.png'), bg: '#E0F2FE', accent: '#0284C7' },
+      { id: 'quick-purchase-return', title: 'Quick Return', screen: 'QuickPurchaseReturnList', featureKey: 'home.tile.quick_purchase_return', icon: require('@assets/images/Home/section/easypurchase.png'), bg: '#FEE2E2', accent: '#B91C1C' },
     ],
   },
   {

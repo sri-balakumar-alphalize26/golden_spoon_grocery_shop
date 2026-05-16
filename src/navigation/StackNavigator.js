@@ -88,6 +88,11 @@ import {
   PaymentMethodFormScreen,
   BarcodePrintScreen,
 } from '@screens/EasyPurchase';
+import {
+  QuickPurchaseReturnListScreen,
+  QuickPurchaseReturnFormScreen,
+  QuickPurchaseReturnDetailScreen,
+} from '@screens/QuickPurchaseReturn';
 
 
 
@@ -106,6 +111,9 @@ const StackNavigator = () => {
       <Stack.Screen name="EasyPurchaseList" component={EasyPurchaseListScreen} options={{ headerShown: false }} />
       <Stack.Screen name="EasyPurchaseForm" component={EasyPurchaseFormScreen} options={{ headerShown: false }} />
       <Stack.Screen name="EasyPurchaseDetail" component={EasyPurchaseDetailScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="QuickPurchaseReturnList" component={QuickPurchaseReturnListScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="QuickPurchaseReturnForm" component={QuickPurchaseReturnFormScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="QuickPurchaseReturnDetail" component={QuickPurchaseReturnDetailScreen} options={{ headerShown: false }} />
       <Stack.Screen name="PaymentMethods" component={PaymentMethodsScreen} options={{ headerShown: false }} />
       <Stack.Screen name="PaymentMethodForm" component={PaymentMethodFormScreen} options={{ headerShown: false }} />
       <Stack.Screen name="BarcodePrint" component={BarcodePrintScreen} options={{ headerShown: false }} />

@@ -219,6 +219,19 @@ const POSPayment = ({ navigation, route }) => {
     route?.params?.registerId || route?.params?.posConfigId || null
   );
   const [posPaymentMethods, setPosPaymentMethods] = useState([]);
+  // Global pos.payment.method list — used as a fallback so Credit (or any
+  // other bank method that's defined in Odoo but not yet linked to this
+  // register's pos.config.payment_method_ids) still appears in the Split
+  // Payment popup. Without this, an admin who forgets to add Credit to the
+  // register would lose access to it from the app.
+  const [allPaymentMethods, setAllPaymentMethods] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    fetchAllPaymentMethods()
+      .then((rows) => { if (alive) setAllPaymentMethods(Array.isArray(rows) ? rows : []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Map journals to Odoo-style payment modes (cash / card / customer account)
   const getJournalForMode = (mode) => {
@@ -897,14 +910,42 @@ const POSPayment = ({ navigation, route }) => {
     splitSlot1.methodId !== splitSlot2.methodId;
 
   // Helper: lookup a method record by id, plus pick a sensible icon for it.
-  const getSplitMethod = (id) => posPaymentMethods.find((m) => m.id === id) || null;
+  const getSplitMethod = (id) =>
+    posPaymentMethods.find((m) => m.id === id)
+    || allPaymentMethods.find((m) => m.id === id)
+    || null;
   // Methods eligible for the Split Payment popup — only pay-later methods
   // (customer-account, flagged by split_transactions=true) are excluded
-  // because they can't settle a split-now payment. Cash, Card, Credit, and
-  // any other bank-type method the register accepts are all shown.
-  const splitMethods = posPaymentMethods.filter(
-    (m) => m.split_transactions !== true,
-  );
+  // because they can't settle a split-now payment.
+  //
+  // Force-merge: start from the config-scoped posPaymentMethods, then UNION
+  // any global pos.payment.method records that aren't already in the list.
+  // This guarantees Credit (and any other bank-type method defined in Odoo
+  // but not yet linked to this register's pos.config.payment_method_ids)
+  // appears in the popup. Cash, Card, Credit, and any other bank-type
+  // method are all shown regardless of register configuration.
+  const splitMethods = (() => {
+    // Only Cash / Card / Credit are valid for an in-app split payment.
+    // Pay-later methods (customer-account, split_transactions=true) excluded.
+    // Dedupe by lowercased name so duplicate global records — one per
+    // register/company — collapse to a single chip. Whitelist by name
+    // rejects unrelated entries (e.g. "Partial payment") that might appear
+    // in the global pos.payment.method list.
+    const allowedNames = new Set(['cash', 'card', 'credit']);
+    const seen = new Set();
+    const out = [];
+    const add = (m) => {
+      if (!m || m.split_transactions === true) return;
+      const name = String(m.name || '').trim().toLowerCase();
+      if (!name || !allowedNames.has(name)) return;
+      if (seen.has(name)) return;
+      seen.add(name);
+      out.push(m);
+    };
+    posPaymentMethods.forEach(add);
+    allPaymentMethods.forEach(add);
+    return out;
+  })();
   // One-time debug so the user can confirm Credit is actually present on the
   // active register's pos.config.payment_method_ids when the split popup
   // opens. If `splitMethods` here doesn't include Credit, the register's

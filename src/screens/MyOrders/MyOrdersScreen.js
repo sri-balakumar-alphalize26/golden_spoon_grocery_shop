@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, ScrollView } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { fetchOrdersOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
@@ -15,6 +15,19 @@ import { useProductStore } from '@stores/product';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
+import { COLORS } from '@constants/theme';
+
+// Chip filters surfaced at the top of the list. Maps the label the user sees
+// to the pos.order.state value Odoo expects (or null for "all"). Drafts are
+// treated as the user-facing "Unpaid" bucket.
+const STATE_FILTERS = [
+  { key: null,       label: 'All' },
+  { key: 'paid',     label: 'Paid' },
+  { key: 'draft',    label: 'Unpaid' },
+  { key: 'done',     label: 'Done' },
+  { key: 'invoiced', label: 'Invoiced' },
+  { key: 'cancel',   label: 'Cancelled' },
+];
 
 const MyOrdersScreen = ({ navigation, route }) => {
   // Optional filters passed in from the POSRegister kebab popover or from
@@ -23,7 +36,12 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const configId = route?.params?.configId || null;
   const sessionId = route?.params?.sessionId || null;
   const configName = route?.params?.configName || null;
-  const stateFilter = route?.params?.stateFilter || null;
+  // stateFilter is initialised from the route param (e.g. Continue Selling →
+  // Existing Order passes 'draft') but is locally mutable via the chip strip
+  // at the top of the list so the cashier can flip between Paid / Unpaid /
+  // Done / etc. without leaving the screen.
+  const initialStateFilter = route?.params?.stateFilter || null;
+  const [stateFilter, setStateFilter] = useState(initialStateFilter);
   const headerTitle = (() => {
     if (stateFilter === 'draft' && configName) return `Drafts — ${configName}`;
     if (stateFilter === 'draft') return 'Draft Orders';
@@ -270,6 +288,33 @@ const MyOrdersScreen = ({ navigation, route }) => {
         onChangeText={handleSearchTextChange}
         value={searchText}
       />
+
+      {/* State filter chips — single-line horizontal strip just under the
+          search bar. Tapping a chip flips `stateFilter` and the existing
+          useFocusEffect re-fetches the list scoped to that state. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filterStripContent}
+        style={styles.filterStrip}
+      >
+        {STATE_FILTERS.map((f) => {
+          const active = stateFilter === f.key;
+          return (
+            <TouchableOpacity
+              key={String(f.key)}
+              activeOpacity={0.85}
+              onPress={() => setStateFilter(f.key)}
+              style={[styles.filterChip, active && styles.filterChipActive]}
+            >
+              <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                {f.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
       <RoundedContainer>
         {renderOrders()}
       </RoundedContainer>
@@ -361,6 +406,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3,
   },
+
+  // ── Filter chip strip (All / Paid / Unpaid / Done / …) ────────────────
+  filterStrip: { flexGrow: 0, backgroundColor: '#fff' },
+  filterStripContent: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  filterChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1.2,
+    borderColor: COLORS.primaryThemeColor,
+    backgroundColor: '#fff',
+  },
+  filterChipActive: {
+    backgroundColor: COLORS.primaryThemeColor,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primaryThemeColor,
+    letterSpacing: 0.3,
+  },
+  filterChipTextActive: { color: '#fff' },
 });
 
 export default MyOrdersScreen;
