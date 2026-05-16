@@ -1223,6 +1223,23 @@ export const refundPosOrder = async ({ orderId } = {}) => {
   }
 };
 
+// Count how many refund pos.orders reference `orderId` as their
+// `refunded_order_id`. Used by OrderDetailScreen to hide the Return
+// Products button after an order has already been refunded — the stock
+// `refund_orders_count` field isn't always populated on the order read
+// in newer Odoo versions, so this is the reliable check.
+export const countRefundsForOrder = async ({ orderId } = {}) => {
+  if (!orderId) return 0;
+  try {
+    const result = await _closeCallKw('pos.order', 'search_count',
+      [[['refunded_order_id', '=', Number(orderId)], ['state', '!=', 'cancel']]]);
+    return Number(result) || 0;
+  } catch (e) {
+    console.warn('[Refund] countRefundsForOrder failed:', e?.message);
+    return 0;
+  }
+};
+
 // api/services/generalApi.js
 import axios from "axios";
 import ODOO_BASE_URL, { getOdooUrl } from '@api/config/odooConfig';
@@ -1443,6 +1460,7 @@ export const fetchProductTemplateCountOdoo = async ({
   categoryId = null,
   posCategoryId = null,
   posOnly = false,
+  allowedCategoryIds = null,
 } = {}) => {
   const baseUrl = getOdooUrl();
   let domain = [];
@@ -1454,6 +1472,11 @@ export const fetchProductTemplateCountOdoo = async ({
     domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
   } else if (categoryId) {
     domain = domain.concat([['categ_id', '=', Number(categoryId)]]);
+  } else if (Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0) {
+    // Scope to just the categories this register accepts — same gate as
+    // fetchProductsByTemplateOdoo so the "Showing X of Y" footer counts
+    // the same population the grid actually displays.
+    domain = domain.concat([['pos_categ_ids', 'in', allowedCategoryIds.map(Number)]]);
   }
   if (posOnly) {
     domain = domain.concat([['available_in_pos', '=', true]]);
@@ -1613,53 +1636,53 @@ export const updatePosCategoryOdoo = async (categoryId, { name, color } = {}) =>
 // Counts of products per POS category, plus a grand total. Returns
 // { all: <int>, [categoryId]: <int>, ... }. Used by the Products screen
 // to label each category chip with its count.
-export const fetchPosCategoryCountsOdoo = async (categoryIds = [], { posOnly = false } = {}) => {
-  const baseUrl = getOdooUrl();
+//
+// Implementation note: previously a loop of per-category search_count calls,
+// which undercounted templates whose `pos_categ_ids` only matched the chip
+// indirectly. Now a single product.template `read_group` on `pos_categ_ids`
+// gives one (template × category) row per pairing, so chips reflect actual
+// membership. `All` is a separate distinct-template search_count over the
+// same base domain so it always matches the grid total (3+7+27 may be >
+// `All` when a template is in 2 POS cats — that's correct semantics).
+export const fetchPosCategoryCountsOdoo = async (categoryIds = [], { posOnly = false, allowedCategoryIds = null } = {}) => {
+  const baseDomain = [];
+  if (posOnly) baseDomain.push(['available_in_pos', '=', true]);
+  if (Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0) {
+    baseDomain.push(['pos_categ_ids', 'in', allowedCategoryIds.map(Number)]);
+  }
   const counts = { all: 0 };
-  // When the caller is the POS Products screen, the list and the strip
-  // count both filter by available_in_pos=true — so the chip counts need
-  // to honor the same filter, otherwise `All (83)` won't match the
-  // rendered `Showing 69 of 69`. Normal Products passes no flag and gets
-  // the original "all templates" count.
-  const posDomain = posOnly ? [['available_in_pos', '=', true]] : [];
-
-  const callCount = async (extra) => {
-    const domain = [...posDomain, ...extra];
-    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        // Count templates (not variants) so chip counts match the list,
-        // which is deduped by product.template.
-        model: 'product.template',
-        method: 'search_count',
-        args: [domain],
-        kwargs: {},
-      },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    if (resp.data && resp.data.error) {
-      throw new Error(resp.data.error?.data?.message || 'search_count failed');
-    }
-    return Number(resp.data.result) || 0;
-  };
 
   try {
-    counts.all = await callCount([]);
+    // read_group with `lazy: false` gives an exact row per `pos_categ_ids`
+    // value rather than nesting by group — single round-trip, no per-chip
+    // search_count loop required.
+    const groups = await _closeCallKw(
+      'product.template', 'read_group',
+      [baseDomain, ['pos_categ_ids'], ['pos_categ_ids']],
+      { lazy: false },
+    );
+    (groups || []).forEach((g) => {
+      const id = Array.isArray(g.pos_categ_ids) ? g.pos_categ_ids[0] : g.pos_categ_ids;
+      const n = Number(g.pos_categ_ids_count ?? g.__count) || 0;
+      if (id != null) counts[id] = n;
+    });
   } catch (e) {
-    console.warn('fetchPosCategoryCountsOdoo total failed:', e?.message);
+    console.warn('fetchPosCategoryCountsOdoo read_group failed:', e?.message);
   }
 
-  const pairs = await Promise.all(
-    (categoryIds || []).map(async (cid) => {
-      try {
-        const n = await callCount([['pos_categ_ids', 'in', [Number(cid)]]]);
-        return [cid, n];
-      } catch (e) {
-        return [cid, 0];
-      }
-    })
-  );
-  pairs.forEach(([cid, n]) => { counts[cid] = n; });
+  try {
+    // Distinct-template count for the "All" chip — narrowed by the same
+    // baseDomain so it lines up exactly with the grid total.
+    counts.all = await _closeCallKw('product.template', 'search_count', [baseDomain]);
+  } catch (e) {
+    console.warn('fetchPosCategoryCountsOdoo all failed:', e?.message);
+  }
+
+  // Make sure every category caller asked about is present in the result
+  // (zero for ones with no products) so the chip strip render is stable.
+  (categoryIds || []).forEach((cid) => {
+    if (counts[cid] == null) counts[cid] = 0;
+  });
   return counts;
 };
 
@@ -1904,7 +1927,12 @@ export const updateProductOdoo = async (arg, opts = {}) => {
     }
   }
 
-  // Barcode lives on the variant. Try writing it there.
+  // Barcode lives on the variant (product.product), NOT on the template.
+  // We've already stripped it from `tmplVals` above, so the variant write
+  // here is the source of truth. The verify step below reads barcode back
+  // from product.product (not product.template) — reading it from the
+  // template was the old bug that always reported barcode as "not saved"
+  // even when the variant write succeeded.
   let barcodeWriteFailed = false;
   if (barcodeWriteVal !== undefined && resolvedVariantId) {
     try {
@@ -1915,12 +1943,11 @@ export const updateProductOdoo = async (arg, opts = {}) => {
     }
   }
 
-  // Verify: re-read the same fields from the template and report any that
-  // didn't take. This catches both silent rejections AND the case where the
-  // initial write succeeded but a downstream rule reverted the value.
-  const fieldsToVerify = Object.keys(vals);
+  // Verify template-level fields. Barcode is excluded here because it lives
+  // on the variant and gets its own verify pass below.
+  const tmplFieldsToVerify = Object.keys(vals).filter((k) => k !== 'barcode');
   const notSaved = [];
-  if (fieldsToVerify.length > 0) {
+  if (tmplFieldsToVerify.length > 0) {
     try {
       const verifyResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0',
@@ -1928,26 +1955,52 @@ export const updateProductOdoo = async (arg, opts = {}) => {
         params: {
           model: 'product.template',
           method: 'read',
-          args: [[productTmplId], fieldsToVerify],
+          args: [[productTmplId], tmplFieldsToVerify],
           kwargs: {},
         },
       }, { headers: { 'Content-Type': 'application/json' } });
       const after = (verifyResp.data?.result || [])[0] || {};
-      for (const k of fieldsToVerify) {
+      for (const k of tmplFieldsToVerify) {
         if (!fieldEquals(k, vals[k], after[k])) notSaved.push(k);
       }
     } catch (err) {
       console.warn('updateProductOdoo verify read failed:', err?.payload || err?.message);
-      // Verify itself failed — assume nothing saved if the main write also failed,
-      // otherwise leave notSaved empty (best effort).
-      if (writeFatalError) notSaved.push(...fieldsToVerify);
+      if (writeFatalError) notSaved.push(...tmplFieldsToVerify);
     }
   }
-  if (barcodeWriteFailed && !notSaved.includes('barcode')) notSaved.push('barcode');
+
+  // Variant-level verify for barcode (read from product.product, not template).
+  if (barcodeWriteVal !== undefined && resolvedVariantId) {
+    if (barcodeWriteFailed) {
+      if (!notSaved.includes('barcode')) notSaved.push('barcode');
+    } else {
+      try {
+        const verifyVarResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'product.product',
+            method: 'read',
+            args: [[resolvedVariantId], ['barcode']],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        const after = (verifyVarResp.data?.result || [])[0] || {};
+        if (!fieldEquals('barcode', barcodeWriteVal, after.barcode)) {
+          notSaved.push('barcode');
+        }
+      } catch (err) {
+        console.warn('updateProductOdoo variant verify failed:', err?.payload || err?.message);
+        // Soft-fail: don't flag as notSaved on verify error alone if the
+        // write call itself didn't throw.
+      }
+    }
+  }
 
   // If absolutely nothing went through, surface a hard error so the caller
   // shows the full Odoo message instead of a "some fields not saved" toast.
-  if (writeFatalError && notSaved.length === fieldsToVerify.length && fieldsToVerify.length > 0) {
+  const totalFields = tmplFieldsToVerify.length + (barcodeWriteVal !== undefined ? 1 : 0);
+  if (writeFatalError && notSaved.length === totalFields && totalFields > 0) {
     return { error: writeFatalError };
   }
 
@@ -5706,7 +5759,7 @@ export const updateUserPasswordOdoo = async (userId, newPassword) => {
 };
 
 // Fetch POS orders from Odoo
-export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '', configId = null, sessionId = null } = {}) => {
+export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '', configId = null, sessionId = null, stateFilter = null } = {}) => {
   try {
     let domain = [];
 
@@ -5726,6 +5779,9 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '',
     // AND-leaves so they combine cleanly with the search-text domain above.
     if (sessionId) domain.push(['session_id', '=', Number(sessionId)]);
     if (configId) domain.push(['config_id', '=', Number(configId)]);
+    // Continue Selling → Existing Order uses this to scope the list to just
+    // pos.orders in `state='draft'` for the active session.
+    if (stateFilter) domain.push(['state', '=', String(stateFilter)]);
 
     const companyId = getActiveCompanyId();
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {

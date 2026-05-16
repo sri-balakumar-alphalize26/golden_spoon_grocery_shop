@@ -23,9 +23,14 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const configId = route?.params?.configId || null;
   const sessionId = route?.params?.sessionId || null;
   const configName = route?.params?.configName || null;
-  const headerTitle = configName
-    ? `Orders — ${configName}`
-    : (sessionId ? 'Orders — this session' : 'Orders');
+  const stateFilter = route?.params?.stateFilter || null;
+  const headerTitle = (() => {
+    if (stateFilter === 'draft' && configName) return `Drafts — ${configName}`;
+    if (stateFilter === 'draft') return 'Draft Orders';
+    if (configName) return `Orders — ${configName}`;
+    if (sessionId) return 'Orders — this session';
+    return 'Orders';
+  })();
 
   const currency = useAuthStore((state) => state.currency);
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
@@ -37,7 +42,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const resumeDraftHidden = useFeatureHidden('orders.resume_draft');
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, configId, sessionId }),
+    (text) => fetchData({ searchText: text, configId, sessionId, stateFilter }),
     500
   );
 
@@ -52,14 +57,14 @@ const MyOrdersScreen = ({ navigation, route }) => {
   useFocusEffect(
     useCallback(() => {
       hasAttemptedFetchRef.current = true;
-      fetchData({ searchText, configId, sessionId });
+      fetchData({ searchText, configId, sessionId, stateFilter });
       hasLoadedRef.current = true;
-    }, [searchText, configId, sessionId])
+    }, [searchText, configId, sessionId, stateFilter])
   );
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText, configId, sessionId });
-  }, [searchText, configId, sessionId, fetchMoreData]);
+    fetchMoreData({ searchText, configId, sessionId, stateFilter });
+  }, [searchText, configId, sessionId, stateFilter, fetchMoreData]);
 
   const getStatusColor = (state) => {
     switch (state) {

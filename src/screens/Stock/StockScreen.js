@@ -171,7 +171,7 @@ const StockScreen = ({ navigation }) => {
     let offset = 0;
     const all = [];
     while (true) {
-      const page = await fetchStockProductsOdoo({ offset, limit: PAGE, searchText, filter });
+      const page = await fetchStockProductsByTemplateOdoo({ offset, limit: PAGE, searchText, filter });
       if (!Array.isArray(page) || page.length === 0) break;
       all.push(...page);
       if (page.length < PAGE) break;

@@ -24,6 +24,17 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
+
+  // POSRegister's Continue Selling → New Order path passes forceNewOrder=true
+  // so this screen always opens with a clean cart, even if a previous
+  // session left items in the product store. Defensive secondary clear —
+  // the popup handler also calls clearProducts before navigating.
+  useEffect(() => {
+    if (route?.params?.forceNewOrder) {
+      try { clearProducts(); } catch (_) {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [creatingOrder, setCreatingOrder] = useState(false);
   // Persistent draft state lives in the product store so it survives
   // screen unmounts (going back to MyOrders → coming back to this screen).

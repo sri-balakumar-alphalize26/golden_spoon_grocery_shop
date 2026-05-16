@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, refundPosOrder } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, refundPosOrder, countRefundsForOrder } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -101,6 +101,27 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // the app's popups (LogoutModal / Close Register).
   const [refunding, setRefunding] = useState(false);
   const [returnConfirmVisible, setReturnConfirmVisible] = useState(false);
+  // Live count of refund pos.orders that reference this order. When > 0 the
+  // Return Products button is hidden — Odoo's stock `refund_orders_count`
+  // field isn't always exposed, so we compute it ourselves on every order
+  // load. Also re-fetched on focus so re-opening this order right after
+  // refunding from the same screen reflects the new state.
+  const [refundExistsCount, setRefundExistsCount] = useState(0);
+
+  // After the order loads (or refocuses), check Odoo for any refund orders
+  // that reference this one. Recomputing on every order id change covers
+  // the user flow: refund this order → goBack → re-open → button is gone.
+  useEffect(() => {
+    if (!order?.id) {
+      setRefundExistsCount(0);
+      return;
+    }
+    let alive = true;
+    countRefundsForOrder({ orderId: order.id })
+      .then((n) => { if (alive) setRefundExistsCount(Number(n) || 0); })
+      .catch(() => { if (alive) setRefundExistsCount(0); });
+    return () => { alive = false; };
+  }, [order?.id]);
 
   // True when this order is itself a refund of another order — drives the
   // small red REFUND chip + "Refunded from {original}" link near the header.
@@ -114,6 +135,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // - or the order isn't in a "paid"/"done"/"invoiced" state.
   const canRefund = order
     && !isRefund
+    && refundExistsCount === 0
     && (Number(order.refund_orders_count) || 0) === 0
     && ['paid', 'done', 'invoiced'].includes(order.state);
 

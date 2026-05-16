@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_quick_purchase_return_user,quick.purchase.return.user,model_quick_purchase_return,purchase.group_purchase_user,1,1,1,0
+access_quick_purchase_return_manager,quick.purchase.return.manager,model_quick_purchase_return,purchase.group_purchase_manager,1,1,1,1
+access_quick_purchase_return_line_user,quick.purchase.return.line.user,model_quick_purchase_return_line,purchase.group_purchase_user,1,1,1,0
+access_quick_purchase_return_line_manager,quick.purchase.return.line.manager,model_quick_purchase_return_line,purchase.group_purchase_manager,1,1,1,1

@@ -30,6 +30,7 @@ import {
   unlinkPosOrders,
 } from '@api/services/generalApi';
 import useAuthStore from '@stores/auth/useAuthStore';
+import { useProductStore } from '@stores/product';
 import { formatCurrency } from '@utils/currency';
 import { FeatureGate } from '@components/FeatureGate';
 import * as Print from 'expo-print';
@@ -110,6 +111,12 @@ const POSRegister = ({ navigation }) => {
   // Live "Ongoing" totals per open session, fetched after the session list.
   // Shape: { [sessionId]: { orderCount, orderTotal } }.
   const [ongoingBySession, setOngoingBySession] = useState({});
+
+  // Continue Selling popup — choice between a fresh register (New Order)
+  // and resuming an in-progress draft from this session (Existing Order).
+  const [continueModalVisible, setContinueModalVisible] = useState(false);
+  const [continueTargetSession, setContinueTargetSession] = useState(null);
+  const { clearProducts } = useProductStore();
 
   const loadRegistersAndSessions = async () => {
     console.log('[POSRegister] loading registers and open sessions');
@@ -418,7 +425,20 @@ const POSRegister = ({ navigation }) => {
     }
   };
 
+  // Tap on Continue Selling → open the New/Existing choice popup instead of
+  // jumping straight into TakeoutDelivery. Cashier picks New Order for a
+  // clean register or Existing Order to resume a saved draft.
   const handleContinueSelling = (session) => {
+    setContinueTargetSession(session);
+    setContinueModalVisible(true);
+  };
+
+  const handleStartNewOrder = () => {
+    const session = continueTargetSession;
+    setContinueModalVisible(false);
+    if (!session) return;
+    // Wipe any leftover cart from a prior order so the register opens empty.
+    try { clearProducts(); } catch (_) {}
     navigation.navigate('TakeoutDelivery', {
       sessionId: session.id,
       registerId: session.config_id?.[0],
@@ -427,6 +447,19 @@ const POSRegister = ({ navigation }) => {
       userName: session.user_id?.[1],
       openingAmount: session.cash_register_balance_start || 0,
       presetName: 'Takeaway',
+      forceNewOrder: true,
+    });
+  };
+
+  const handleResumeExistingOrder = () => {
+    const session = continueTargetSession;
+    setContinueModalVisible(false);
+    if (!session) return;
+    navigation.navigate('MyOrdersScreen', {
+      sessionId: session.id,
+      configId: session.config_id?.[0],
+      configName: session.config_id?.[1] || session.name,
+      stateFilter: 'draft',
     });
   };
 
@@ -976,6 +1009,63 @@ const POSRegister = ({ navigation }) => {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Continue Selling choice — opens when the cashier taps Continue
+          Selling on an open-session card. Two rows: New Order (clears the
+          cart and enters TakeoutDelivery fresh) and Existing Order (opens
+          this session's drafts in MyOrdersScreen). */}
+      <Modal
+        visible={continueModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setContinueModalVisible(false)}
+      >
+        <View style={s.continueBg}>
+          <View style={s.continueCard}>
+            <View style={s.continueIconDisk}>
+              <MaterialIcons name="storefront" size={28} color="#7c3aed" />
+            </View>
+            <Text style={s.continueTitle}>Continue Selling</Text>
+            <Text style={s.continueSub} numberOfLines={1}>
+              {continueTargetSession?.config_id?.[1] || continueTargetSession?.name || 'Register'}
+            </Text>
+
+            <TouchableOpacity
+              onPress={handleStartNewOrder}
+              style={[s.continueChoiceBtn, s.continueChoicePrimary]}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="add-shopping-cart" size={22} color="#fff" />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={s.continueChoicePrimaryText}>New Order</Text>
+                <Text style={s.continueChoicePrimarySub}>Open a clean register</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleResumeExistingOrder}
+              style={[s.continueChoiceBtn, s.continueChoiceGhost]}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="history" size={22} color="#7c3aed" />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={s.continueChoiceGhostText}>Existing Order</Text>
+                <Text style={s.continueChoiceGhostSub}>Resume a draft from this session</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#7c3aed" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setContinueModalVisible(false)}
+              style={s.continueCancelBtn}
+              activeOpacity={0.85}
+            >
+              <Text style={s.continueCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* Opening Control modal — Odoo-style cash + note prompt */}
@@ -1635,6 +1725,64 @@ const s = StyleSheet.create({
   // Negative ongoing total (refund-net session) — used in the open-session
   // card's Ongoing value to flag a red total.
   amountNegative: { color: '#dc2626' },
+
+  // ── Continue Selling popup ──────────────────────────────────────────────
+  continueBg: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center', justifyContent: 'center', padding: 18,
+  },
+  continueCard: {
+    width: '100%', maxWidth: 420,
+    backgroundColor: '#fff', borderRadius: 16,
+    paddingVertical: 22, paddingHorizontal: 20,
+    alignItems: 'stretch',
+  },
+  continueIconDisk: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#f3e8ff',
+    alignItems: 'center', justifyContent: 'center',
+    alignSelf: 'center', marginBottom: 12,
+  },
+  continueTitle: {
+    fontSize: 17, fontWeight: '800', color: '#1a1a2e',
+    textAlign: 'center',
+  },
+  continueSub: {
+    marginTop: 2, marginBottom: 16,
+    fontSize: 13, color: '#6b7280', textAlign: 'center',
+  },
+  continueChoiceBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14, paddingHorizontal: 14,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  continueChoicePrimary: {
+    backgroundColor: '#7c3aed',
+  },
+  continueChoicePrimaryText: {
+    color: '#fff', fontWeight: '800', fontSize: 14,
+  },
+  continueChoicePrimarySub: {
+    color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 2,
+  },
+  continueChoiceGhost: {
+    backgroundColor: '#faf5ff',
+    borderWidth: 1, borderColor: '#e9d5ff',
+  },
+  continueChoiceGhostText: {
+    color: '#581c87', fontWeight: '800', fontSize: 14,
+  },
+  continueChoiceGhostSub: {
+    color: '#6b7280', fontSize: 11, marginTop: 2,
+  },
+  continueCancelBtn: {
+    marginTop: 6, paddingVertical: 12,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  continueCancelText: {
+    color: '#6b7280', fontWeight: '700', fontSize: 13,
+  },
 });
 
 export default POSRegister;

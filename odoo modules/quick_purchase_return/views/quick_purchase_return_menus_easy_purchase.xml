@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    
+    <!-- 
+        This file adds a menu item to the Easy Purchase app.
+        It should only be loaded if easy_purchase module is installed.
+        Add this file to the manifest only when easy_purchase is a dependency.
+    -->
+    
+    <!-- Add to Easy Purchase app -->
+    <menuitem id="quick_purchase_return_menu_in_easy_purchase"
+              name="Purchase Return"
+              parent="easy_purchase.easy_purchase_menu_root"
+              action="quick_purchase_return_action"
+              sequence="20"
+              groups="purchase.group_purchase_user"/>
+
+</odoo>

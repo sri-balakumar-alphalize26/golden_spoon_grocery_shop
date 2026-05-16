@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
-import { View, ScrollView, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, ScrollView, Text, TouchableOpacity, StyleSheet, Platform, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
 import { ProductsList } from '@components/Product';
@@ -9,8 +9,8 @@ import {
   fetchPosCategoryCountsOdoo,
   fetchProductTemplateCountOdoo,
   fetchPosConfigCategories,
-  fetchProductDetailsByBarcode,
 } from '@api/services/generalApi';
+import { fetchProductDetailsByBarcode } from '@api/details/detailApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { formatData } from '@utils/formatters';
@@ -83,6 +83,10 @@ const POSProducts = ({ navigation, route }) => {
   const [selectedPosCategory, setSelectedPosCategory] = useState(null);
   const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
   const [totalCount, setTotalCount] = useState(0);
+  // Scanner "Product Not Found" popup — fired by addProductByBarcode when
+  // the barcode API returns no match or a row without an id we can use.
+  const [notFoundVisible, setNotFoundVisible] = useState(false);
+  const [notFoundBarcode, setNotFoundBarcode] = useState('');
   // pos.config.iface_available_categ_ids snapshot. When `limit` is true we
   // pass `allowedCategoryIds` to every product + category fetch so the cashier
   // only sees what's configured for this register.
@@ -151,7 +155,7 @@ const POSProducts = ({ navigation, route }) => {
         try {
           const cats = await fetchPosCategoriesOdoo({ allowedCategoryIds: allowed });
           const ids = (cats || []).map((c) => c.id).filter(Boolean);
-          const counts = await fetchPosCategoryCountsOdoo(ids);
+          const counts = await fetchPosCategoryCountsOdoo(ids, { allowedCategoryIds: allowed });
           setPosCategories(cats || []);
           setCategoryCounts(counts || { all: 0 });
         } catch (_) {
@@ -245,26 +249,48 @@ const POSProducts = ({ navigation, route }) => {
     if (!barcode) return;
     try {
       const matches = await fetchProductDetailsByBarcode(String(barcode));
-      if (!matches || matches.length === 0) {
-        Toast.show({ type: 'error', text1: 'Not found', text2: `No product for barcode ${barcode}` });
+      console.log('[POSProducts] barcode lookup result:', barcode, '→', matches);
+
+      // The barcode API returns either an array of rows or a single object —
+      // normalise so the downstream lookup is the same.
+      const list = Array.isArray(matches) ? matches : (matches ? [matches] : []);
+      if (list.length === 0) {
+        setNotFoundBarcode(String(barcode));
+        setNotFoundVisible(true);
         return;
       }
-      // Map the barcode-API shape to the shape handleQuickAdd expects.
-      const m = matches[0];
+      const m = list[0];
+      // Pull the variant id out of whatever field shape this API returned.
+      // `product_id` can be a many2one tuple ([id, name]); pluck the int half.
+      const rawId =
+        m.id ??
+        (Array.isArray(m.product_id) ? m.product_id[0] : m.product_id) ??
+        (Array.isArray(m.variant_id) ? m.variant_id[0] : m.variant_id);
+      if (!rawId) {
+        setNotFoundBarcode(String(barcode));
+        setNotFoundVisible(true);
+        return;
+      }
       const item = {
-        id: m.id || m.product_id || m.variant_id,
+        id: rawId,
         name: m.name || m.product_name || m.display_name || 'Product',
-        product_name: m.product_name || m.name,
-        default_code: m.default_code || m.product_code || '',
-        lst_price: Number(m.lst_price ?? m.list_price ?? m.price ?? 0),
-        image_url: m.image_url || m.image_1920 || null,
+        product_name: m.product_name || m.name || m.display_name,
+        default_code: m.default_code || m.product_code || m.code || '',
+        lst_price: Number(
+          m.lst_price ?? m.list_price ?? m.price ?? m.unit_price ?? m.price_unit ?? 0
+        ),
+        image_url: m.image_url || m.image_1920 || m.image || null,
         categ_id: m.categ_id || false,
       };
       handleQuickAdd(item);
+      // Hop back to the register so the cashier sees the line appear — matches
+      // the scan-and-see mental model. Small delay keeps the success Toast on
+      // screen long enough to be visible during the transition.
+      setTimeout(() => navigation.goBack(), 350);
     } catch (e) {
       Toast.show({ type: 'error', text1: 'Scan failed', text2: e?.message || 'Try again' });
     }
-  }, [handleQuickAdd]);
+  }, [handleQuickAdd, navigation]);
 
   const handleOpenScanner = useCallback(() => {
     navigation.navigate('Scanner', {
@@ -354,19 +380,7 @@ const POSProducts = ({ navigation, route }) => {
 
   return (
     <SafeAreaView>
-      <View style={posHeaderStyles.row}>
-        <View style={{ flex: 1 }}>
-          <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
-        </View>
-        <TouchableOpacity
-          onPress={handleOpenScanner}
-          style={posHeaderStyles.scanBtn}
-          activeOpacity={0.7}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <MaterialIcons name="qr-code-scanner" size={22} color={NAVY} />
-        </TouchableOpacity>
-      </View>
+      <NavigationHeader title="Products" onBackPress={() => navigation.goBack()} />
       <SearchContainer
         placeholder="Search Products"
         onChangeText={handleSearchTextChange}
@@ -382,19 +396,57 @@ const POSProducts = ({ navigation, route }) => {
         {renderProducts()}
       </RoundedContainer>
 
-      {/* Floating "Go to Register" button — POS Products only.
-          Returns to TakeoutDelivery (the register / cart screen) where the
-          user can review the cart and place the order. */}
-      <TouchableOpacity
-        onPress={() => navigation.goBack()}
-        activeOpacity={0.85}
-        style={floatingStyles.btn}
-      >
-        <MaterialIcons name="shopping-cart" size={18} color="#fff" style={{ marginRight: 8 }} />
-        <Text style={floatingStyles.text}>Go to Register</Text>
-      </TouchableOpacity>
+      {/* Floating action row — scanner FAB on the left, "Go to Register"
+          pill on the right. Both at bottom-right of POS Products. */}
+      <View style={floatingStyles.row}>
+        <TouchableOpacity
+          onPress={handleOpenScanner}
+          activeOpacity={0.85}
+          style={floatingStyles.scanFab}
+        >
+          <MaterialIcons name="qr-code-scanner" size={22} color="#fff" />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.85}
+          style={floatingStyles.btn}
+        >
+          <MaterialIcons name="shopping-cart" size={18} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={floatingStyles.text}>Go to Register</Text>
+        </TouchableOpacity>
+      </View>
 
       <OverlayLoader visible={loading} />
+
+      {/* "Product Not Found" popup — fired by the scanner FAB when the
+          scanned barcode doesn't map to any product. Styled like the
+          rest of the app's confirm dialogs (white card + navy border +
+          red icon disk + single OK button). */}
+      <Modal
+        visible={notFoundVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setNotFoundVisible(false)}
+      >
+        <View style={notFoundStyles.bg}>
+          <View style={notFoundStyles.card}>
+            <View style={notFoundStyles.iconDisk}>
+              <MaterialIcons name="search-off" size={28} color="#B91C1C" />
+            </View>
+            <Text style={notFoundStyles.title}>Product Not Found</Text>
+            <Text style={notFoundStyles.text}>
+              {`No product matches the scanned barcode${notFoundBarcode ? ` ${notFoundBarcode}` : ''}. Try scanning again or add the product manually.`}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setNotFoundVisible(false)}
+              style={notFoundStyles.okBtn}
+              activeOpacity={0.85}
+            >
+              <Text style={notFoundStyles.okBtnText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -474,10 +526,29 @@ const countStripStyles = StyleSheet.create({
 });
 
 const floatingStyles = StyleSheet.create({
-  btn: {
+  // The whole row is absolute-positioned; individual children are static
+  // inside it so the scanner FAB sits 12px to the left of the pill button.
+  row: {
     position: 'absolute',
     bottom: 24,
     right: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  scanFab: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2E294E',
+    ...Platform.select({
+      ios: { shadowColor: '#2E294E', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 8 },
+    }),
+  },
+  btn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#2E294E',
@@ -497,25 +568,53 @@ const floatingStyles = StyleSheet.create({
   },
 });
 
-// Header row with the back-arrow / "Products" title on the left and a scan
-// icon on the right — opens the camera scanner to add by barcode.
-const posHeaderStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  scanBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+// "Product Not Found" popup — styled like the rest of the app's confirm
+// dialogs: white card with navy 2px border, red icon disk, navy OK button.
+const notFoundStyles = StyleSheet.create({
+  bg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+    padding: 20,
   },
+  card: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: NAVY,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  iconDisk: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  title: { fontSize: 17, fontWeight: '800', color: '#1a1a2e', marginBottom: 8 },
+  text: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 18,
+  },
+  okBtn: {
+    backgroundColor: NAVY,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 10,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  okBtnText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
 });
 
 export default POSProducts;

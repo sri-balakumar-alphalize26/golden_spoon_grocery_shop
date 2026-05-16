@@ -898,12 +898,12 @@ const POSPayment = ({ navigation, route }) => {
 
   // Helper: lookup a method record by id, plus pick a sensible icon for it.
   const getSplitMethod = (id) => posPaymentMethods.find((m) => m.id === id) || null;
-  // Methods eligible for the Partial Payment popup — excludes pay-later
-  // (customer-account, flagged by split_transactions=true) and Bank methods.
+  // Methods eligible for the Split Payment popup — only pay-later methods
+  // (customer-account, flagged by split_transactions=true) are excluded
+  // because they can't settle a split-now payment. Cash, Card, Credit, and
+  // any other bank-type method the register accepts are all shown.
   const splitMethods = posPaymentMethods.filter(
-    (m) =>
-      m.split_transactions !== true &&
-      !(m.name || '').toLowerCase().includes('bank')
+    (m) => m.split_transactions !== true,
   );
   const iconForMethod = (m) => {
     if (!m) return 'help-outline';
@@ -1025,7 +1025,7 @@ const POSPayment = ({ navigation, route }) => {
               // so no journal lookup is needed here.
               setPaymentMode('credit');
             })}
-            {renderModeCard('split', 'Partial\nPayment', 'call-split', () => {
+            {renderModeCard('split', 'Split\nPayment', 'call-split', () => {
               setPaymentMode('split');
               // Default slot 2 amount to (total - slot1) on first open so the
               // common 50/50 case takes one less tap.
