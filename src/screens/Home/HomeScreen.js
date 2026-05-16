@@ -237,7 +237,7 @@ return (
         {/* Company logo */}
         <View style={styles.logoContainer}>
           <Image
-            source={require('@assets/images/header/golden_spoon.jpg')}
+            source={require('@assets/images/logo2.png')}
             style={styles.logoImage}
             resizeMode="contain"
           />

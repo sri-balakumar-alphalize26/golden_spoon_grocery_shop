@@ -204,124 +204,73 @@ export const getCurrentDeviceLocation = async () => {
       return { error: 'permission_denied' };
     }
 
-    // 2a. Last-known: drop strict requiredAccuracy and broaden maxAge to
-    //     5 minutes — any cached fix is better than nothing as a starting
-    //     point, and waiting for sub-200m accuracy was rejecting the cache
-    //     on most devices.
     let pos = null;
+
+    // 1) FAST PATH: any reasonably recent cached fix (≤120s). Returns in ~10ms.
+    //    Verbatim from employee_attendance/AttendanceService.js — confirmed to
+    //    succeed in production on cashier-class Android devices where
+    //    BestForNavigation rejects.
     try {
-      pos = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60_000 });
-      console.log('[POSLocation] lastKnown =', pos ? `${pos.coords?.latitude},${pos.coords?.longitude}` : 'null');
-    } catch (e) {
-      console.warn('[POSLocation] lastKnown threw:', e?.message || e);
-    }
+      const last = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
+      if (last?.coords) {
+        console.log('[POSLocation] CACHED fix accuracy:', last.coords.accuracy, 'm');
+        // Kick off a background refresh so the next call has a fresher cache.
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy?.Balanced ?? 3 })
+          .catch(() => {});
+        pos = last;
+      }
+    } catch (_) { /* fall through */ }
 
-    // 2b. Active fetch with Low accuracy + generous 15s timeout. Indoor
-    //     cold-start GPS commonly needs 10-20s for first fix; the previous
-    //     5s timeout was tripping on real GPS-on devices.
-    if (!pos) {
-      console.log('[POSLocation] active fetch start (Low, timeout 15s)');
-      pos = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy?.Low ?? 2,
-          timeout: 15_000,
-        }).catch((e) => {
-          console.warn('[POSLocation] getCurrentPositionAsync(Low) rejected:', e?.message || e);
-          return null;
-        }),
-        new Promise((r) => setTimeout(() => {
-          console.warn('[POSLocation] hard timeout @16s (Low)');
-          r(null);
-        }, 16_000)),
-      ]);
-      console.log('[POSLocation] Low result =', pos ? `${pos.coords?.latitude},${pos.coords?.longitude}` : 'null');
-    }
-
-    // 2c. Lowest accuracy fallback — passive/network positioning
-    //     (WiFi/cell). Bumped to 20s; on devices without WiFi positioning
-    //     hardware the network-based fallback also takes time to query.
-    if (!pos) {
-      console.log('[POSLocation] retry at Lowest accuracy (timeout 20s)');
-      pos = await Promise.race([
-        Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy?.Lowest ?? 1,
-          timeout: 20_000,
-        }).catch((e) => {
-          console.warn('[POSLocation] getCurrentPositionAsync(Lowest) rejected:', e?.message || e);
-          return null;
-        }),
-        new Promise((r) => setTimeout(() => {
-          console.warn('[POSLocation] hard timeout @21s (Lowest)');
-          r(null);
-        }, 21_000)),
-      ]);
-      console.log('[POSLocation] Lowest result =', pos ? `${pos.coords?.latitude},${pos.coords?.longitude}` : 'null');
-    }
-
-    // 2d. watchPositionAsync race — sometimes the one-shot getCurrentPositionAsync
-    //     hangs while a position-watcher fires within seconds. Open a watcher,
-    //     take the FIRST callback, then immediately stop watching. 10s race.
-    if (!pos) {
-      console.log('[POSLocation] watcher race start (10s)');
-      pos = await new Promise((resolve) => {
-        let resolved = false;
-        let sub = null;
-        const timer = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            if (sub) try { sub.remove(); } catch (_) {}
-            console.warn('[POSLocation] watcher hard timeout @10s');
-            resolve(null);
-          }
-        }, 10_000);
-        Location.watchPositionAsync(
-          { accuracy: Location.Accuracy?.Lowest ?? 1, timeInterval: 1000, distanceInterval: 0 },
-          (loc) => {
-            if (resolved) return;
-            resolved = true;
-            clearTimeout(timer);
-            if (sub) try { sub.remove(); } catch (_) {}
-            console.log('[POSLocation] watcher first fix =',
-              loc?.coords?.latitude, loc?.coords?.longitude);
-            resolve(loc);
-          },
-        ).then((s) => {
-          sub = s;
-          if (resolved && sub) { try { sub.remove(); } catch (_) {} }
-        }).catch((e) => {
-          console.warn('[POSLocation] watcher start threw:', e?.message || e);
-          if (!resolved) { resolved = true; clearTimeout(timer); resolve(null); }
-        });
-      });
-    }
-
-    // 2e. Last-resort diagnostic — log what providers the device claims to
-    //     have. If both gps + network providers are reported `false`, the
-    //     device genuinely has no location capability and the popup is the
-    //     only path forward.
+    // 2) Quick Balanced live fetch — 3s timeout, cell + Wi-Fi triangulation.
+    //    Balanced (not BestForNavigation!) is the accuracy that actually works
+    //    on devices where the GPS chip can't lock a satellite (indoors /
+    //    power-save). Verbatim from employee_attendance.
     if (!pos) {
       try {
-        const ps = await Location.getProviderStatusAsync();
-        console.log('[POSLocation] providers:', JSON.stringify(ps));
-      } catch (e) {
-        console.warn('[POSLocation] getProviderStatusAsync threw:', e?.message || e);
+        const live = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy?.Balanced ?? 3 }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('gps-timeout')), 3000)),
+        ]);
+        if (live?.coords) {
+          console.log('[POSLocation] LIVE-BALANCED fix accuracy:', live.coords.accuracy, 'm');
+          pos = live;
+        }
+      } catch (err) {
+        console.log('[POSLocation] live BALANCED fetch failed:', err?.message || err);
       }
+    }
+
+    // 3) Any-age cache, last resort.
+    if (!pos) {
+      try {
+        const anyLast = await Location.getLastKnownPositionAsync({});
+        if (anyLast?.coords) {
+          console.log('[POSLocation] STALE cache fix accuracy:', anyLast.coords.accuracy, 'm');
+          pos = anyLast;
+        }
+      } catch (_) { /* ignore */ }
     }
 
     if (pos?.coords?.latitude != null) {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
       let locationName = '';
-      try {
-        const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-        const p = (places && places[0]) || null;
-        if (p) {
-          locationName = [p.street, p.name && p.name !== p.street ? p.name : null,
-                          p.district, p.city || p.subregion, p.region, p.country]
-            .filter(Boolean).join(', ');
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const places = await Promise.race([
+            Location.reverseGeocodeAsync({ latitude: lat, longitude: lon }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('reverse-geocode timeout')), 5000)),
+          ]);
+          const p = (places && places[0]) || null;
+          if (p) {
+            locationName = [p.name, p.street, p.city, p.region, p.country]
+              .filter(Boolean).join(', ');
+          }
+          if (locationName) break;
+        } catch (e) {
+          console.warn(`[POSLocation] reverse geocode attempt ${attempt} failed:`, e?.message || e);
         }
-      } catch (e) {
-        console.warn('[POSLocation] reverse geocode failed:', e?.message || e);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
       }
       console.log('[POSLocation] → success', { lat, lon, locationName });
       return { latitude: lat, longitude: lon, locationName };

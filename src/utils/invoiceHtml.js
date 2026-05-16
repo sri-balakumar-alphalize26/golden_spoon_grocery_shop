@@ -48,7 +48,8 @@ export const generateInvoiceHtml = ({
   payments = [],
   // Paper width in millimetres for the @page + .receipt CSS. Defaults to
   // 80mm (the original thermal-receipt size, ≈3.15"). Other supported
-  // values from the in-app PaperSizeModal: 50 (2"), 76 (3"), 100 (4").
+  // values from the in-app PaperSizeModal: 50 (2"), 76 (3"), 100 (4"),
+  // 148 (A5 → fixed-height A5 page), 210 (A4 → fixed-height A4 page).
   paperWidthMm = 80,
   // Letterhead from Odoo res.company (cached via useAuthStore().companyProfile
   // at login). When omitted, the header falls back to a generic "Company"
@@ -62,6 +63,12 @@ export const generateInvoiceHtml = ({
   console.log('[INVOICE:HTML] injecting company =', companyProfile?.name || '(none)', 'cashier =', cashierName);
   const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
   const receiptWidth = Math.max(10, pageWidth - 8);  // 4mm margin × 2
+  // A4/A5 use the CSS named page size so printers paginate onto fixed-height
+  // sheets. Thermal widths keep `auto` height for one continuous strip.
+  const pageSizeCss =
+    pageWidth === 210 ? 'A4' :
+    pageWidth === 148 ? 'A5' :
+    `${pageWidth}mm auto`;
   const orderRef = extractOrderRef(orderName, orderId);
   // Use the active currency (set by post-login fetch and boot-time hydration
   // from AsyncStorage). Decimals are kept at 2 to match the rest of the app
@@ -102,7 +109,7 @@ export const generateInvoiceHtml = ({
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Invoice</title>
     <style>
-      @page { size: ${pageWidth}mm auto; margin: 4mm; }
+      @page { size: ${pageSizeCss}; margin: 4mm; }
       html,body { margin:0; padding:0; }
       .receipt { width:${receiptWidth}mm; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; direction: rtl; }
       .header { text-align:center; font-size:11px; }

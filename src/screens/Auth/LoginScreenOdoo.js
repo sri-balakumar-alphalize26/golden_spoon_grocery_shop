@@ -13,6 +13,7 @@ import { COLORS, FONT_FAMILY, BORDER_RADIUS } from "@constants/theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { useNavigation } from "@react-navigation/native";
+import { MaterialIcons } from "@expo/vector-icons";
 
 import { Button } from "@components/common/Button";
 import { post } from "@api/services/utils";
@@ -98,6 +99,21 @@ const LoginScreenOdoo = () => {
   // Auto-fill credentials toggle. When ON, username + password auto-populate
   // from the saved-credentials map keyed by the current URL+DB.
   const [autoCredentials, setAutoCredentials] = useState(false);
+
+  // Hidden service-mode entry: 7 quick taps on "Welcome back" reveals a gear
+  // in the top-right that routes back to DeviceSetup. Lets technicians repoint
+  // the cashier to a different Odoo server / register without clearing app data.
+  const [welcomeTapCount, setWelcomeTapCount] = useState(0);
+  const [gearVisible, setGearVisible] = useState(false);
+  const handleWelcomeTap = () => {
+    setWelcomeTapCount((c) => {
+      const next = c + 1;
+      if (next >= 7 && !gearVisible) {
+        setGearVisible(true);
+      }
+      return next;
+    });
+  };
 
   // Hydrate URL + DB from device config, and migrate legacy `savedCredentials`
   // username/password into the per-(URL+DB) `saved_credentials` map.
@@ -373,6 +389,17 @@ const LoginScreenOdoo = () => {
       <SafeAreaView backgroundColor={LOGIN_BG}>
         {/* Loader removed during login per UX requirement; submit button has its own disabled state. */}
 
+        {gearVisible ? (
+          <TouchableOpacity
+            style={styles.gearBtn}
+            activeOpacity={0.7}
+            onPress={() => navigation.reset({ index: 0, routes: [{ name: 'DeviceSetup' }] })}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <MaterialIcons name="settings" size={24} color="#2e2a4f" />
+          </TouchableOpacity>
+        ) : null}
+
         <View style={styles.imageContainer}>
           <View style={styles.logoWrapper}>
             <Image
@@ -391,7 +418,9 @@ const LoginScreenOdoo = () => {
         >
           <View style={{ paddingTop: 12 }}>
             <View style={styles.titleBlock}>
-              <Text style={styles.titleText}>Welcome back</Text>
+              <TouchableOpacity activeOpacity={1} onPress={handleWelcomeTap}>
+                <Text style={styles.titleText}>Welcome back</Text>
+              </TouchableOpacity>
               <Text style={styles.subtitleText}>Login to continue to your store</Text>
             </View>
 
@@ -499,6 +528,23 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold,
     color: "#2e2a4f",
     letterSpacing: 0.3,
+  },
+  gearBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 16,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   subtitleText: {
     fontSize: 13,

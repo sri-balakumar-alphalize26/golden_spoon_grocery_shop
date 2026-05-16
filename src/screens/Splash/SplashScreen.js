@@ -61,6 +61,13 @@ const SplashScreen = () => {
 
             if (cancelled) return;
 
+            console.log('[SPLASH] device gate read:', {
+                deviceUuid: !!deviceUuid,
+                deviceServerUrl: deviceServerUrl || null,
+                deviceDbName: deviceDbName || null,
+                deviceRegistered,
+            });
+
             // First launch or device not configured → DeviceSetup
             if (!deviceServerUrl || !deviceDbName || deviceRegistered !== 'true') {
                 try {

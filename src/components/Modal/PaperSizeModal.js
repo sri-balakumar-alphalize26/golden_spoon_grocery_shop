@@ -12,6 +12,8 @@ const SIZES = [
   { inch: '3 inch',   mm: 76,  sub: '76 mm' },
   { inch: '3.5 inch', mm: 80,  sub: '80 mm', isDefault: true },
   { inch: '4 inch',   mm: 100, sub: '100 mm' },
+  { inch: 'A5',       mm: 148, sub: '148 × 210 mm' },
+  { inch: 'A4',       mm: 210, sub: '210 × 297 mm' },
 ];
 
 const PaperSizeModal = ({ isVisible, onSelect, onCancel }) => {
@@ -38,7 +40,7 @@ const PaperSizeModal = ({ isVisible, onSelect, onCancel }) => {
           </View>
 
           <Text style={s.help}>
-            Pick a thermal paper width. The receipt re-flows to fit the chosen size.
+            Pick a paper size. The receipt re-flows to fit the chosen size.
           </Text>
 
           {SIZES.map((sz) => (

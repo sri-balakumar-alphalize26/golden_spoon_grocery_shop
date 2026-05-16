@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, ActivityIndicator, TouchableOpacity, ScrollView, StyleSheet,
   StatusBar, Platform, Dimensions, Alert, Modal, TextInput, Linking,
@@ -107,26 +107,18 @@ const fetchPaymentMethodId = async (journalId) => {
 const POSPayment = ({ navigation, route }) => {
   // Subscribe so the screen re-renders when the currency hydrates / changes.
   useAuthStore((s) => s.currency);
-  // Pre-warm the OS location cache on mount so by the time the cashier
-  // taps Validate Payment a few seconds later, getLastKnownPositionAsync
-  // returns a fresh fix synchronously (no GPS lock delay). Fire-and-
-  // forget; permission failures and offline are swallowed.
+  // Pre-warm: kick off the FULL location fetch (coords + reverse-geocode)
+  // on mount and stash the in-flight promise. By the time the cashier taps
+  // Validate Payment a few seconds later, this has usually resolved and the
+  // payment handler can use the cached result instead of starting a fresh
+  // 15-30s cascade. Fire-and-forget — failures fall through to the
+  // handler's own fetch + the existing error UI.
+  const prewarmLocationRef = useRef(null);
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const Location = require('expo-location');
-        const perm = await Location.requestForegroundPermissionsAsync();
-        if (cancelled || perm?.status !== 'granted') return;
-        await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy?.Low ?? 1,
-        });
-        console.log('[POSLocation] pre-warm done');
-      } catch (e) {
-        // Pre-warm is best-effort; suppress.
-      }
-    })();
-    return () => { cancelled = true; };
+    prewarmLocationRef.current = getCurrentDeviceLocation();
+    prewarmLocationRef.current
+      .then((r) => console.log('[POSLocation] pre-warm done', r?.error || 'ok'))
+      .catch(() => {});
   }, []);
 
   const [invoiceChecked, setInvoiceChecked] = useState(false);
@@ -384,7 +376,25 @@ const POSPayment = ({ navigation, route }) => {
       // and BLOCK the payment. If the device truly can't get a fix
       // (no_fix), give the cashier a one-tap "Save without location"
       // option so we never trap them.
-      let fix = await getCurrentDeviceLocation();
+      // Use the pre-warmed location if it is ready or completes within 5s.
+      // If the pre-warm is slow (cold start, lock-screen tap), fall back to a
+      // fresh getCurrentDeviceLocation — which itself benefits from the OS
+      // last-known cache the pre-warm has already populated, so it usually
+      // returns from stage 2a (lastKnown) almost instantly.
+      let fix;
+      const prewarmPromise = prewarmLocationRef.current;
+      const PREWARM_SENTINEL = Symbol('prewarm-timeout');
+      if (prewarmPromise) {
+        const raceResult = await Promise.race([
+          prewarmPromise,
+          new Promise((r) => setTimeout(() => r(PREWARM_SENTINEL), 5000)),
+        ]);
+        fix = raceResult === PREWARM_SENTINEL
+          ? await getCurrentDeviceLocation()
+          : raceResult;
+      } else {
+        fix = await getCurrentDeviceLocation();
+      }
       console.log('[POSLocation] gate result in handlePay:', JSON.stringify(fix));
       if (fix?.error === 'no_fix') {
         const proceedWithoutLocation = await new Promise((resolve) => {
