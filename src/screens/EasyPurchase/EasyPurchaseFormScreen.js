@@ -215,7 +215,11 @@ const LineEditor = ({ visible, line, taxes, onSave, onClose, onPickProduct }) =>
           </ScrollView>
           <View style={{ padding: 12 }}>
             <TouchableOpacity
-              style={[styles.btn, styles.btnPrimary, { flex: 1 }]}
+              style={[
+                styles.btn,
+                styles.btnPrimary,
+                { flex: 1, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+              ]}
               onPress={() => {
                 if (!draft.product_id) return showToastMessage('Pick a product');
                 if (!draft.quantity || num(draft.quantity) <= 0) return showToastMessage('Enter a quantity');
@@ -231,7 +235,10 @@ const LineEditor = ({ visible, line, taxes, onSave, onClose, onPickProduct }) =>
                 onSave({ ...draft, subtotal, tax_amount, total });
               }}
             >
-              <Text style={styles.btnPrimaryText}>{draft.id ? 'Save' : 'Add'}</Text>
+              <MaterialIcons name="check-circle" size={18} color="#fff" />
+              <Text style={[styles.btnPrimaryText, { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 0.3 }]}>
+                {draft.id ? 'Save' : 'Add'}
+              </Text>
             </TouchableOpacity>
           </View>
       </View>
@@ -583,23 +590,6 @@ const EasyPurchaseFormScreen = ({ navigation }) => {
                     {l.description && l.description !== l.product_name ? (
                       <Text style={styles.lineDesc} numberOfLines={1}>{l.description}</Text>
                     ) : null}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => navigation.navigate('BarcodePrint', {
-                      prefill: {
-                        productId: l.product_id,
-                        productName: l.product_name || '',
-                        productCode: l.product_code || '',
-                        productBarcode: l.product_barcode || '',
-                        quantity: Math.max(1, parseInt(num(l.quantity), 10) || 1),
-                        retailPrice: l.lst_price ?? l.price_unit ?? 0,
-                        wholesalePrice: l.standard_price ?? l.price_unit ?? 0,
-                      },
-                    })}
-                    style={styles.linePrintBtn}
-                  >
-                    <MaterialIcons name="qr-code-2" size={16} color="#fff" />
-                    <Text style={styles.linePrintText}>Print</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => onRemoveLine(l.id)}

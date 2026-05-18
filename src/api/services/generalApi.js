@@ -254,18 +254,21 @@ export const getCurrentDeviceLocation = async () => {
         console.warn('[POSLocation] cache read failed:', cacheErr?.message || cacheErr);
       }
 
-      // Retry the reverse-geocode up to 4 times with increasing backoff
-      // BEFORE each attempt. Android's Geocoder intermittently returns
-      // IOException / "Service not available" for a few seconds after
-      // a cold app start — back-to-back retries hit the cold geocoder
-      // every time, so we space them out (~600ms, 1s, 1.4s, 1.8s) to
-      // let the underlying Google Play Services Geocoder warm up.
+      // Retry the reverse-geocode up to 4 times. Backoff applies BETWEEN
+      // attempts only — the first attempt fires immediately so warm-path
+      // cashiers don't eat a 600ms pre-sleep. Backoff exists because
+      // Android's Geocoder intermittently returns IOException / "Service
+      // not available" for a few seconds after a cold app start; spacing
+      // the retries (~400ms, 800ms, 1200ms) lets Google Play Services
+      // warm up before each retry.
       for (let attempt = 1; attempt <= 4; attempt++) {
-        await new Promise((r) => setTimeout(r, 200 + attempt * 400));
+        if (attempt > 1) {
+          await new Promise((r) => setTimeout(r, attempt * 400));
+        }
         try {
           const places = await Promise.race([
             Location.reverseGeocodeAsync({ latitude: lat, longitude: lon }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('reverse-geocode timeout')), 5000)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('reverse-geocode timeout')), 3000)),
           ]);
           const place = (places && places[0]) || null;
           if (place) {

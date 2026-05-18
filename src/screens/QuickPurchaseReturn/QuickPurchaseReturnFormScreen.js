@@ -12,8 +12,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet,
-  Modal, FlatList, ActivityIndicator, Switch,
+  FlatList, ActivityIndicator, Switch, Alert, Dimensions, Platform,
 } from 'react-native';
+import Modal from 'react-native-modal';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
@@ -37,8 +38,11 @@ const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
 const RED = '#B91C1C';
 
-const QuickPurchaseReturnFormScreen = ({ navigation }) => {
+const QuickPurchaseReturnFormScreen = ({ navigation, route }) => {
   const currency = useAuthStore((s) => s.currency);
+  // When the screen is opened from the Detail's "Edit" button it gets an `id`
+  // — we load that existing draft instead of starting from a blank form.
+  const editingId = route?.params?.id || null;
 
   // Server-side draft id — created the moment a vendor bill is picked so the
   // model's onchange can auto-load line_ids on the backend.
@@ -73,6 +77,42 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
       }
     })();
   }, []);
+
+  // Edit-mode preload — when launched with a draft id, hydrate the form
+  // state from the existing record. Skips the "pick a bill → create draft"
+  // flow because both already exist server-side.
+  useEffect(() => {
+    if (!editingId) return;
+    (async () => {
+      setBusy(true);
+      try {
+        const detail = await fetchQuickReturnDetail(editingId);
+        if (!detail) return;
+        setDraftId(detail.id);
+        if (Array.isArray(detail.source_invoice_id)) {
+          setBill({
+            id: detail.source_invoice_id[0],
+            name: detail.source_invoice_id[1],
+            partner_id: detail.partner_id || null,
+            invoice_date: detail.invoice_date || null,
+            amount_total: detail.amount_total || 0,
+          });
+        }
+        if (Array.isArray(detail.lines)) setLines(detail.lines);
+        if (Array.isArray(detail.warehouse_id)) {
+          setWarehouse({ id: detail.warehouse_id[0], name: detail.warehouse_id[1] });
+        }
+        if (typeof detail.auto_post_credit_note === 'boolean') setAutoPost(detail.auto_post_credit_note);
+        if (typeof detail.auto_validate_picking === 'boolean') setAutoValidate(detail.auto_validate_picking);
+        if (detail.notes) setNotes(detail.notes);
+      } catch (e) {
+        console.warn('[QuickReturnForm] edit-mode load failed:', e?.message);
+        showToastMessage(e?.message || 'Could not load draft');
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, [editingId]);
 
   // Re-load bill options whenever the picker opens or the search changes.
   const loadBills = useCallback(async (searchText) => {
@@ -151,20 +191,51 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
   };
 
   const handleLineQtyChange = (lineId, raw) => {
+    // Keep empty input visible (so the user can clear the field cleanly).
+    // Strip everything that's not a digit or decimal point.
     const v = raw.replace(/[^0-9.]/g, '');
     setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, return_qty: v } : l)));
   };
 
   // Push the entered return_qty back to the server line. Called on blur so
-  // we don't fire a write per keystroke.
+  // we don't fire a write per keystroke. If the user typed over the max,
+  // pop a native Alert so they know why the value snapped back.
   const handleLineQtyBlur = async (line) => {
     if (!line?.id) return;
-    const requested = Math.max(0, Math.min(Number(line.return_qty) || 0, Number(line.returnable_qty) || 0));
+    const raw = line.return_qty;
+    // Empty input = 0 on the server; show 0 in the field too.
+    if (raw === '' || raw == null) {
+      try {
+        await updateReturnLineQty(line.id, 0);
+        setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, return_qty: 0 } : l)));
+      } catch (e) {
+        showToastMessage(e?.message || 'Could not save line qty');
+      }
+      return;
+    }
+    const requested = Number(raw) || 0;
+    const max = Number(line.returnable_qty) || 0;
+    if (requested > max) {
+      const productName = Array.isArray(line.product_id) ? line.product_id[1] : 'this product';
+      Alert.alert(
+        'Quantity exceeds maximum',
+        `You can return at most ${max} unit(s) of ${productName}. The value has been adjusted.`,
+        [{ text: 'OK' }],
+      );
+      const clamped = Math.max(0, max);
+      try {
+        await updateReturnLineQty(line.id, clamped);
+        setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, return_qty: clamped } : l)));
+      } catch (e) {
+        showToastMessage(e?.message || 'Could not save line qty');
+      }
+      return;
+    }
+    const safe = Math.max(0, requested);
     try {
-      await updateReturnLineQty(line.id, requested);
-      if (requested !== Number(line.return_qty)) {
-        // Clamp shown value if the user typed over the max.
-        setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, return_qty: requested } : l)));
+      await updateReturnLineQty(line.id, safe);
+      if (safe !== Number(raw)) {
+        setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, return_qty: safe } : l)));
       }
     } catch (e) {
       showToastMessage(e?.message || 'Could not save line qty');
@@ -189,9 +260,28 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
     }
   };
 
+  // Visual / disable hint for the Confirm button — true when any line's
+  // return qty exceeds its returnable max. Used both for greying the button
+  // and to keep the over-max guard's branching honest.
+  const hasOverMax = lines.some((l) => (Number(l.return_qty) || 0) > (Number(l.returnable_qty) || 0));
+
   const handleConfirm = async () => {
     if (!draftId) {
       showToastMessage('Pick a vendor bill first');
+      return;
+    }
+    // Block submission when any line is over its returnable_qty. The qty
+    // input shows red + Alerts on blur — but if the user taps Confirm with
+    // focus still inside the input, blur never fires and the state holds the
+    // out-of-bounds value. Validate state directly here as a backstop.
+    const offending = lines.find((l) => (Number(l.return_qty) || 0) > (Number(l.returnable_qty) || 0));
+    if (offending) {
+      const productName = Array.isArray(offending.product_id) ? offending.product_id[1] : 'one of the products';
+      Alert.alert(
+        'Quantity exceeds maximum',
+        `Return qty for ${productName} is ${offending.return_qty} but the max returnable is ${offending.returnable_qty}. Please adjust before confirming.`,
+        [{ text: 'OK' }],
+      );
       return;
     }
     const hasQty = lines.some((l) => Number(l.return_qty) > 0);
@@ -228,248 +318,321 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView backgroundColor={NAVY}>
-      <NavigationHeader title="New Quick Return" onBackPress={() => navigation.goBack()} />
+      <NavigationHeader
+        title={editingId ? 'Edit Return' : 'New Return'}
+        onBackPress={() => navigation.goBack()}
+      />
 
-      <ScrollView style={styles.container} contentContainerStyle={{ padding: 14, paddingBottom: 110 }}>
-        {/* Vendor Bill picker */}
-        <Text style={styles.sectionLabel}>VENDOR BILL</Text>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.pickerField}
-          onPress={() => setBillPickerVisible(true)}
-        >
-          <MaterialIcons name="receipt-long" size={20} color={NAVY} />
-          <View style={{ flex: 1, marginLeft: 10 }}>
-            {bill ? (
-              <>
-                <Text style={styles.pickerValue} numberOfLines={1}>{bill.name}</Text>
-                <Text style={styles.pickerSub} numberOfLines={1}>
-                  {(Array.isArray(bill.partner_id) ? bill.partner_id[1] : '—')}
-                  {bill.invoice_date ? ` · ${bill.invoice_date}` : ''}
-                </Text>
-              </>
-            ) : (
-              <Text style={styles.pickerPlaceholder}>Tap to pick a posted vendor bill</Text>
-            )}
+      <ScrollView style={styles.container} contentContainerStyle={{ padding: 12, paddingBottom: 140 }}>
+
+        {/* ─── Card: Return Header ─── */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Return Header</Text>
+
+          <Text style={styles.label}>Vendor Bill *</Text>
+          <TouchableOpacity
+            activeOpacity={editingId ? 1 : 0.85}
+            style={[styles.picker, editingId && { opacity: 0.7 }]}
+            onPress={() => { if (!editingId) setBillPickerVisible(true); }}
+          >
+            <View style={{ flex: 1 }}>
+              {bill ? (
+                <>
+                  <Text style={styles.pickerValue} numberOfLines={1}>{bill.name}</Text>
+                  <Text style={styles.metaText} numberOfLines={1}>
+                    {(Array.isArray(bill.partner_id) ? bill.partner_id[1] : '—')}
+                    {bill.invoice_date ? `  ·  ${bill.invoice_date}` : ''}
+                  </Text>
+                </>
+              ) : (
+                <Text style={{ color: '#9ca3af', fontSize: 14 }}>Tap to pick a posted vendor bill</Text>
+              )}
+            </View>
+            <MaterialIcons name="chevron-right" size={22} color="#9ca3af" />
+          </TouchableOpacity>
+
+          {bill?.invoice_date ? (
+            <>
+              <Text style={styles.label}>Source Bill Date</Text>
+              <View style={[styles.picker, { backgroundColor: '#fafbfc' }]}>
+                <Text style={styles.pickerValue}>{bill.invoice_date}</Text>
+              </View>
+            </>
+          ) : null}
+
+          <Text style={styles.label}>Notes</Text>
+          <TextInput
+            style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+            value={notes}
+            onChangeText={setNotes}
+            multiline
+            placeholder="Optional notes about this return…"
+            placeholderTextColor="#9ca3af"
+          />
+        </View>
+
+        {/* ─── Card: Warehouse & Settings ─── */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Warehouse & Settings</Text>
+
+          <Text style={styles.label}>Warehouse</Text>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.picker}
+            onPress={() => setWhPickerVisible(true)}
+          >
+            <Text style={styles.pickerValue} numberOfLines={1}>
+              {warehouse?.name || 'Pick a warehouse'}
+            </Text>
+            <MaterialIcons name="chevron-right" size={22} color="#9ca3af" />
+          </TouchableOpacity>
+
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Auto-Post Credit Note</Text>
+              <Text style={styles.toggleSub}>Post the vendor credit note immediately on confirm.</Text>
+            </View>
+            <Switch
+              value={autoPost}
+              onValueChange={setAutoPost}
+              trackColor={{ true: ORANGE, false: '#cbd5e1' }}
+              thumbColor="#fff"
+            />
           </View>
-          <MaterialIcons name="chevron-right" size={22} color="#9ca3af" />
-        </TouchableOpacity>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Auto-Validate Return Picking</Text>
+              <Text style={styles.toggleSub}>Validate the return stock picking automatically.</Text>
+            </View>
+            <Switch
+              value={autoValidate}
+              onValueChange={setAutoValidate}
+              trackColor={{ true: ORANGE, false: '#cbd5e1' }}
+              thumbColor="#fff"
+            />
+          </View>
+        </View>
 
-        {/* Lines */}
-        {lines.length > 0 ? (
-          <View style={styles.linesCard}>
-            <View style={styles.linesHeaderRow}>
-              <Text style={styles.linesTitle}>{`${lines.length} line${lines.length === 1 ? '' : 's'}`}</Text>
+        {/* ─── Card: Return Lines ─── */}
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={styles.sectionTitle}>Return Lines</Text>
+            {lines.length > 0 ? (
               <TouchableOpacity onPress={handleReturnAll} disabled={busy} style={styles.returnAllBtn}>
                 <MaterialIcons name="select-all" size={14} color="#fff" />
                 <Text style={styles.returnAllBtnText}>Return all</Text>
               </TouchableOpacity>
-            </View>
-            {lines.map((l) => {
-              const prodName = Array.isArray(l.product_id) ? l.product_id[1] : (l.description || '—');
-              const diff = (Number(l.returnable_qty) || 0) - (Number(l.return_qty) || 0);
-              return (
-                <View key={l.id} style={styles.lineRow}>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={styles.lineProduct} numberOfLines={2}>{prodName}</Text>
-                    <Text style={styles.lineMeta}>
-                      {`Purchased ${l.purchased_qty || 0}  ·  Already returned ${l.already_returned_qty || 0}  ·  Max ${l.returnable_qty || 0}`}
-                    </Text>
-                    <Text style={styles.linePrice}>
-                      {`@ ${formatCurrency(Number(l.price_unit) || 0, currency)}  =  ${formatCurrency(Number(l.total) || 0, currency)}`}
-                    </Text>
+            ) : null}
+          </View>
+
+          {lines.length === 0 ? (
+            <Text style={styles.metaText}>
+              {bill
+                ? (busy ? 'Loading lines…' : 'No returnable lines on this bill.')
+                : 'Pick a vendor bill above to load lines.'}
+            </Text>
+          ) : null}
+
+          {lines.map((l) => {
+            const prodName = Array.isArray(l.product_id) ? l.product_id[1] : (l.description || '—');
+            const overMax = (Number(l.return_qty) || 0) > (Number(l.returnable_qty) || 0);
+            return (
+              <View key={l.id} style={styles.lineCard}>
+                <View style={styles.lineTopRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.lineName} numberOfLines={2}>{prodName}</Text>
+                    {l.description && l.description !== prodName ? (
+                      <Text style={styles.lineDesc} numberOfLines={1}>{l.description}</Text>
+                    ) : null}
                   </View>
-                  <View style={styles.qtyCol}>
-                    <Text style={styles.qtyLabel}>RETURN QTY</Text>
+                </View>
+
+                <View style={styles.lineGrid}>
+                  <View style={styles.lineCell}>
+                    <Text style={styles.lineCellLabel}>Purchased</Text>
+                    <Text style={styles.lineCellValue}>{Number(l.purchased_qty || 0)}</Text>
+                  </View>
+                  <View style={styles.lineCell}>
+                    <Text style={styles.lineCellLabel}>Already Returned</Text>
+                    <Text style={styles.lineCellValue}>{Number(l.already_returned_qty || 0)}</Text>
+                  </View>
+                  <View style={styles.lineCell}>
+                    <Text style={styles.lineCellLabel}>Max Returnable</Text>
+                    <Text style={styles.lineCellValue}>{Number(l.returnable_qty || 0)}</Text>
+                  </View>
+
+                  <View style={styles.lineCell}>
+                    <Text style={styles.lineCellLabel}>Return Qty</Text>
                     <TextInput
-                      style={styles.qtyInput}
+                      style={[styles.qtyInput, overMax && { borderColor: RED }]}
                       value={String(l.return_qty ?? '')}
                       onChangeText={(v) => handleLineQtyChange(l.id, v)}
                       onBlur={() => handleLineQtyBlur(l)}
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor="#9ca3af"
+                      selectTextOnFocus
                     />
-                    <Text style={[styles.qtyMax, diff < 0 && styles.qtyMaxBad]}>
-                      {`max ${l.returnable_qty || 0}`}
-                    </Text>
+                  </View>
+                  <View style={styles.lineCell}>
+                    <Text style={styles.lineCellLabel}>Unit Price</Text>
+                    <Text style={styles.lineCellValue}>{formatCurrency(Number(l.price_unit) || 0, currency)}</Text>
+                  </View>
+                  <View style={styles.lineCell}>
+                    <Text style={styles.lineCellLabel}>Line Refund</Text>
+                    <Text style={[styles.lineCellValue, styles.lineCellTotal]}>{formatCurrency(Number(l.total) || 0, currency)}</Text>
                   </View>
                 </View>
-              );
-            })}
-            <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>Total to refund</Text>
-              <Text style={styles.totalsValue}>{formatCurrency(totalReturn, currency)}</Text>
-            </View>
-          </View>
-        ) : bill ? (
-          <View style={styles.linesEmpty}>
-            <Text style={styles.linesEmptyText}>
-              {busy ? 'Loading lines…' : 'No returnable lines on this bill.'}
-            </Text>
-          </View>
-        ) : null}
-
-        {/* Settings */}
-        <Text style={styles.sectionLabel}>SETTINGS</Text>
-        <View style={styles.settingsCard}>
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.toggleLabel}>Auto-post Credit Note</Text>
-              <Text style={styles.toggleSub}>Post the vendor credit note immediately on confirm.</Text>
-            </View>
-            <Switch
-              value={autoPost}
-              onValueChange={setAutoPost}
-              trackColor={{ true: NAVY, false: '#cbd5e1' }}
-              thumbColor="#fff"
-            />
-          </View>
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.toggleLabel}>Auto-validate Return Picking</Text>
-              <Text style={styles.toggleSub}>Validate the return stock picking automatically.</Text>
-            </View>
-            <Switch
-              value={autoValidate}
-              onValueChange={setAutoValidate}
-              trackColor={{ true: NAVY, false: '#cbd5e1' }}
-              thumbColor="#fff"
-            />
-          </View>
-
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={styles.warehouseField}
-            onPress={() => setWhPickerVisible(true)}
-          >
-            <MaterialIcons name="warehouse" size={18} color={NAVY} />
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={styles.toggleLabel}>Warehouse</Text>
-              <Text style={styles.pickerSub} numberOfLines={1}>
-                {warehouse?.name || 'Pick a warehouse'}
-              </Text>
-            </View>
-            <MaterialIcons name="chevron-right" size={20} color="#9ca3af" />
-          </TouchableOpacity>
+              </View>
+            );
+          })}
         </View>
 
-        {/* Notes */}
-        <Text style={styles.sectionLabel}>NOTES</Text>
-        <TextInput
-          style={styles.notesInput}
-          value={notes}
-          onChangeText={setNotes}
-          multiline
-          numberOfLines={3}
-          placeholder="Optional notes about this return…"
-          placeholderTextColor="#9ca3af"
-        />
+        {/* ─── Card: Totals (dark navy) ─── */}
+        {lines.length > 0 ? (
+          <View style={[styles.card, { backgroundColor: NAVY }]}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabelDark}>Total Lines</Text>
+              <Text style={styles.totalValueDark}>{lines.length}</Text>
+            </View>
+            <View style={[styles.totalRow, { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.15)', paddingTop: 8, marginTop: 8 }]}>
+              <Text style={styles.totalLabelDarkBold}>Total Refund</Text>
+              <Text style={styles.totalValueDarkBold}>{formatCurrency(totalReturn, currency)}</Text>
+            </View>
+          </View>
+        ) : null}
       </ScrollView>
 
-      {/* Footer actions */}
+      {/* Footer actions — blue Save + orange Confirm Return (matches EP). */}
       <View style={styles.footer}>
         <FeatureGate featureKey="quick_purchase_return.save">
           <TouchableOpacity
-            style={[styles.footerBtn, styles.footerBtnGhost]}
+            style={[
+              styles.footerBtn,
+              { backgroundColor: '#3b82f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+              (busy || confirming || !draftId) && { opacity: 0.6 },
+            ]}
             activeOpacity={0.85}
             onPress={handleSaveDraft}
             disabled={busy || confirming || !draftId}
           >
-            <Text style={styles.footerBtnGhostText}>Save Draft</Text>
+            <MaterialIcons name="save" size={18} color="#fff" />
+            <Text style={[styles.footerBtnPrimaryText, { color: '#fff' }]}>Save</Text>
           </TouchableOpacity>
         </FeatureGate>
         <FeatureGate featureKey="quick_purchase_return.confirm">
           <TouchableOpacity
-            style={[styles.footerBtn, styles.footerBtnPrimary, (confirming || !draftId) && { opacity: 0.6 }]}
+            style={[
+              styles.footerBtn,
+              styles.footerBtnPrimary,
+              { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+              (confirming || !draftId || hasOverMax) && { opacity: 0.6 },
+            ]}
             activeOpacity={0.85}
             onPress={handleConfirm}
-            disabled={busy || confirming || !draftId}
+            disabled={busy || confirming || !draftId || hasOverMax}
           >
             {confirming ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.footerBtnPrimaryText}>Confirm Return</Text>
+              <>
+                <MaterialIcons name="check-circle" size={18} color="#fff" />
+                <Text style={styles.footerBtnPrimaryText}>Confirm Return</Text>
+              </>
             )}
           </TouchableOpacity>
         </FeatureGate>
       </View>
 
-      {/* Bill picker modal */}
-      <Modal visible={billPickerVisible} animationType="slide" transparent
-             onRequestClose={() => setBillPickerVisible(false)}>
-        <View style={styles.modalBg}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Pick Vendor Bill</Text>
-              <TouchableOpacity onPress={() => setBillPickerVisible(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <MaterialIcons name="close" size={22} color="#374151" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.modalSearchRow}>
-              <MaterialIcons name="search" size={18} color="#6b7280" />
-              <TextInput
-                style={styles.modalSearchInput}
-                value={billSearch}
-                onChangeText={setBillSearch}
-                placeholder="Search by bill number…"
-                placeholderTextColor="#9ca3af"
-              />
-            </View>
-            {billLoading ? (
-              <ActivityIndicator size="large" color={NAVY} style={{ marginVertical: 20 }} />
-            ) : (
-              <FlatList
-                data={billOptions}
-                keyExtractor={(item) => String(item.id)}
-                renderItem={({ item }) => (
-                  <TouchableOpacity style={styles.billRow} activeOpacity={0.85} onPress={() => handlePickBill(item)}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.billName} numberOfLines={1}>{item.name}</Text>
-                      <Text style={styles.billSub} numberOfLines={1}>
-                        {(Array.isArray(item.partner_id) ? item.partner_id[1] : '—')}
-                        {item.invoice_date ? ` · ${item.invoice_date}` : ''}
-                      </Text>
-                    </View>
-                    <Text style={styles.billAmount}>{formatCurrency(Number(item.amount_total) || 0, currency)}</Text>
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={<Text style={styles.modalEmpty}>No posted vendor bills found.</Text>}
-                style={{ maxHeight: 420 }}
-              />
-            )}
+      {/* Bill picker modal — centered popup (matches EasyPurchaseFormScreen). */}
+      <Modal
+        isVisible={billPickerVisible}
+        animationIn="zoomIn"
+        animationOut="zoomOut"
+        backdropOpacity={0.4}
+        animationInTiming={250}
+        animationOutTiming={200}
+        onBackdropPress={() => setBillPickerVisible(false)}
+        onBackButtonPress={() => setBillPickerVisible(false)}
+        style={styles.modalCenter}
+      >
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Pick Vendor Bill</Text>
+            <TouchableOpacity onPress={() => setBillPickerVisible(false)} style={styles.modalCloseBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <MaterialIcons name="close" size={20} color="#666" />
+            </TouchableOpacity>
           </View>
+          <View style={styles.modalSearchRow}>
+            <MaterialIcons name="search" size={18} color="#6b7280" />
+            <TextInput
+              style={styles.modalSearchInput}
+              value={billSearch}
+              onChangeText={setBillSearch}
+              placeholder="Search by bill number…"
+              placeholderTextColor="#9ca3af"
+            />
+          </View>
+          {billLoading ? (
+            <ActivityIndicator size="large" color={NAVY} style={{ marginVertical: 20 }} />
+          ) : (
+            <FlatList
+              data={billOptions}
+              keyExtractor={(item) => String(item.id)}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.billRow} activeOpacity={0.85} onPress={() => handlePickBill(item)}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.billName} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.billSub} numberOfLines={1}>
+                      {(Array.isArray(item.partner_id) ? item.partner_id[1] : '—')}
+                      {item.invoice_date ? ` · ${item.invoice_date}` : ''}
+                    </Text>
+                  </View>
+                  <Text style={styles.billAmount}>{formatCurrency(Number(item.amount_total) || 0, currency)}</Text>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={<Text style={styles.modalEmpty}>No posted vendor bills found.</Text>}
+              style={{ maxHeight: 420 }}
+            />
+          )}
         </View>
       </Modal>
 
-      {/* Warehouse picker modal */}
-      <Modal visible={whPickerVisible} animationType="slide" transparent
-             onRequestClose={() => setWhPickerVisible(false)}>
-        <View style={styles.modalBg}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Pick Warehouse</Text>
-              <TouchableOpacity onPress={() => setWhPickerVisible(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <MaterialIcons name="close" size={22} color="#374151" />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={warehouses}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.billRow}
-                  activeOpacity={0.85}
-                  onPress={() => { setWarehouse(item); setWhPickerVisible(false); }}
-                >
-                  <Text style={styles.billName}>{item.name}</Text>
-                  {item.code ? <Text style={styles.billSub}>{item.code}</Text> : null}
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={<Text style={styles.modalEmpty}>No warehouses available.</Text>}
-              style={{ maxHeight: 320 }}
-            />
+      {/* Warehouse picker modal — centered popup. */}
+      <Modal
+        isVisible={whPickerVisible}
+        animationIn="zoomIn"
+        animationOut="zoomOut"
+        backdropOpacity={0.4}
+        animationInTiming={250}
+        animationOutTiming={200}
+        onBackdropPress={() => setWhPickerVisible(false)}
+        onBackButtonPress={() => setWhPickerVisible(false)}
+        style={styles.modalCenter}
+      >
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Pick Warehouse</Text>
+            <TouchableOpacity onPress={() => setWhPickerVisible(false)} style={styles.modalCloseBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <MaterialIcons name="close" size={20} color="#666" />
+            </TouchableOpacity>
           </View>
+          <FlatList
+            data={warehouses}
+            keyExtractor={(item) => String(item.id)}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.billRow}
+                activeOpacity={0.85}
+                onPress={() => { setWarehouse(item); setWhPickerVisible(false); }}
+              >
+                <Text style={styles.billName}>{item.name}</Text>
+                {item.code ? <Text style={styles.billSub}>{item.code}</Text> : null}
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={<Text style={styles.modalEmpty}>No warehouses available.</Text>}
+            style={{ maxHeight: 320 }}
+          />
         </View>
       </Modal>
     </SafeAreaView>
@@ -479,8 +642,51 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   // Visual tokens lifted from EasyPurchaseFormScreen — same off-white bg,
   // urbanist font family, navy section accents — so the two forms feel like
-  // siblings while keeping QR's existing JSX structure intact.
+  // siblings. The card / sectionTitle / lineCard / lineGrid / totalRow keys
+  // mirror EP's so the JSX structures are interchangeable.
   container: { flex: 1, backgroundColor: '#f6f7fb' },
+
+  // EP-style card + section header.
+  card: {
+    backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 12,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+  },
+  sectionTitle: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: NAVY, marginBottom: 8 },
+  label: { fontSize: 12, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistSemiBold, marginTop: 10, marginBottom: 4 },
+  input: {
+    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
+    fontSize: 14, color: '#111827', fontFamily: FONT_FAMILY.urbanistMedium, backgroundColor: '#fff',
+  },
+  picker: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12,
+    backgroundColor: '#fff',
+  },
+  metaText: { fontSize: 12, color: '#9ca3af', fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 6 },
+
+  // Line card (EP "Odoo-style columns" treatment).
+  lineCard: {
+    backgroundColor: '#f8f9fc', borderRadius: 12, padding: 12, marginTop: 10,
+    borderWidth: 1, borderColor: '#eef0f5',
+  },
+  lineTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  lineName: { fontSize: 13, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
+  lineDesc: { fontSize: 11, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 2 },
+  lineGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  lineCell: { width: '33.333%', paddingVertical: 4 },
+  lineCellLabel: {
+    fontSize: 10, color: '#8896ab', fontFamily: FONT_FAMILY.urbanistSemiBold,
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  lineCellValue: { fontSize: 13, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold, marginTop: 2 },
+  lineCellTotal: { color: ORANGE },
+
+  // Totals card rows (used on the navy "Totals" card).
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
+  totalLabelDark: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: FONT_FAMILY.urbanistSemiBold },
+  totalValueDark: { color: '#fff', fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold },
+  totalLabelDarkBold: { color: '#fff', fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold },
+  totalValueDarkBold: { color: '#fff', fontSize: 18, fontFamily: FONT_FAMILY.urbanistBold },
   sectionLabel: {
     fontSize: 12, color: '#6b7280',
     letterSpacing: 0.6, marginTop: 14, marginBottom: 6,
@@ -609,22 +815,32 @@ const styles = StyleSheet.create({
   },
   footerBtnPrimaryText: { color: '#fff', fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold },
 
-  modalBg: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
+  // Centered popup card (matches EasyPurchase's PickerModal).
+  modalCenter: { margin: 24, justifyContent: 'center', alignItems: 'center' },
   modalCard: {
+    width: '100%',
+    maxWidth: 480,
+    maxHeight: Dimensions.get('window').height * 0.7,
     backgroundColor: '#fff',
-    borderTopLeftRadius: 18, borderTopRightRadius: 18,
-    paddingHorizontal: 14, paddingTop: 12, paddingBottom: 20,
-    maxHeight: '85%',
+    borderRadius: 16,
+    paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14,
+    overflow: 'hidden',
+    ...Platform.select({
+      android: { elevation: 10 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 12 },
+    }),
   },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingBottom: 10,
     borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
   },
-  modalTitle: { fontSize: 15, fontWeight: '800', color: '#111' },
+  modalTitle: { fontSize: 16, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold, flex: 1 },
+  modalCloseBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#f2f2f2',
+    alignItems: 'center', justifyContent: 'center',
+  },
   modalSearchRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: '#f9fafb',

@@ -22,6 +22,7 @@ import {
   fetchQuickReturnDetail,
   draftQuickReturn,
   cancelQuickReturn,
+  confirmQuickReturn,
   readCreditNote,
   readReturnPicking,
   readSourceInvoice,
@@ -103,6 +104,23 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
     } catch (e) {
       showToastMessage(e?.message || 'Cancel failed');
     }
+  };
+
+  // Confirm a draft return → server creates the credit note + return picking.
+  const handleConfirmReturn = async () => {
+    try {
+      await confirmQuickReturn(id);
+      showToastMessage('Return confirmed');
+      load(false);
+    } catch (e) {
+      showToastMessage(e?.message || 'Confirm failed');
+    }
+  };
+
+  // Edit a draft → navigate to the Form screen with the draft's id; the form
+  // accepts an optional `id` route param and pre-loads the record for editing.
+  const handleEdit = () => {
+    navigation.navigate('QuickPurchaseReturnForm', { id });
   };
 
   // Render the return as an A4 PDF using the OS save/share pattern. Mirrors
@@ -282,10 +300,40 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
           </FeatureGate>
         ) : null}
         {record.state === 'draft' ? (
-          <TouchableOpacity style={[styles.actionBtn, styles.actionBtnDanger]} onPress={handleCancel} activeOpacity={0.85}>
-            <MaterialIcons name="close" size={18} color="#fff" />
-            <Text style={styles.actionBtnDangerText}>Cancel Return</Text>
-          </TouchableOpacity>
+          <View style={{ gap: 8 }}>
+            <FeatureGate featureKey="quick_purchase_return.confirm">
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.actionBtnPrimary]}
+                onPress={handleConfirmReturn}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons name="check-circle" size={18} color="#fff" />
+                <Text style={styles.actionBtnPrimaryText}>Confirm Return</Text>
+              </TouchableOpacity>
+            </FeatureGate>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <FeatureGate featureKey="quick_purchase_return.edit">
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionBtnGhost, { flex: 1 }]}
+                  onPress={handleEdit}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="edit" size={18} color={NAVY} />
+                  <Text style={styles.actionBtnGhostText}>Edit</Text>
+                </TouchableOpacity>
+              </FeatureGate>
+              <FeatureGate featureKey="quick_purchase_return.cancel">
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionBtnDanger, { flex: 1 }]}
+                  onPress={handleCancel}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="close" size={18} color="#fff" />
+                  <Text style={styles.actionBtnDangerText}>Cancel Return</Text>
+                </TouchableOpacity>
+              </FeatureGate>
+            </View>
+          </View>
         ) : null}
         {record.state === 'done' ? (
           <FeatureGate featureKey="quick_purchase_return.export_invoice">

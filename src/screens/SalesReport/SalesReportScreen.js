@@ -1044,29 +1044,37 @@ const SalesReportScreen = ({ navigation }) => {
   };
 
   // ───── Top-level mode switcher (Overview / Filters & Group By) ─────
-  const renderModeSwitcher = () => (
-    <View style={styles.modeSwitcher}>
-      {[
-        { key: 'overview', label: 'Overview',          icon: 'dashboard'     },
-        { key: 'analysis', label: 'Filters & Group By', icon: 'filter-list'  },
-      ].map((m) => {
-        const active = pageMode === m.key;
-        return (
-          <TouchableOpacity
-            key={m.key}
-            activeOpacity={0.85}
-            onPress={() => setPageModeSafe(m.key)}
-            style={[styles.modeBtn, active && styles.modeBtnActive]}
-          >
-            <MaterialIcons name={m.icon} size={14} color={active ? '#fff' : NAVY} />
-            <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
-              {m.label}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
+  // The Overview tab is always visible. The Analysis tab is feature-gated so
+  // admins can hide the deeper analytics surface for restricted roles; when
+  // hidden the user simply stays on the Overview dashboard.
+  const renderModeSwitcher = () => {
+    const overviewItem = { key: 'overview', label: 'Overview',          icon: 'dashboard'    };
+    const analysisItem = { key: 'analysis', label: 'Filters & Group By', icon: 'filter-list' };
+    const renderTab = (m) => {
+      const active = pageMode === m.key;
+      return (
+        <TouchableOpacity
+          key={m.key}
+          activeOpacity={0.85}
+          onPress={() => setPageModeSafe(m.key)}
+          style={[styles.modeBtn, active && styles.modeBtnActive]}
+        >
+          <MaterialIcons name={m.icon} size={14} color={active ? '#fff' : NAVY} />
+          <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
+            {m.label}
+          </Text>
+        </TouchableOpacity>
+      );
+    };
+    return (
+      <View style={styles.modeSwitcher}>
+        {renderTab(overviewItem)}
+        <FeatureGate featureKey="sales_report.analysis_mode">
+          {renderTab(analysisItem)}
+        </FeatureGate>
+      </View>
+    );
+  };
 
   // Overview mode shows the Section pill and a Date pill — same date presets
   // as the old period chips (Today / Last 7 Days / Last 30 Days / This Month /
@@ -1091,20 +1099,22 @@ const SalesReportScreen = ({ navigation }) => {
           </Text>
           <MaterialIcons name="arrow-drop-down" size={16} color={sectionActive ? '#fff' : NAVY} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterBarPill, dateActive && styles.filterBarPillActive]}
-          activeOpacity={0.85}
-          onPress={() => openMenu('date')}
-        >
-          <MaterialIcons name="event" size={14} color={dateActive ? '#fff' : NAVY} />
-          <Text
-            numberOfLines={1}
-            style={[styles.filterBarPillText, dateActive && styles.filterBarPillTextActive]}
+        <FeatureGate featureKey="sales_report.date_filter">
+          <TouchableOpacity
+            style={[styles.filterBarPill, dateActive && styles.filterBarPillActive]}
+            activeOpacity={0.85}
+            onPress={() => openMenu('date')}
           >
-            {dateRangeLabel}
-          </Text>
-          <MaterialIcons name="arrow-drop-down" size={16} color={dateActive ? '#fff' : NAVY} />
-        </TouchableOpacity>
+            <MaterialIcons name="event" size={14} color={dateActive ? '#fff' : NAVY} />
+            <Text
+              numberOfLines={1}
+              style={[styles.filterBarPillText, dateActive && styles.filterBarPillTextActive]}
+            >
+              {dateRangeLabel}
+            </Text>
+            <MaterialIcons name="arrow-drop-down" size={16} color={dateActive ? '#fff' : NAVY} />
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
     );
   };
@@ -1113,28 +1123,32 @@ const SalesReportScreen = ({ navigation }) => {
   // Analysis is cross-section.
   const renderAnalysisFilterBar = () => (
     <View style={styles.filterBar}>
-      <TouchableOpacity
-        style={[styles.filterBarPill, selectedFilters.length > 0 && styles.filterBarPillActive]}
-        activeOpacity={0.85}
-        onPress={() => openMenu('filter')}
-      >
-        <MaterialIcons name="filter-list" size={14} color={selectedFilters.length > 0 ? '#fff' : NAVY} />
-        <Text style={[styles.filterBarPillText, selectedFilters.length > 0 && styles.filterBarPillTextActive]}>
-          Filters{selectedFilters.length > 0 ? ` · ${selectedFilters.length}` : ''}
-        </Text>
-        <MaterialIcons name="arrow-drop-down" size={16} color={selectedFilters.length > 0 ? '#fff' : NAVY} />
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.filterBarPill, selectedGroupBys.length > 0 && styles.filterBarPillActive]}
-        activeOpacity={0.85}
-        onPress={() => openMenu('group')}
-      >
-        <MaterialCommunityIcons name="format-list-group" size={14} color={selectedGroupBys.length > 0 ? '#fff' : NAVY} />
-        <Text style={[styles.filterBarPillText, selectedGroupBys.length > 0 && styles.filterBarPillTextActive]}>
-          Group By{selectedGroupBys.length > 0 ? ` · ${selectedGroupBys.length}` : ''}
-        </Text>
-        <MaterialIcons name="arrow-drop-down" size={16} color={selectedGroupBys.length > 0 ? '#fff' : NAVY} />
-      </TouchableOpacity>
+      <FeatureGate featureKey="sales_report.filter">
+        <TouchableOpacity
+          style={[styles.filterBarPill, selectedFilters.length > 0 && styles.filterBarPillActive]}
+          activeOpacity={0.85}
+          onPress={() => openMenu('filter')}
+        >
+          <MaterialIcons name="filter-list" size={14} color={selectedFilters.length > 0 ? '#fff' : NAVY} />
+          <Text style={[styles.filterBarPillText, selectedFilters.length > 0 && styles.filterBarPillTextActive]}>
+            Filters{selectedFilters.length > 0 ? ` · ${selectedFilters.length}` : ''}
+          </Text>
+          <MaterialIcons name="arrow-drop-down" size={16} color={selectedFilters.length > 0 ? '#fff' : NAVY} />
+        </TouchableOpacity>
+      </FeatureGate>
+      <FeatureGate featureKey="sales_report.group_by">
+        <TouchableOpacity
+          style={[styles.filterBarPill, selectedGroupBys.length > 0 && styles.filterBarPillActive]}
+          activeOpacity={0.85}
+          onPress={() => openMenu('group')}
+        >
+          <MaterialCommunityIcons name="format-list-group" size={14} color={selectedGroupBys.length > 0 ? '#fff' : NAVY} />
+          <Text style={[styles.filterBarPillText, selectedGroupBys.length > 0 && styles.filterBarPillTextActive]}>
+            Group By{selectedGroupBys.length > 0 ? ` · ${selectedGroupBys.length}` : ''}
+          </Text>
+          <MaterialIcons name="arrow-drop-down" size={16} color={selectedGroupBys.length > 0 ? '#fff' : NAVY} />
+        </TouchableOpacity>
+      </FeatureGate>
     </View>
   );
 
@@ -1284,21 +1298,10 @@ const SalesReportScreen = ({ navigation }) => {
                 {activeMeasures.map((m) => {
                   // Make Order count cells tappable for product groupings —
                   // tapping drills into the underlying orders for that product.
+                  // FeatureGate fallback renders a plain (non-tappable) cell so
+                  // restricted users still see the number, just can't drill.
                   const drillable = m.key === 'orderCount' && isProductGrouping;
-                  if (drillable) {
-                    return (
-                      <TouchableOpacity
-                        key={m.key}
-                        activeOpacity={0.7}
-                        onPress={() => openDrillDown({ id: r.key, name: r.label })}
-                      >
-                        <Text style={[styles.pivotCell, styles.pivotCellLink]}>
-                          {formatMeasure(r[m.key], m.type)}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  }
-                  return (
+                  const plainCell = (
                     <Text
                       key={m.key}
                       style={[styles.pivotCell, m.type === 'money' && styles.pivotCellMoney]}
@@ -1306,6 +1309,21 @@ const SalesReportScreen = ({ navigation }) => {
                       {formatMeasure(r[m.key], m.type)}
                     </Text>
                   );
+                  if (drillable) {
+                    return (
+                      <FeatureGate key={m.key} featureKey="sales_report.drill_down" fallback={plainCell}>
+                        <TouchableOpacity
+                          activeOpacity={0.7}
+                          onPress={() => openDrillDown({ id: r.key, name: r.label })}
+                        >
+                          <Text style={[styles.pivotCell, styles.pivotCellLink]}>
+                            {formatMeasure(r[m.key], m.type)}
+                          </Text>
+                        </TouchableOpacity>
+                      </FeatureGate>
+                    );
+                  }
+                  return plainCell;
                 })}
               </View>
             ))}
@@ -1321,26 +1339,36 @@ const SalesReportScreen = ({ navigation }) => {
         <View style={styles.pivotTable}>
           <View style={[styles.pivotRow, styles.pivotHeadRow]}>
             <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotHeadText]}>Measure</Text>
-            {rows.map((r) => (
-              isProductGrouping ? (
-                <TouchableOpacity
+            {rows.map((r) => {
+              const plainHeader = (
+                <Text
                   key={String(r.key)}
-                  activeOpacity={0.7}
-                  onPress={() => openDrillDown({ id: r.key, name: r.label })}
+                  style={[styles.pivotCell, styles.pivotHeadText]}
+                  numberOfLines={1}
                 >
-                  <Text
-                    style={[styles.pivotCell, styles.pivotHeadText, styles.pivotHeadTextLink]}
-                    numberOfLines={1}
+                  {r.label}
+                </Text>
+              );
+              return isProductGrouping ? (
+                <FeatureGate key={String(r.key)} featureKey="sales_report.drill_down" fallback={plainHeader}>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => openDrillDown({ id: r.key, name: r.label })}
                   >
-                    {r.label}
-                  </Text>
-                </TouchableOpacity>
+                    <Text
+                      style={[styles.pivotCell, styles.pivotHeadText, styles.pivotHeadTextLink]}
+                      numberOfLines={1}
+                    >
+                      {r.label}
+                    </Text>
+                  </TouchableOpacity>
+                </FeatureGate>
               ) : (
                 <Text key={String(r.key)} style={[styles.pivotCell, styles.pivotHeadText]} numberOfLines={1}>
                   {r.label}
                 </Text>
-              )
-            ))}
+              );
+            })}
             <Text style={[styles.pivotCell, styles.pivotHeadText]}>Total</Text>
           </View>
           {activeMeasures.map((m) => (
@@ -1515,7 +1543,7 @@ const SalesReportScreen = ({ navigation }) => {
     <View style={styles.exportRow}>
       {renderViewModeToggle()}
       {pageMode === 'analysis' && viewMode === 'pivot' ? (
-        <>
+        <FeatureGate featureKey="sales_report.pivot_controls">
           <TouchableOpacity
             style={[styles.exportBarPill, selectedMeasures.length > 1 && styles.exportBarPillActive]}
             activeOpacity={0.85}
@@ -1536,7 +1564,7 @@ const SalesReportScreen = ({ navigation }) => {
           >
             <MaterialIcons name="swap-horiz" size={16} color={flipAxis ? '#fff' : NAVY} />
           </TouchableOpacity>
-        </>
+        </FeatureGate>
       ) : null}
       <View style={{ flex: 1 }} />
       <FeatureGate featureKey="sales_report.export_pdf">
