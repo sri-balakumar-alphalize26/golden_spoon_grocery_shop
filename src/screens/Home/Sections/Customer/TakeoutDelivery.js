@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, Modal, TextInput, Pressable, ScrollView } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, Modal, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationHeader } from '@components/Header';
 import { useProductStore } from '@stores/product';
@@ -18,7 +18,7 @@ const displayNum = (n) => formatCurrency(n);
 
 const TakeoutDelivery = ({ navigation, route }) => {
   const cart = useProductStore((s) => s.getCurrentCart()) || [];
-  const { addProduct, removeProduct, clearProducts, setProductDiscount } = useProductStore();
+  const { addProduct, removeProduct, clearProducts, setProductDiscount, setLineNote } = useProductStore();
   const currency = useAuthStore((s) => s.currency);
   const currencyName = currency?.symbol || currency?.name || '';
   const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
@@ -72,6 +72,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [noteModalVisible, setNoteModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
+  // Per-line note (Odoo pos.order.line.customer_note). Distinct from the
+  // order-wide note above — this one is gated on `selectedLine` and mirrors
+  // the per-line discount UX.
+  const [lineNoteModalVisible, setLineNoteModalVisible] = useState(false);
+  const [lineNoteInput, setLineNoteInput] = useState('');
+  const lineNoteInputRef = useRef(null);
   const [qtyEditFor, setQtyEditFor] = useState(null);
   const [qtyDraft, setQtyDraft] = useState('');
   const qtyInputRef = useRef(null);
@@ -108,6 +114,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
       name: it.name || (it.product_id && it.product_id[1]) || 'Product',
       unit: unitPrice,
       subtotal,
+      customer_note: it.customer_note || '',
       rawItem: it
     };
   }), [cart]);
@@ -283,6 +290,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
       name: item.name || 'Product',
       discount: Number(item.discount_percent || item.discount || 0),
       price_subtotal: typeof item.price_subtotal !== 'undefined' ? Number(item.price_subtotal) : undefined,
+      customer_note: item.customer_note || '',
     }));
     console.log('[PlaceOrder] payload partnerId=', partnerId,
       'lines=', lines.length, 'amount_total=', finalTotal,
@@ -458,6 +466,21 @@ const TakeoutDelivery = ({ navigation, route }) => {
               </View>
               <TouchableOpacity
                 onPress={() => setProductDiscount(item.rawItem?.id ?? item.id, 0)}
+                style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
+              >
+                <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {item.customer_note ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+              <View style={{ backgroundColor: '#ede9fe', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, maxWidth: 200 }}>
+                <Text numberOfLines={1} style={{ fontSize: 10, color: '#5b21b6', fontWeight: '700', fontStyle: 'italic' }}>
+                  📝 {item.customer_note}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setLineNote(item.rawItem?.id ?? item.id, '')}
                 style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
               >
                 <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
@@ -669,6 +692,29 @@ const TakeoutDelivery = ({ navigation, route }) => {
               }}>
                 <MaterialIcons name="local-offer" size={14} color="#92400e" style={{ marginRight: 4 }} />
                 <Text style={{ fontWeight: '800', color: '#92400e', fontSize: 12 }}>Discount</Text>
+              </TouchableOpacity>
+            ) : null}
+            {selectedLine ? (
+              <TouchableOpacity
+                onPress={() => {
+                  setLineNoteInput(selectedLine.customer_note || selectedLine.rawItem?.customer_note || '');
+                  setLineNoteModalVisible(true);
+                }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: '#ede9fe',
+                  paddingVertical: 8,
+                  paddingHorizontal: 12,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: '#7c3aed',
+                  marginRight: 8,
+                  marginBottom: 8,
+                }}
+              >
+                <MaterialIcons name="sticky-note-2" size={14} color="#5b21b6" style={{ marginRight: 4 }} />
+                <Text style={{ fontWeight: '800', color: '#5b21b6', fontSize: 12 }}>Note</Text>
               </TouchableOpacity>
             ) : null}
             {/* Customer chip — pushed to the far right, colored to stand out, pencil affordance for edit */}
@@ -997,7 +1043,84 @@ const TakeoutDelivery = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
-      
+
+      {/* Per-line Note Modal — opens from the purple "Note" pill that appears
+          alongside the Discount pill when a cart row is selected. Writes
+          customer_note onto the line via setLineNote; the saved text shows as
+          a chip under the product name. */}
+      <Modal
+        visible={lineNoteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLineNoteModalVisible(false)}
+        onShow={() => {
+          // autoFocus races the fade-in and Android drops the showSoftInput
+          // call — focus explicitly after the native view is attached.
+          setTimeout(() => lineNoteInputRef.current?.focus(), 50);
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 18 }}>
+          <View style={{ width: '100%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 14, padding: 16 }}>
+            <Text style={{ fontSize: 15, fontWeight: '800', color: '#1a1a2e', marginBottom: 4 }}>
+              Note — {selectedLine?.name || ''}
+            </Text>
+            <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 10 }}>
+              Free-text note for this line (e.g. "ripe only", "deliver tomorrow").
+            </Text>
+            <TextInput
+              ref={lineNoteInputRef}
+              value={lineNoteInput}
+              onChangeText={setLineNoteInput}
+              placeholder="Type a note for this product…"
+              placeholderTextColor="#9ca3af"
+              multiline
+              style={{
+                backgroundColor: '#f8f9fc',
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: '#e5e7eb',
+                padding: 12,
+                fontSize: 14,
+                color: '#1a1a2e',
+                minHeight: 90,
+                textAlignVertical: 'top',
+                fontWeight: '500',
+              }}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+              <TouchableOpacity
+                onPress={() => setLineNoteInput('')}
+                style={{ paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#f3f4f6' }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '700', fontSize: 13 }}>Clear</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setLineNoteModalVisible(false)}
+                style={{ paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#f3f4f6' }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '700', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  if (selectedLine) {
+                    setLineNote(selectedLine.rawItem?.id ?? selectedLine.id, lineNoteInput);
+                  }
+                  setLineNoteModalVisible(false);
+                }}
+                style={{ paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#7c3aed' }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* Manage Discounts Modal (triggered from footer Manage button) */}
 
       <Modal visible={manageModalVisible} animationType="slide" transparent={true} onRequestClose={() => setManageModalVisible(false)}>

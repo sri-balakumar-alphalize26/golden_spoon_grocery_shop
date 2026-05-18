@@ -620,16 +620,22 @@ export const submitPosOrderToOdoo = async ({
 
   const baseUrl = getOdooUrl();
 
-  const lineTuples = lines.map((l) => [0, 0, {
-    product_id: l.product_id,
-    qty: Number(l.qty) || 0,
-    price_unit: Number(l.price_unit) || 0,
-    price_subtotal: Number(l.price_subtotal) || 0,
-    price_subtotal_incl: Number(l.price_subtotal_incl ?? l.price_subtotal) || 0,
-    discount: Number(l.discount) || 0,
-    name: l.name || '',
-    pack_lot_ids: [],
-  }]);
+  const lineTuples = lines.map((l) => {
+    const vals = {
+      product_id: l.product_id,
+      qty: Number(l.qty) || 0,
+      price_unit: Number(l.price_unit) || 0,
+      price_subtotal: Number(l.price_subtotal) || 0,
+      price_subtotal_incl: Number(l.price_subtotal_incl ?? l.price_subtotal) || 0,
+      discount: Number(l.discount) || 0,
+      name: l.name || '',
+      pack_lot_ids: [],
+    };
+    if (l.customer_note && String(l.customer_note).trim()) {
+      vals.customer_note = String(l.customer_note).trim();
+    }
+    return [0, 0, vals];
+  });
 
   const paymentTuples = payments
     .filter((p) => Number(p.amount) !== 0)
@@ -4355,7 +4361,7 @@ export const createPosOrderOdoo = async ({ partnerId = null, lines = [], session
       // prefer client-provided subtotal (already discounted) if present
       const subtotal = (typeof l.price_subtotal !== 'undefined' && l.price_subtotal !== null) ? Number(l.price_subtotal) : (price_unit * qty);
       const discount_pct = Number(l.discount || l.discount_percent || 0);
-      return [0, 0, {
+      const lineVals = {
         product_id: l.product_id || l.id,
         qty,
         price_unit,
@@ -4363,7 +4369,11 @@ export const createPosOrderOdoo = async ({ partnerId = null, lines = [], session
         discount: discount_pct,
         price_subtotal: subtotal,
         price_subtotal_incl: subtotal,
-      }];
+      };
+      if (l.customer_note && String(l.customer_note).trim()) {
+        lineVals.customer_note = String(l.customer_note).trim();
+      }
+      return [0, 0, lineVals];
     });
 
     // Calculate total (allow override when discount applied by client)
@@ -5902,7 +5912,10 @@ export const updateUserPasswordOdoo = async (userId, newPassword) => {
 };
 
 // Fetch POS orders from Odoo
-export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '', configId = null, sessionId = null, stateFilter = null } = {}) => {
+export const fetchOrdersOdoo = async ({
+  offset = 0, limit = 50, searchText = '', configId = null, sessionId = null,
+  states = null, stateFilter = null,
+} = {}) => {
   try {
     let domain = [];
 
@@ -5922,9 +5935,20 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '',
     // AND-leaves so they combine cleanly with the search-text domain above.
     if (sessionId) domain.push(['session_id', '=', Number(sessionId)]);
     if (configId) domain.push(['config_id', '=', Number(configId)]);
-    // Continue Selling → Existing Order uses this to scope the list to just
-    // pos.orders in `state='draft'` for the active session.
-    if (stateFilter) domain.push(['state', '=', String(stateFilter)]);
+    // Normalize the state filter — accept either `states: string[]` (the new
+    // multi-state OR form used by the chip strip) or a single `stateFilter`
+    // string (legacy callers like POSRegister's Continue Selling shortcut).
+    let stateList = [];
+    if (Array.isArray(states)) {
+      stateList = states.filter((s) => typeof s === 'string' && s.length > 0);
+    } else if (stateFilter && typeof stateFilter === 'string') {
+      stateList = [stateFilter];
+    }
+    if (stateList.length === 1) {
+      domain.push(['state', '=', stateList[0]]);
+    } else if (stateList.length > 1) {
+      domain.push(['state', 'in', stateList]);
+    }
 
     const companyId = getActiveCompanyId();
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -5952,9 +5976,19 @@ export const fetchOrdersOdoo = async ({ offset = 0, limit = 50, searchText = '',
       id: new Date().getTime(),
     }, { headers: { 'Content-Type': 'application/json' } });
 
+    // Throw (don't silently return an envelope) so useDataFetching's catch
+    // surfaces the "Could not load" toast. Previously the envelope was coerced
+    // to [] by Array.isArray, leaving the user staring at a blank list with no
+    // signal until they logged out and back in.
     if (response.data && response.data.error) {
       console.error('[FETCH POS ORDERS] Odoo error:', response.data.error);
-      return { error: response.data.error };
+      const msg =
+        response.data.error?.data?.message ||
+        response.data.error?.message ||
+        'Could not load orders';
+      const err = new Error(msg);
+      err.odoo = response.data.error;
+      throw err;
     }
 
     // Hermes (production build) strict-iterates `for...of` and throws "iterator

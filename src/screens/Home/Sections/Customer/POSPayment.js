@@ -464,6 +464,7 @@ const POSPayment = ({ navigation, route }) => {
         // is derived from the resolved amount, so percentage and
         // amount input modes converge to the same payload here.
         discount: effectiveDiscountPercent || 0,
+        customer_note: p.customer_note || '',
       }));
       const partnerId = customer?.id || customer?._id || null;
       const companyId = 1;
@@ -660,6 +661,7 @@ const POSPayment = ({ navigation, route }) => {
                   price_subtotal_incl: lineSubtotal,
                   discount: l.discount || 0,
                   name: l.name,
+                  customer_note: l.customer_note || '',
                 };
               }),
               payments: payments.map((p) => ({

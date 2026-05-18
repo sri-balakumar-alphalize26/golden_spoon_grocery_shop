@@ -17,14 +17,24 @@ import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
 import { COLORS } from '@constants/theme';
 
-// Chip filters surfaced at the top of the list. Maps the label the user sees
-// to the pos.order.state value Odoo expects (or null for "all"). Drafts are
-// treated as the user-facing "Unpaid" bucket.
+// Chip filters surfaced at the top of the list. Mirrors Odoo's POS Orders
+// filter dropdown — two chips combine multiple states via OR (Odoo's
+// ['state','in',[...]] operator).
 const STATE_FILTERS = [
-  { key: null,    label: 'All' },
-  { key: 'paid',  label: 'Paid' },
-  { key: 'draft', label: 'Unpaid / Draft' },
+  { key: 'all',           states: [],                   label: 'All' },
+  { key: 'paid_invoiced', states: ['paid', 'invoiced'], label: 'Paid / Invoiced' },
+  { key: 'posted_draft',  states: ['done', 'draft'],    label: 'Posted / Draft' },
+  { key: 'cancelled',     states: ['cancel'],           label: 'Cancelled' },
 ];
+
+// Map a raw single-state string (passed via route params from POSRegister
+// Continue Selling → Existing Order → stateFilter:'draft') to the chip whose
+// `states` array contains it.
+const chipForState = (raw) => {
+  if (!raw) return 'all';
+  const found = STATE_FILTERS.find((f) => f.states.includes(raw));
+  return found?.key ?? 'all';
+};
 
 const MyOrdersScreen = ({ navigation, route }) => {
   // Optional filters passed in from the POSRegister kebab popover or from
@@ -33,15 +43,17 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const configId = route?.params?.configId || null;
   const sessionId = route?.params?.sessionId || null;
   const configName = route?.params?.configName || null;
-  // stateFilter is initialised from the route param (e.g. Continue Selling →
-  // Existing Order passes 'draft') but is locally mutable via the chip strip
-  // at the top of the list so the cashier can flip between Paid / Unpaid /
-  // Done / etc. without leaving the screen.
-  const initialStateFilter = route?.params?.stateFilter || null;
+  // stateFilter is the chip key ('all' / 'paid_invoiced' / 'posted_draft' /
+  // 'cancelled'). Initialised by translating a raw route-param state string
+  // (e.g. Continue Selling passes 'draft' → posted_draft chip) into the
+  // matching chip key.
+  const initialStateFilter = chipForState(route?.params?.stateFilter);
   const [stateFilter, setStateFilter] = useState(initialStateFilter);
+  // The actual pos.order.state values the active chip filters by.
+  const activeStates = (STATE_FILTERS.find((f) => f.key === stateFilter)?.states) || [];
   const headerTitle = (() => {
-    if (stateFilter === 'draft' && configName) return `Drafts — ${configName}`;
-    if (stateFilter === 'draft') return 'Draft Orders';
+    if (stateFilter === 'posted_draft' && configName) return `Posted/Draft — ${configName}`;
+    if (stateFilter === 'posted_draft') return 'Posted / Draft Orders';
     if (configName) return `Orders — ${configName}`;
     if (sessionId) return 'Orders — this session';
     return 'Orders';
@@ -57,7 +69,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const resumeDraftHidden = useFeatureHidden('orders.resume_draft');
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, configId, sessionId, stateFilter }),
+    (text) => fetchData({ searchText: text, configId, sessionId, states: activeStates }),
     500
   );
 
@@ -72,14 +84,14 @@ const MyOrdersScreen = ({ navigation, route }) => {
   useFocusEffect(
     useCallback(() => {
       hasAttemptedFetchRef.current = true;
-      fetchData({ searchText, configId, sessionId, stateFilter });
+      fetchData({ searchText, configId, sessionId, states: activeStates });
       hasLoadedRef.current = true;
-    }, [searchText, configId, sessionId, stateFilter])
+    }, [searchText, configId, sessionId, activeStates])
   );
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText, configId, sessionId, stateFilter });
-  }, [searchText, configId, sessionId, stateFilter, fetchMoreData]);
+    fetchMoreData({ searchText, configId, sessionId, states: activeStates });
+  }, [searchText, configId, sessionId, activeStates, fetchMoreData]);
 
   const getStatusColor = (state) => {
     switch (state) {
@@ -268,6 +280,8 @@ const MyOrdersScreen = ({ navigation, route }) => {
           onEndReachedThreshold={0.5}
           estimatedItemSize={150}
           removeClippedSubviews={true}
+          refreshing={loading}
+          onRefresh={() => fetchData({ searchText, configId, sessionId, states: activeStates })}
         />
       );
     }
@@ -299,7 +313,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
           const active = stateFilter === f.key;
           return (
             <TouchableOpacity
-              key={String(f.key)}
+              key={f.key}
               activeOpacity={0.85}
               onPress={() => setStateFilter(f.key)}
               style={[styles.filterChip, active && styles.filterChipActive]}

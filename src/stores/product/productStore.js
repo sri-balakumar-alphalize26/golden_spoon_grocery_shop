@@ -49,6 +49,7 @@ const useProductStore = create((set, get) => ({
       existing.qty = qty;
       if (typeof product.price !== 'undefined') existing.price = Number(product.price);
       if (typeof product.price_unit !== 'undefined') existing.price_unit = Number(product.price_unit);
+      if (typeof product.customer_note !== 'undefined') existing.customer_note = product.customer_note;
       // Recalculate subtotals - use fixed discount_amount (stays same when qty changes)
       const unitPrice = Number(existing.price_unit ?? existing.price ?? 0);
       const rawSubtotal = unitPrice * (existing.quantity || existing.qty || 1);
@@ -73,6 +74,7 @@ const useProductStore = create((set, get) => ({
         discount_percent: 0,
         price_subtotal: Number((priceUnit * qty).toFixed(3)),
         price_subtotal_incl: Number((priceUnit * qty).toFixed(3)),
+        customer_note: product.customer_note || '',
       };
       currentCart.push(prod);
     }
@@ -110,7 +112,22 @@ const useProductStore = create((set, get) => ({
       cartItems: { ...state.cartItems, [customerId]: currentCart }
     };
   }),
-  
+
+  // Per-line free-text note (Odoo pos.order.line.customer_note).
+  setLineNote: (productId, text) => set((state) => {
+    const customerId = state.currentCustomerId || 'pos_guest';
+    const currentCart = Array.isArray(state.cartItems[customerId])
+      ? state.cartItems[customerId].slice()
+      : [];
+    const idx = currentCart.findIndex(p => String(p.id) === String(productId));
+    if (idx < 0) return state;
+    currentCart[idx] = { ...currentCart[idx], customer_note: String(text || '') };
+    return {
+      ...state,
+      cartItems: { ...state.cartItems, [customerId]: currentCart }
+    };
+  }),
+
   removeProduct: (productId) => set((state) => {
     const { currentCustomerId } = state;
     if (!currentCustomerId) return state;

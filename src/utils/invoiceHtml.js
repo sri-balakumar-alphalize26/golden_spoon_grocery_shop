@@ -12,7 +12,7 @@
 // separators) — DO NOT restructure without verifying it still prints
 // correctly on the shop's existing receipt printer setup.
 
-import { getActiveCurrency } from './currency';
+import { getActiveCurrency, getDigits } from './currency';
 
 export const escapeHtml = (unsafe) => {
   return String(unsafe).replace(/[&<>"']/g, function (c) {
@@ -71,16 +71,18 @@ export const generateInvoiceHtml = ({
     `${pageWidth}mm auto`;
   const orderRef = extractOrderRef(orderName, orderId);
   // Use the active currency (set by post-login fetch and boot-time hydration
-  // from AsyncStorage). Decimals are kept at 2 to match the rest of the app
-  // (formatCurrency uses .toFixed(2)).
+  // from AsyncStorage) and the active "Product Price" decimal precision pulled
+  // from Odoo's decimal.precision table. Matches the rest of the app —
+  // formatCurrency() in currency.js uses the same getDigits() lookup.
   const _cur = getActiveCurrency();
   const CURRENCY_SYMBOL = _cur.symbol || _cur.name || '';
+  const PRICE_DIGITS = getDigits('Product Price', 2);
   const formatCurrencyHtml = (amount) => {
     const num = Number(amount);
     const safe = isNaN(num) ? 0 : num;
     return CURRENCY_SYMBOL
-      ? `${CURRENCY_SYMBOL} ${safe.toFixed(2)}`
-      : safe.toFixed(2);
+      ? `${CURRENCY_SYMBOL} ${safe.toFixed(PRICE_DIGITS)}`
+      : safe.toFixed(PRICE_DIGITS);
   };
 
   const rows = items.map((item, idx) => {
@@ -91,12 +93,17 @@ export const generateInvoiceHtml = ({
     const itemDiscount = item.discount_amount || (grossTotal * discountPercent / 100);
     const itemTotal = item.subtotal ?? (grossTotal - itemDiscount);
     const nameEsc = escapeHtml(item.name || 'Product');
+    const rawNote = item.customer_note || item.note || '';
+    const noteEsc = rawNote ? escapeHtml(String(rawNote)) : '';
+    const noteBlock = noteEsc
+      ? `<div style="font-size:9px; color:#666; margin-top:2px; font-style:italic;">📝 ${noteEsc}</div>`
+      : '';
     return `<tr>
       <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${formatCurrencyHtml(itemTotal)}</span></td>
       <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${itemDiscount > 0 ? '-' + formatCurrencyHtml(itemDiscount) : '0'}</span></td>
       <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${formatCurrencyHtml(itemPrice)}</span></td>
       <td style="padding:6px 4px; text-align:center; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;">${itemQty}</span></td>
-      <td style="padding:6px 4px; vertical-align:top;">${nameEsc}<div style="font-size:10px; color:#333; margin-top:4px;">KG</div></td>
+      <td style="padding:6px 4px; vertical-align:top;">${nameEsc}<div style="font-size:10px; color:#333; margin-top:4px;">KG</div>${noteBlock}</td>
       <td style="padding:6px 4px; vertical-align:top;">${idx + 1}.</td>
     </tr>
     <tr><td colspan="6" style="border-bottom:1px dotted #000; height:6px;">&nbsp;</td></tr>`;
@@ -234,10 +241,11 @@ export const generateDailySaleHtml = ({
 } = {}) => {
   const _cur = getActiveCurrency();
   const CURRENCY_SYMBOL = _cur.symbol || _cur.name || '';
+  const PRICE_DIGITS = getDigits('Product Price', 2);
   const fmt = (n) => {
     const v = Number(n);
     const safe = Number.isFinite(v) ? v : 0;
-    return CURRENCY_SYMBOL ? `${CURRENCY_SYMBOL} ${safe.toFixed(2)}` : safe.toFixed(2);
+    return CURRENCY_SYMBOL ? `${CURRENCY_SYMBOL} ${safe.toFixed(PRICE_DIGITS)}` : safe.toFixed(PRICE_DIGITS);
   };
 
   const methods = closeDetails.methods || [];
