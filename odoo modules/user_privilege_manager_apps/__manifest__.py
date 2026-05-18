@@ -1,6 +1,6 @@
 {
     'name': 'Privilege Manager Apps',
-    'version': '19.0.5.4.6',
+    'version': '19.0.5.4.7',
     'category': 'Administration',
     'summary': 'Granular user privileges + app feature gating (standalone parallel build with .app-suffixed models)',
     'description': """

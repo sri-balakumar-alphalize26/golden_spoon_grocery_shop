@@ -104,6 +104,15 @@
         <field name="sequence">72</field>
     </record>
 
+    <!-- Quick Purchase Return tile (parent for the per-action gates further
+         down in the noupdate=0 block). Added in 19.0.5.4.7. -->
+    <record id="feature_home_tile_quick_purchase_return" model="app.feature.app">
+        <field name="feature_key">home.tile.quick_purchase_return</field>
+        <field name="name">Quick Return Tile</field>
+        <field name="description">Home tile: quick vendor-bill returns / credit notes.</field>
+        <field name="sequence">41</field>
+    </record>
+
     </data>
 
     <!-- Per-operation child gates: noupdate=0 so the parent_id link and
@@ -291,6 +300,68 @@
         <field name="description">Show the Delete Banner button on the Banner detail screen.</field>
         <field name="parent_id" ref="feature_home_tile_app_banners"/>
         <field name="sequence">182</field>
+    </record>
+
+    <!-- Sales Report — analysis surface gates added in 19.0.5.4.7. -->
+    <record id="feature_sales_report_analysis_mode" model="app.feature.app">
+        <field name="feature_key">sales_report.analysis_mode</field>
+        <field name="name">Analysis Mode Tab</field>
+        <field name="description">Show the "Filters &amp; Group By" tab at the top of the Sales Report screen.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">132</field>
+    </record>
+    <record id="feature_sales_report_date_filter" model="app.feature.app">
+        <field name="feature_key">sales_report.date_filter</field>
+        <field name="name">Date Range Pill</field>
+        <field name="description">Show the Date Range dropdown pill on the Sales Report Overview tab.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">133</field>
+    </record>
+    <record id="feature_sales_report_filter" model="app.feature.app">
+        <field name="feature_key">sales_report.filter</field>
+        <field name="name">Filters Pill</field>
+        <field name="description">Show the Filters dropdown pill inside the Sales Report Analysis tab.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">134</field>
+    </record>
+    <record id="feature_sales_report_group_by" model="app.feature.app">
+        <field name="feature_key">sales_report.group_by</field>
+        <field name="name">Group By Pill</field>
+        <field name="description">Show the Group By dropdown pill inside the Sales Report Analysis tab.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">135</field>
+    </record>
+    <record id="feature_sales_report_pivot_controls" model="app.feature.app">
+        <field name="feature_key">sales_report.pivot_controls</field>
+        <field name="name">Pivot Controls</field>
+        <field name="description">Show the Measures dropdown and Flip Axis button on the Sales Report Pivot view.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">136</field>
+    </record>
+    <record id="feature_sales_report_drill_down" model="app.feature.app">
+        <field name="feature_key">sales_report.drill_down</field>
+        <field name="name">Drill-down</field>
+        <field name="description">Allow tapping an Order count cell in the Sales Report Pivot to see the underlying orders.</field>
+        <field name="parent_id" ref="feature_home_tile_sales_report"/>
+        <field name="sequence">137</field>
+    </record>
+
+    <!-- Quick Purchase Return — per-action gates added in 19.0.5.4.7. Sequences
+         190/191 sit after the existing Expenses (160-163), Users (170-172),
+         and App Banners (180-182) ranges to avoid collisions. -->
+    <record id="feature_quick_return_edit" model="app.feature.app">
+        <field name="feature_key">quick_purchase_return.edit</field>
+        <field name="name">Edit Draft</field>
+        <field name="description">Show the Edit button on draft Quick Return detail screens.</field>
+        <field name="parent_id" ref="feature_home_tile_quick_purchase_return"/>
+        <field name="sequence">190</field>
+    </record>
+    <record id="feature_quick_return_cancel" model="app.feature.app">
+        <field name="feature_key">quick_purchase_return.cancel</field>
+        <field name="name">Cancel Return</field>
+        <field name="description">Show the Cancel Return button on draft Quick Return detail screens.</field>
+        <field name="parent_id" ref="feature_home_tile_quick_purchase_return"/>
+        <field name="sequence">191</field>
     </record>
 
     </data>
