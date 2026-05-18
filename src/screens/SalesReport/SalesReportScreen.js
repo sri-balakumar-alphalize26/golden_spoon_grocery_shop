@@ -12,6 +12,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Calendar } from 'react-native-calendars';
+import { BarChart } from 'react-native-chart-kit';
 import { NavigationHeader } from '@components/Header';
 import {
   fetchSalesReportData,
@@ -37,14 +38,6 @@ const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
 const MUTED = '#8896ab';
 
-const PERIODS = [
-  { key: 'today', label: 'Today' },
-  { key: 'week', label: '7 Days' },
-  { key: 'month', label: '30 Days' },
-  { key: 'all', label: 'All Time' },
-  { key: 'custom', label: 'Custom' },
-];
-
 const TABS = [
   { key: 'overview', label: 'Overview', icon: 'dashboard' },
   { key: 'products', label: 'Top Products', icon: 'shopping-cart' },
@@ -53,19 +46,195 @@ const TABS = [
   { key: 'pnl', label: 'P&L', icon: 'trending-up' },
 ];
 
+// Odoo-style Filters dropdown (multi-select). The Order Date row is itself
+// expandable in the UI — its children are mutually exclusive date presets
+// (only one can be active at a time). Custom Range lives inside Order Date,
+// so there's no separate top-level "Custom Filter…" row.
+const FILTER_OPTIONS = [
+  { key: 'invoiced',      type: 'leaf', label: 'Invoiced' },
+  { key: 'not_invoiced',  type: 'leaf', label: 'Not Invoiced' },
+  { key: 'not_cancelled', type: 'leaf', label: 'Not Cancelled' },
+  {
+    key: 'order_date',
+    type: 'expandable',
+    label: 'Order Date',
+    children: [
+      { key: 'date:today',  label: 'Today'        },
+      { key: 'date:7d',     label: 'Last 7 Days'  },
+      { key: 'date:30d',    label: 'Last 30 Days' },
+      { key: 'date:month',  label: 'This Month'   },
+      { key: 'date:year',   label: 'This Year'    },
+      { key: 'date:custom', label: 'Custom Range…', opensCalendar: true },
+    ],
+  },
+];
+
+// Flat lookup so chips / exports can resolve a date:* key to its human label
+// without walking the nested children every time.
+const DATE_FILTER_LABELS = FILTER_OPTIONS
+  .find((o) => o.key === 'order_date')
+  .children.reduce((acc, c) => { acc[c.key] = c.label; return acc; }, {});
+
+// Odoo-style Group By dropdown. `applicableTabs` hides options that don't
+// make sense for the current tab (e.g. Product on the Payments tab). Customer
+// grouping is intentionally excluded per product spec. Order Date is expandable
+// into 5 mutually-exclusive granularity choices.
+const GROUPBY_OPTIONS = [
+  { key: 'user',             type: 'leaf', label: 'User',             applicableTabs: ['overview', 'customers', 'payments'] },
+  { key: 'employee',         type: 'leaf', label: 'Employee',         applicableTabs: ['overview', 'customers', 'payments'] },
+  { key: 'config',           type: 'leaf', label: 'Point of Sale',    applicableTabs: ['overview', 'customers', 'payments'] },
+  { key: 'product',          type: 'leaf', label: 'Product',          applicableTabs: ['overview', 'products'] },
+  { key: 'product_category', type: 'leaf', label: 'Product Category', applicableTabs: ['overview', 'products'] },
+  { key: 'payment_method',   type: 'leaf', label: 'Payment Method',   applicableTabs: ['overview', 'payments'] },
+  { key: 'pos_categ',        type: 'leaf', label: 'POS Category',     applicableTabs: ['overview', 'products'] },
+  {
+    key: 'order_date',
+    type: 'expandable',
+    label: 'Order Date',
+    applicableTabs: ['overview', 'customers', 'payments', 'products'],
+    children: [
+      { key: 'order_date:year',    label: 'Year'    },
+      { key: 'order_date:quarter', label: 'Quarter' },
+      { key: 'order_date:month',   label: 'Month'   },
+      { key: 'order_date:week',    label: 'Week'    },
+      { key: 'order_date:day',     label: 'Day'     },
+    ],
+  },
+];
+
+const ORDER_DATE_GROUP_LABELS = GROUPBY_OPTIONS
+  .find((o) => o.key === 'order_date')
+  .children.reduce((acc, c) => { acc[c.key] = c.label; return acc; }, {});
+
+const VIEW_MODES = [
+  { key: 'list',  icon: 'view-list',  label: 'List'  },
+  { key: 'graph', icon: 'bar-chart',  label: 'Graph' },
+  { key: 'pivot', icon: 'grid-on',    label: 'Pivot' },
+];
+
+// Pull the single active date:* / order_date:* key out of an array — only one
+// can be active at a time (enforced by the toggle handlers).
+const getDateFilterKey = (filters) => (filters || []).find((k) => typeof k === 'string' && k.startsWith('date:')) || null;
+const getDateGroupKey  = (groups)  => (groups  || []).find((k) => typeof k === 'string' && k.startsWith('order_date:')) || null;
+
+// Date-bucket helpers for the Order Date group-by. ISO-week uses the standard
+// "Thursday wins" rule (RFC 5545 / ISO 8601) so weeks line up with what Odoo
+// produces.
+const dayBucket = (iso) => {
+  if (!iso) return 'Unknown';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : String(iso).slice(0, 10);
+};
+const monthBucket = (iso) => {
+  if (!iso) return 'Unknown';
+  const m = String(iso).match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : 'Unknown';
+};
+const yearBucket = (iso) => {
+  if (!iso) return 'Unknown';
+  const m = String(iso).match(/^(\d{4})/);
+  return m ? m[1] : 'Unknown';
+};
+const quarterBucket = (iso) => {
+  if (!iso) return 'Unknown';
+  const m = String(iso).match(/^(\d{4})-(\d{2})/);
+  if (!m) return 'Unknown';
+  const month = Number(m[2]);
+  const q = Math.floor((month - 1) / 3) + 1;
+  return `${m[1]}-Q${q}`;
+};
+const weekBucket = (iso) => {
+  if (!iso) return 'Unknown';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return 'Unknown';
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  // Shift to Thursday in the same week so year boundary aligns with ISO weeks.
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+};
+const dateBucketFor = (iso, granularity) => {
+  switch (granularity) {
+    case 'year':    return yearBucket(iso);
+    case 'quarter': return quarterBucket(iso);
+    case 'month':   return monthBucket(iso);
+    case 'week':    return weekBucket(iso);
+    case 'day':
+    default:        return dayBucket(iso);
+  }
+};
+
+// Aggregate the salesData.orders array by the first selected group-by key.
+// `groupBy` can be 'user' | 'employee' | 'config' or one of the prefixed
+// 'order_date:<granularity>' keys. Always emits the same shape so the
+// Graph/Pivot renderers don't care which grouping was chosen.
+const aggregateOrders = (orders, groupBy) => {
+  if (!groupBy || !Array.isArray(orders) || orders.length === 0) return [];
+  const isDate = typeof groupBy === 'string' && groupBy.startsWith('order_date:');
+  const granularity = isDate ? groupBy.split(':')[1] : null;
+  const map = new Map();
+  const tupleName = (v) => Array.isArray(v) ? v[1] : null;
+  const tupleId   = (v) => Array.isArray(v) ? v[0] : null;
+
+  orders.forEach((o) => {
+    let key = null;
+    let label = null;
+    if (isDate) {
+      key = dateBucketFor(o.date_order, granularity);
+      label = key;
+    } else {
+      switch (groupBy) {
+        case 'user':
+          key = tupleId(o.user_id) || 'unassigned';
+          label = tupleName(o.user_id) || 'Unassigned';
+          break;
+        case 'employee':
+          key = tupleId(o.employee_id) || 'unassigned';
+          label = tupleName(o.employee_id) || 'Unassigned';
+          break;
+        case 'config':
+          key = tupleId(o.config_id) || tupleId(o.session_id) || 'unknown';
+          label = tupleName(o.config_id) || tupleName(o.session_id) || 'Unknown POS';
+          break;
+        default:
+          return; // unsupported group-by for raw orders (handled elsewhere)
+      }
+    }
+    const cur = map.get(key) || { key, label, totalSales: 0, orderCount: 0, tax: 0 };
+    cur.totalSales += Number(o.amount_total) || 0;
+    cur.orderCount += 1;
+    cur.tax += Number(o.amount_tax) || 0;
+    map.set(key, cur);
+  });
+
+  const rows = [...map.values()].map((r) => ({
+    ...r,
+    avgOrder: r.orderCount > 0 ? r.totalSales / r.orderCount : 0,
+  }));
+
+  // Order Date stays chronological; everything else descends by total.
+  if (isDate) {
+    rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  } else {
+    rows.sort((a, b) => b.totalSales - a.totalSales);
+  }
+  return rows;
+};
+
+// Truncate long graph-axis labels — chart-kit can't rotate.
+const truncLabel = (s, n = 8) => {
+  const str = String(s ?? '');
+  return str.length > n ? `${str.slice(0, n - 1)}…` : str;
+};
+
 const isoDateOnly = (d) => {
   if (!d) return '';
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-};
-
-const prettyDateLabel = (iso) => {
-  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return 'Pick a date';
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 const SalesReportScreen = ({ navigation }) => {
@@ -77,7 +246,6 @@ const SalesReportScreen = ({ navigation }) => {
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedPeriod, setSelectedPeriod] = useState('today');
   const [selectedTab, setSelectedTab] = useState('overview');
   const [salesData, setSalesData] = useState(null);
   const [previousSummary, setPreviousSummary] = useState(null);
@@ -86,7 +254,9 @@ const SalesReportScreen = ({ navigation }) => {
   const [pnl, setPnl] = useState(null);
   const [opex, setOpex] = useState(0);
 
-  // Custom date range — only used when selectedPeriod === 'custom'.
+  // Custom date range — only used when the active date filter is `date:custom`,
+  // set either from Filters > Order Date > Custom Range… or from the top-level
+  // Custom Filter… action row. Both paths funnel through the same calendar.
   const todayStr = isoDateOnly(new Date());
   const [customStart, setCustomStart] = useState(todayStr);
   const [customEnd, setCustomEnd] = useState(todayStr);
@@ -95,6 +265,20 @@ const SalesReportScreen = ({ navigation }) => {
   // Export state
   const [pdfBusy, setPdfBusy] = useState(false);
   const [xlsBusy, setXlsBusy] = useState(false);
+
+  // Odoo-style filter / group-by / view-mode state. Multi-select for the first
+  // two (matches Odoo). Only the first selected group-by is honoured by the
+  // graph/pivot renderers in v1 — nesting groupings is out of scope.
+  const [selectedFilters, setSelectedFilters] = useState([]);
+  const [selectedGroupBys, setSelectedGroupBys] = useState([]);
+  const [viewMode, setViewMode] = useState('list');
+  const [menuOpen, setMenuOpen] = useState(null); // 'filter' | 'group' | null
+  // Top-level mode tab. Overview = the dashboard. Analysis = the
+  // Odoo-style filters/group-by/pivot/graph workspace.
+  const [pageMode, setPageMode] = useState('overview'); // 'overview' | 'analysis'
+  // Which expandable section (e.g. 'order_date') is open inside the menu.
+  // Reset whenever the menu opens so navigation always starts collapsed.
+  const [menuExpandedKey, setMenuExpandedKey] = useState(null);
 
   const hasLoadedRef = useRef(false);
 
@@ -114,33 +298,50 @@ const SalesReportScreen = ({ navigation }) => {
     return new Date(y, m - 1, d);
   };
 
-  const getDateRange = (period) => {
+  // Resolve a `date:*` filter key (or null = All Time) to a concrete Odoo
+  // date_order range. Returns { startDate: null, endDate: null } for All Time,
+  // which the API treats as "no domain constraint on date".
+  const getDateRange = (dateKey) => {
+    if (!dateKey) return { startDate: null, endDate: null };
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    let startDate;
-    let endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-    switch (period) {
-      case 'today': startDate = new Date(today); break;
-      case 'week': startDate = new Date(today); startDate.setDate(today.getDate() - 7); break;
-      case 'month': startDate = new Date(today); startDate.setMonth(today.getMonth() - 1); break;
-      case 'all': return { startDate: null, endDate: null };
-      case 'custom': {
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    switch (dateKey) {
+      case 'date:today':
+        return { startDate: fmtDt(today), endDate: fmtDt(endOfToday) };
+      case 'date:7d': {
+        const s = new Date(today); s.setDate(today.getDate() - 7);
+        return { startDate: fmtDt(s), endDate: fmtDt(endOfToday) };
+      }
+      case 'date:30d': {
+        const s = new Date(today); s.setDate(today.getDate() - 30);
+        return { startDate: fmtDt(s), endDate: fmtDt(endOfToday) };
+      }
+      case 'date:month': {
+        const s = new Date(now.getFullYear(), now.getMonth(), 1);
+        return { startDate: fmtDt(s), endDate: fmtDt(endOfToday) };
+      }
+      case 'date:year': {
+        const s = new Date(now.getFullYear(), 0, 1);
+        return { startDate: fmtDt(s), endDate: fmtDt(endOfToday) };
+      }
+      case 'date:custom': {
         const s = parseIsoDate(customStart);
         const e = parseIsoDate(customEnd);
         if (!s || !e) return { startDate: null, endDate: null };
         const eEnd = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
         return { startDate: fmtDt(s), endDate: fmtDt(eEnd) };
       }
-      default: startDate = new Date(today);
+      default:
+        return { startDate: null, endDate: null };
     }
-    return { startDate: fmtDt(startDate), endDate: fmtDt(endDate) };
   };
 
-  // Previous-period range, same length as the current selection. Used to
-  // compute the delta badge ("+12% vs prev"). For All Time we don't compare.
-  const getPreviousRange = (period) => {
-    if (period === 'all') return { startDate: null, endDate: null, label: '' };
-    const cur = getDateRange(period);
+  // Previous-period range, same length as the current date filter. Used by the
+  // delta badge ("+12% vs prev"). No date filter → no comparison.
+  const getPreviousRange = (dateKey) => {
+    if (!dateKey) return { startDate: null, endDate: null, label: '' };
+    const cur = getDateRange(dateKey);
     if (!cur.startDate || !cur.endDate) return { startDate: null, endDate: null, label: '' };
     const curStart = new Date(cur.startDate.replace(' ', 'T'));
     const curEnd = new Date(cur.endDate.replace(' ', 'T'));
@@ -157,10 +358,17 @@ const SalesReportScreen = ({ navigation }) => {
   const fetchReportData = async (showLoader = true) => {
     if (showLoader) setLoading(true);
     try {
-      const range = getDateRange(selectedPeriod);
-      const prev = getPreviousRange(selectedPeriod);
+      const dateKey = getDateFilterKey(selectedFilters);
+      const range = getDateRange(dateKey);
+      const prev = getPreviousRange(dateKey);
+      // Only the non-date filters reach the Odoo domain — `date:*` keys are
+      // already encoded into the range above.
+      const domainFilters = selectedFilters.filter((k) => !String(k).startsWith('date:'));
+      // The previous-period fetch deliberately omits `filters` so the
+      // delta-vs-prev badge in the hero stays a clean baseline; otherwise the
+      // % swing would be a comparison of differently-filtered universes.
       const [sales, products, payments, prevSales, profit, opexTotal] = await Promise.all([
-        fetchSalesReportData(range),
+        fetchSalesReportData({ ...range, filters: domainFilters }),
         fetchTopProducts({ ...range, limit: 10 }),
         fetchPaymentMethods(range),
         prev.startDate
@@ -192,18 +400,72 @@ const SalesReportScreen = ({ navigation }) => {
 
   useEffect(() => {
     if (hasLoadedRef.current) fetchReportData();
-    // For custom period, also refire whenever the user edits the date inputs.
-  }, [selectedPeriod, customStart, customEnd]);
+    // Refire when any filter (incl. the date:* key) changes, or when the user
+    // edits the custom range inputs.
+  }, [customStart, customEnd, selectedFilters]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchReportData(false);
-  }, [selectedPeriod]);
+  }, [selectedFilters, customStart, customEnd]);
 
   const fmtMoney = (n) => formatCurrencyUtil(n || 0, currency || fallbackCurrency);
 
-  const periodLabel = (PERIODS.find((p) => p.key === selectedPeriod) || PERIODS[0]).label;
+  // Active date filter key + human label for chips / exports / hero.
+  const activeDateKey = getDateFilterKey(selectedFilters);
+  const dateRangeLabel = activeDateKey
+    ? (activeDateKey === 'date:custom'
+        ? `${customStart} → ${customEnd}`
+        : DATE_FILTER_LABELS[activeDateKey] || 'Custom')
+    : 'All Time';
 
+  // Human label for the active section/tab — shown inline on the Section pill.
+  const sectionLabel = (TABS.find((t) => t.key === selectedTab) || TABS[0]).label;
+
+  // Switching pageMode: Analysis mode disallows 'list' — auto-coerce to 'pivot'
+  // so the body has something sensible to render.
+  const setPageModeSafe = (next) => {
+    if (next === 'analysis' && viewMode === 'list') setViewMode('pivot');
+    setPageMode(next);
+  };
+
+  // The active group-by is whichever string the user picked first. For Order
+  // Date the key carries its granularity suffix (e.g. 'order_date:month');
+  // pass it straight through to aggregateOrders.
+  const activeGroupBy = selectedGroupBys[0] || null;
+
+  // When the user is in Pivot/Graph view without picking a Group By, fall back
+  // to a sensible default per section (matches Odoo's Orders Analysis: applying
+  // a filter alone still produces a useful pivot). '_customers' is a private
+  // sentinel — never appears in selectedGroupBys, the Group By menu, chips, or
+  // exports; it just lets the Customers section reuse the existing topCustomers
+  // memo. P&L returns null so its ledger view keeps the "Pick a Group By"
+  // placeholder, which is the right behaviour for that section.
+  const SECTION_FALLBACK_GROUPBY = {
+    overview:  'order_date:day',
+    products:  'product',
+    customers: '_customers',
+    payments:  'payment_method',
+    pnl:       null,
+  };
+  // In Analysis mode the dropdown is cross-section, so fallback is always
+  // day-bucketed unless the user picks an explicit Group By. In Overview mode
+  // the fallback follows the active section pill.
+  const fallbackGroupBy = pageMode === 'analysis'
+    ? 'order_date:day'
+    : (SECTION_FALLBACK_GROUPBY[selectedTab] || null);
+  const effectiveGroupBy = activeGroupBy || fallbackGroupBy;
+
+  // The set of group-by options that make sense for the currently active tab.
+  // Used by the Group By menu to hide nonsensical combos (e.g. Product on Payments).
+  const groupByOptionsForTab = useMemo(() => (
+    GROUPBY_OPTIONS.filter((g) => g.applicableTabs.includes(selectedTab))
+  ), [selectedTab]);
+
+  // Rows for Graph/Pivot views. Pulls from already-fetched topProducts /
+  // paymentMethods when the grouping matches them, otherwise aggregates the
+  // raw orders list. Always returns the same { key, label, totalSales,
+  // orderCount, avgOrder, tax } row shape so renderers stay simple.
   // Top Customers — aggregate from salesData.orders by partner_id.
   const topCustomers = useMemo(() => {
     const orders = salesData?.orders || [];
@@ -219,6 +481,62 @@ const SalesReportScreen = ({ navigation }) => {
     });
     return [...map.values()].sort((a, b) => b.total - a.total);
   }, [salesData]);
+
+  const groupedRows = useMemo(() => {
+    if (!effectiveGroupBy) return [];
+    if (effectiveGroupBy === 'product' || effectiveGroupBy === 'product_category' || effectiveGroupBy === 'pos_categ') {
+      // Reuse the existing top-products aggregation. Product Category / POS
+      // Category buckets aren't a separate Odoo call here — they degrade to
+      // per-product rows. Good enough for v1; a true category aggregation
+      // can be added later if the user asks for it.
+      return (topProducts || []).map((p) => ({
+        key: p.id ?? p.name,
+        label: p.name || 'Unknown',
+        totalSales: Number(p.revenue) || 0,
+        orderCount: 0,
+        avgOrder: 0,
+        tax: 0,
+        qty: Number(p.quantity) || 0,
+      }));
+    }
+    if (effectiveGroupBy === 'payment_method') {
+      return (paymentMethods || []).map((m) => ({
+        key: m.id ?? m.name,
+        label: m.name || 'Unknown',
+        totalSales: Number(m.total) || 0,
+        orderCount: Number(m.count) || 0,
+        avgOrder: 0,
+        tax: 0,
+      }));
+    }
+    if (effectiveGroupBy === '_customers') {
+      // Private sentinel for the Customers section fallback — reuses the
+      // existing topCustomers memo. Never appears in selectedGroupBys/chips.
+      return (topCustomers || []).map((c) => ({
+        key: c.id,
+        label: c.name || 'Unknown',
+        totalSales: Number(c.total) || 0,
+        orderCount: Number(c.count) || 0,
+        avgOrder: c.count > 0 ? (Number(c.total) || 0) / c.count : 0,
+        tax: 0,
+      }));
+    }
+    // user / employee / config / order_date:<granularity> all flow through
+    // aggregateOrders which understands prefixed keys.
+    return aggregateOrders(salesData?.orders || [], effectiveGroupBy);
+  }, [effectiveGroupBy, salesData, topProducts, paymentMethods, topCustomers]);
+
+  // Resolve any group-by key (incl. order_date:<granularity>) to a friendly
+  // label for the active-chips strip, pivot header, and export captions.
+  const groupLabelFor = (key) => {
+    if (!key) return '';
+    if (key === '_customers') return 'Customer';
+    if (key.startsWith('order_date:')) {
+      return `Order Date · ${ORDER_DATE_GROUP_LABELS[key] || key.split(':')[1]}`;
+    }
+    const flat = GROUPBY_OPTIONS.find((g) => g.key === key);
+    return flat?.label || key;
+  };
 
   // % delta vs previous period for the Total Sales hero.
   const totalDelta = useMemo(() => {
@@ -251,15 +569,29 @@ const SalesReportScreen = ({ navigation }) => {
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
   };
 
+  // Self-describing chip strings for exports — keeps the PDF/CSV honest about
+  // what state the page was in when the user hit Download.
+  const exportFilterLabel = () => (
+    selectedFilters.length === 0
+      ? 'None'
+      : selectedFilters.map((k) => FILTER_OPTIONS.find((o) => o.key === k)?.label || k).join(', ')
+  );
+  const exportGroupLabel = () => (
+    selectedGroupBys.length === 0
+      ? 'None'
+      : selectedGroupBys.map((k) => GROUPBY_OPTIONS.find((o) => o.key === k)?.label || k).join(', ')
+  );
+  const exportViewLabel = () => (VIEW_MODES.find((m) => m.key === viewMode)?.label || 'List');
+
   const buildHtml = () => {
     const summary = salesData?.summary || {};
-    const rangeLabel = selectedPeriod === 'custom'
-      ? `${customStart} → ${customEnd}`
-      : periodLabel;
+    const rangeLabel = dateRangeLabel;
+    const tabLabel = (TABS.find((t) => t.key === selectedTab) || TABS[0]).label;
     const head = `
       <div style="margin-bottom:18px;">
         <div style="font-size:22px;font-weight:800;color:#2E294E;letter-spacing:0.3px;">Sales Report — ${escapeHtml(rangeLabel)}</div>
         <div style="font-size:11px;color:#6b7280;margin-top:4px;">Generated: ${escapeHtml(new Date().toLocaleString('en-US'))}</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:2px;">Mode: <b>${escapeHtml(pageMode === 'analysis' ? 'Filters & Group By' : 'Overview')}</b> · View: <b>${escapeHtml(exportViewLabel())}</b> · Tab: <b>${escapeHtml(tabLabel)}</b> · Filters: <b>${escapeHtml(exportFilterLabel())}</b> · Group By: <b>${escapeHtml(exportGroupLabel())}</b></div>
       </div>
       <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11px;">
         <tr>
@@ -322,19 +654,42 @@ const SalesReportScreen = ({ navigation }) => {
         <tr style="background:#dcfce7;"><td><b>Net Profit (${_netPct.toFixed(1)}%)</b></td><td style="text-align:right;"><b>${escapeHtml(fmtMoney(_net))}</b></td></tr>
       </tbody></table>
     `;
-    return `
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <style>
-            body { font-family: -apple-system,"Helvetica Neue",Arial,sans-serif; color:#1a1a2e; padding:24px; }
-            td { ${tdStyle} }
-            tr:nth-child(even) td { background:#fafbfc; }
-            h2 { font-size:14px; color:#2E294E; margin: 18px 0 8px; }
-          </style>
-        </head>
-        <body>
-          ${head}
+    // Pivot / Graph view: emit a single grouped table instead of all sections.
+    // Graph view falls back to a numeric table (PDF can't host a live chart).
+    let bodyHtml;
+    if (viewMode === 'pivot' || viewMode === 'graph') {
+      const groupLabel = groupLabelFor(effectiveGroupBy) || 'Group';
+      const hasQty = (groupedRows || []).some((r) => typeof r.qty === 'number');
+      const rowsHtml = (groupedRows || []).map((r) => `
+        <tr>
+          <td>${escapeHtml(r.label || '')}</td>
+          ${hasQty ? `<td style="text-align:right;">${formatNumber(r.qty || 0)}</td>` : ''}
+          <td style="text-align:right;">${formatNumber(r.orderCount || 0)}</td>
+          <td style="text-align:right;">${escapeHtml(fmtMoney(r.totalSales || 0))}</td>
+        </tr>
+      `).join('') || `<tr><td colspan="${hasQty ? 4 : 3}" style="text-align:center;color:#6b7280;padding:14px;">No rows</td></tr>`;
+      const totalSales = (groupedRows || []).reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
+      const totalOrders = (groupedRows || []).reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
+      const totalQty = (groupedRows || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+      bodyHtml = `
+        <h2>${viewMode === 'graph' ? 'Graph data' : 'Pivot'} — by ${escapeHtml(groupLabel)}</h2>
+        <table style="${tableStyle}"><thead><tr>
+          <th style="${thStyle}">${escapeHtml(groupLabel)}</th>
+          ${hasQty ? `<th style="${thStyle}; text-align:right;">Qty</th>` : ''}
+          <th style="${thStyle}; text-align:right;">Orders</th>
+          <th style="${thStyle}; text-align:right;">Total</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot><tr style="background:#fef3c7;">
+          <td><b>Total</b></td>
+          ${hasQty ? `<td style="text-align:right;"><b>${formatNumber(totalQty)}</b></td>` : ''}
+          <td style="text-align:right;"><b>${formatNumber(totalOrders)}</b></td>
+          <td style="text-align:right;"><b>${escapeHtml(fmtMoney(totalSales))}</b></td>
+        </tr></tfoot>
+        </table>
+      `;
+    } else {
+      bodyHtml = `
           <h2>Top Products</h2>
           <table style="${tableStyle}"><thead><tr>
             <th style="${thStyle}">#</th><th style="${thStyle}">Product</th>
@@ -351,6 +706,23 @@ const SalesReportScreen = ({ navigation }) => {
             <th style="${thStyle}; text-align:right;">Total</th><th style="${thStyle}; text-align:right;">%</th>
           </tr></thead><tbody>${paymentRows}</tbody></table>
           ${pnlSection}
+      `;
+    }
+
+    return `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body { font-family: -apple-system,"Helvetica Neue",Arial,sans-serif; color:#1a1a2e; padding:24px; }
+            td { ${tdStyle} }
+            tr:nth-child(even) td { background:#fafbfc; }
+            h2 { font-size:14px; color:#2E294E; margin: 18px 0 8px; }
+          </style>
+        </head>
+        <body>
+          ${head}
+          ${bodyHtml}
         </body>
       </html>
     `;
@@ -359,10 +731,14 @@ const SalesReportScreen = ({ navigation }) => {
   const buildCsv = () => {
     const summary = salesData?.summary || {};
     const lines = [];
-    const rangeLabel = selectedPeriod === 'custom'
-      ? `${customStart} → ${customEnd}`
-      : periodLabel;
+    const rangeLabel = dateRangeLabel;
+    const tabLabel = (TABS.find((t) => t.key === selectedTab) || TABS[0]).label;
     lines.push(['Sales Report', rangeLabel].map(csvEscape).join(','));
+    lines.push(['Mode', pageMode === 'analysis' ? 'Filters & Group By' : 'Overview'].map(csvEscape).join(','));
+    lines.push(['View', exportViewLabel()].map(csvEscape).join(','));
+    lines.push(['Tab', tabLabel].map(csvEscape).join(','));
+    lines.push(['Filters', exportFilterLabel()].map(csvEscape).join(','));
+    lines.push(['Group By', exportGroupLabel()].map(csvEscape).join(','));
     lines.push('');
     lines.push(['Metric', 'Value'].map(csvEscape).join(','));
     lines.push(['Total Sales', summary.totalSales || 0].map(csvEscape).join(','));
@@ -370,6 +746,26 @@ const SalesReportScreen = ({ navigation }) => {
     lines.push(['Avg Order', summary.averageOrder || 0].map(csvEscape).join(','));
     lines.push(['Tax', summary.totalTax || 0].map(csvEscape).join(','));
     lines.push('');
+
+    if (viewMode === 'pivot' || viewMode === 'graph') {
+      const groupLabel = groupLabelFor(effectiveGroupBy) || 'Group';
+      const hasQty = (groupedRows || []).some((r) => typeof r.qty === 'number');
+      lines.push([`# ${viewMode === 'graph' ? 'Graph data' : 'Pivot'} — by ${groupLabel}`].map(csvEscape).join(','));
+      lines.push(
+        (hasQty
+          ? [groupLabel, 'Qty', 'Orders', 'Total']
+          : [groupLabel, 'Orders', 'Total']
+        ).map(csvEscape).join(',')
+      );
+      (groupedRows || []).forEach((r) => {
+        const row = hasQty
+          ? [r.label || '', r.qty || 0, r.orderCount || 0, r.totalSales || 0]
+          : [r.label || '', r.orderCount || 0, r.totalSales || 0];
+        lines.push(row.map(csvEscape).join(','));
+      });
+      return lines.join('\r\n');
+    }
+
     lines.push(['# Top Products'].map(csvEscape).join(','));
     lines.push(['Rank', 'Product', 'Qty', 'Revenue'].map(csvEscape).join(','));
     (topProducts || []).forEach((p, i) => {
@@ -448,7 +844,8 @@ const SalesReportScreen = ({ navigation }) => {
     try {
       const html = buildHtml();
       const { uri } = await Print.printToFileAsync({ html });
-      const fileName = `sales-${selectedPeriod}-${tsForFile()}.pdf`;
+      const fileTag = `${(activeDateKey || 'all').replace('date:', '').replace(':', '-')}-${pageMode === 'analysis' ? 'analysis' : 'overview'}`;
+      const fileName = `sales-${fileTag}-${tsForFile()}.pdf`;
       await saveFile({ srcUri: uri, fileName, mimeType: 'application/pdf', isBase64: true });
     } catch (e) {
       console.warn('Sales PDF export failed:', e?.message || e);
@@ -463,7 +860,8 @@ const SalesReportScreen = ({ navigation }) => {
     setXlsBusy(true);
     try {
       const csv = buildCsv();
-      const fileName = `sales-${selectedPeriod}-${tsForFile()}.csv`;
+      const fileTag = `${(activeDateKey || 'all').replace('date:', '').replace(':', '-')}-${pageMode === 'analysis' ? 'analysis' : 'overview'}`;
+      const fileName = `sales-${fileTag}-${tsForFile()}.csv`;
       await saveFile({ content: csv, fileName, mimeType: 'text/csv', isBase64: false });
     } catch (e) {
       console.warn('Sales Excel export failed:', e?.message || e);
@@ -473,53 +871,308 @@ const SalesReportScreen = ({ navigation }) => {
     }
   };
 
-  // ───── Period segmented control ─────
-  const renderPeriod = () => (
-    <View>
-      <View style={styles.periodWrap}>
-        {PERIODS.map((p) => {
-          const active = selectedPeriod === p.key;
+  // ───── Filter / Group By bar (Odoo-style) ─────
+  // Toggle helpers enforce two mutex rules:
+  //   1. Invoiced ↔ Not Invoiced (semantic opposites)
+  //   2. Only one `date:*` filter key can be active (Today vs Last 7 Days etc.)
+  //   3. Only one `order_date:*` group-by key (date granularities are exclusive)
+  const toggleFilter = (key) => {
+    setSelectedFilters((prev) => {
+      const isDate = String(key).startsWith('date:');
+      if (isDate) {
+        const cleaned = prev.filter((k) => !String(k).startsWith('date:'));
+        // Tapping the already-active date key clears it (toggle off).
+        if (prev.includes(key)) return cleaned;
+        return cleaned.concat(key);
+      }
+      if (key === 'invoiced' && prev.includes('not_invoiced')) {
+        return prev.filter((k) => k !== 'not_invoiced').concat('invoiced');
+      }
+      if (key === 'not_invoiced' && prev.includes('invoiced')) {
+        return prev.filter((k) => k !== 'invoiced').concat('not_invoiced');
+      }
+      return prev.includes(key) ? prev.filter((k) => k !== key) : prev.concat(key);
+    });
+  };
+  const toggleGroupBy = (key) => {
+    setSelectedGroupBys((prev) => {
+      const isDate = String(key).startsWith('order_date:');
+      if (isDate) {
+        const cleaned = prev.filter((k) => !String(k).startsWith('order_date:'));
+        if (prev.includes(key)) return cleaned;
+        return cleaned.concat(key);
+      }
+      return prev.includes(key) ? prev.filter((k) => k !== key) : prev.concat(key);
+    });
+  };
+
+  // For mid-menu Custom Range / Custom Filter… actions — close the menu, set
+  // the date:custom key, and pop the calendar to pick a start date.
+  const openCustomDateFlow = () => {
+    setSelectedFilters((prev) => {
+      const cleaned = prev.filter((k) => !String(k).startsWith('date:'));
+      return cleaned.concat('date:custom');
+    });
+    setMenuOpen(null);
+    setCalendarOpen('from');
+  };
+
+  const openMenu = (kind) => {
+    setMenuExpandedKey(null);
+    setMenuOpen(kind);
+  };
+
+  // ───── Top-level mode switcher (Overview / Filters & Group By) ─────
+  const renderModeSwitcher = () => (
+    <View style={styles.modeSwitcher}>
+      {[
+        { key: 'overview', label: 'Overview',          icon: 'dashboard'     },
+        { key: 'analysis', label: 'Filters & Group By', icon: 'filter-list'  },
+      ].map((m) => {
+        const active = pageMode === m.key;
+        return (
+          <TouchableOpacity
+            key={m.key}
+            activeOpacity={0.85}
+            onPress={() => setPageModeSafe(m.key)}
+            style={[styles.modeBtn, active && styles.modeBtnActive]}
+          >
+            <MaterialIcons name={m.icon} size={14} color={active ? '#fff' : NAVY} />
+            <Text style={[styles.modeBtnText, active && styles.modeBtnTextActive]}>
+              {m.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
+  // Overview mode shows only the Section pill (which 5-tab to view).
+  const renderSectionPill = () => {
+    const sectionActive = selectedTab !== 'overview';
+    return (
+      <View style={styles.filterBar}>
+        <TouchableOpacity
+          style={[styles.filterBarPill, sectionActive && styles.filterBarPillActive]}
+          activeOpacity={0.85}
+          onPress={() => openMenu('section')}
+        >
+          <MaterialIcons name="dashboard" size={14} color={sectionActive ? '#fff' : NAVY} />
+          <Text
+            numberOfLines={1}
+            style={[styles.filterBarPillText, sectionActive && styles.filterBarPillTextActive]}
+          >
+            {sectionLabel}
+          </Text>
+          <MaterialIcons name="arrow-drop-down" size={16} color={sectionActive ? '#fff' : NAVY} />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // Analysis mode shows only Filters + Group By pills — no Section pill, since
+  // Analysis is cross-section.
+  const renderAnalysisFilterBar = () => (
+    <View style={styles.filterBar}>
+      <TouchableOpacity
+        style={[styles.filterBarPill, selectedFilters.length > 0 && styles.filterBarPillActive]}
+        activeOpacity={0.85}
+        onPress={() => openMenu('filter')}
+      >
+        <MaterialIcons name="filter-list" size={14} color={selectedFilters.length > 0 ? '#fff' : NAVY} />
+        <Text style={[styles.filterBarPillText, selectedFilters.length > 0 && styles.filterBarPillTextActive]}>
+          Filters{selectedFilters.length > 0 ? ` · ${selectedFilters.length}` : ''}
+        </Text>
+        <MaterialIcons name="arrow-drop-down" size={16} color={selectedFilters.length > 0 ? '#fff' : NAVY} />
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.filterBarPill, selectedGroupBys.length > 0 && styles.filterBarPillActive]}
+        activeOpacity={0.85}
+        onPress={() => openMenu('group')}
+      >
+        <MaterialCommunityIcons name="format-list-group" size={14} color={selectedGroupBys.length > 0 ? '#fff' : NAVY} />
+        <Text style={[styles.filterBarPillText, selectedGroupBys.length > 0 && styles.filterBarPillTextActive]}>
+          Group By{selectedGroupBys.length > 0 ? ` · ${selectedGroupBys.length}` : ''}
+        </Text>
+        <MaterialIcons name="arrow-drop-down" size={16} color={selectedGroupBys.length > 0 ? '#fff' : NAVY} />
+      </TouchableOpacity>
+    </View>
+  );
+
+  const filterLabelFor = (key) => {
+    if (typeof key === 'string' && key.startsWith('date:')) {
+      const presetLabel = key === 'date:custom'
+        ? `${customStart} → ${customEnd}`
+        : (DATE_FILTER_LABELS[key] || 'Custom');
+      return `Order Date: ${presetLabel}`;
+    }
+    const flat = FILTER_OPTIONS.find((o) => o.key === key);
+    return flat?.label || key;
+  };
+
+  const renderActiveChips = () => {
+    if (selectedFilters.length === 0 && selectedGroupBys.length === 0) return null;
+    return (
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.activeChipsRow}
+      >
+        {selectedFilters.map((k) => (
+          <TouchableOpacity
+            key={`f-${k}`}
+            activeOpacity={0.85}
+            style={styles.activeChip}
+            onPress={() => toggleFilter(k)}
+          >
+            <Text style={styles.activeChipText}>{filterLabelFor(k)}</Text>
+            <MaterialIcons name="close" size={12} color="#fff" />
+          </TouchableOpacity>
+        ))}
+        {selectedGroupBys.map((k) => (
+          <TouchableOpacity
+            key={`g-${k}`}
+            activeOpacity={0.85}
+            style={[styles.activeChip, styles.activeChipGroup]}
+            onPress={() => toggleGroupBy(k)}
+          >
+            <Text style={styles.activeChipText}>Group: {groupLabelFor(k)}</Text>
+            <MaterialIcons name="close" size={12} color="#fff" />
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    );
+  };
+
+  const renderViewModeToggle = () => {
+    // Overview mode: dashboard is implicit; no toggle.
+    // Analysis mode: only Graph + Pivot — List doesn't apply.
+    if (pageMode !== 'analysis') return null;
+    const modes = VIEW_MODES.filter((m) => m.key !== 'list');
+    return (
+      <View style={styles.viewModeRow}>
+        {modes.map((m) => {
+          const active = viewMode === m.key;
           return (
             <TouchableOpacity
-              key={p.key}
+              key={m.key}
               activeOpacity={0.85}
-              onPress={() => setSelectedPeriod(p.key)}
-              style={[styles.periodBtn, active && styles.periodBtnActive]}
+              onPress={() => setViewMode(m.key)}
+              style={[styles.viewModeBtn, active && styles.viewModeBtnActive]}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             >
-              <Text style={[styles.periodBtnText, active && styles.periodBtnTextActive]}>{p.label}</Text>
+              <MaterialIcons name={m.icon} size={16} color={active ? '#fff' : NAVY} />
             </TouchableOpacity>
           );
         })}
       </View>
+    );
+  };
 
-      {selectedPeriod === 'custom' ? (
-        <View style={styles.customRangeRow}>
-          <TouchableOpacity
-            style={styles.customRangeCell}
-            activeOpacity={0.85}
-            onPress={() => setCalendarOpen('from')}
-          >
-            <Text style={styles.customRangeLabel}>FROM</Text>
-            <View style={styles.customRangeBtnInner}>
-              <Text style={styles.customRangeInput}>{prettyDateLabel(customStart)}</Text>
-              <MaterialIcons name="calendar-today" size={14} color={MUTED} />
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.customRangeCell}
-            activeOpacity={0.85}
-            onPress={() => setCalendarOpen('to')}
-          >
-            <Text style={styles.customRangeLabel}>TO</Text>
-            <View style={styles.customRangeBtnInner}>
-              <Text style={styles.customRangeInput}>{prettyDateLabel(customEnd)}</Text>
-              <MaterialIcons name="calendar-today" size={14} color={MUTED} />
-            </View>
-          </TouchableOpacity>
+  // ───── Pivot table renderer (Group By rows × measure columns) ─────
+  const renderPivot = (rows) => {
+    if (!effectiveGroupBy) {
+      return (
+        <View style={styles.emptyBox}>
+          <MaterialIcons name="grid-on" size={36} color="#cbd5e1" />
+          <Text style={styles.emptyText}>Pick a Group By option to build a pivot table</Text>
         </View>
-      ) : null}
-    </View>
-  );
+      );
+    }
+    if (!rows || rows.length === 0) {
+      return (
+        <View style={styles.emptyBox}>
+          <MaterialIcons name="grid-on" size={36} color="#cbd5e1" />
+          <Text style={styles.emptyText}>No rows to pivot for this selection</Text>
+        </View>
+      );
+    }
+    const hasQty = rows.some((r) => typeof r.qty === 'number');
+    const totalSales = rows.reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
+    const totalOrders = rows.reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
+    const totalQty = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    return (
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View style={styles.pivotTable}>
+          <View style={[styles.pivotRow, styles.pivotHeadRow]}>
+            <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotHeadText]}>
+              {groupLabelFor(effectiveGroupBy) || 'Group'}
+            </Text>
+            {hasQty ? <Text style={[styles.pivotCell, styles.pivotHeadText]}>Qty</Text> : null}
+            <Text style={[styles.pivotCell, styles.pivotHeadText]}>Orders</Text>
+            <Text style={[styles.pivotCell, styles.pivotHeadText]}>Total</Text>
+          </View>
+          {rows.map((r) => (
+            <View key={String(r.key)} style={styles.pivotRow}>
+              <Text style={[styles.pivotCell, styles.pivotCellLabel]} numberOfLines={1}>{r.label}</Text>
+              {hasQty ? <Text style={styles.pivotCell}>{formatNumber(r.qty || 0)}</Text> : null}
+              <Text style={styles.pivotCell}>{formatNumber(r.orderCount || 0)}</Text>
+              <Text style={[styles.pivotCell, styles.pivotCellMoney]}>{fmtMoney(r.totalSales || 0)}</Text>
+            </View>
+          ))}
+          <View style={[styles.pivotRow, styles.pivotTotalRow]}>
+            <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotTotalText]}>Total</Text>
+            {hasQty ? <Text style={[styles.pivotCell, styles.pivotTotalText]}>{formatNumber(totalQty)}</Text> : null}
+            <Text style={[styles.pivotCell, styles.pivotTotalText]}>{formatNumber(totalOrders)}</Text>
+            <Text style={[styles.pivotCell, styles.pivotCellMoney, styles.pivotTotalText]}>{fmtMoney(totalSales)}</Text>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  };
+
+  // ───── Graph (bar chart) renderer ─────
+  const renderGraph = (rows) => {
+    if (!effectiveGroupBy) {
+      return (
+        <View style={styles.emptyBox}>
+          <MaterialIcons name="bar-chart" size={36} color="#cbd5e1" />
+          <Text style={styles.emptyText}>Pick a Group By option to chart the data</Text>
+        </View>
+      );
+    }
+    if (!rows || rows.length === 0) {
+      return (
+        <View style={styles.emptyBox}>
+          <MaterialIcons name="bar-chart" size={36} color="#cbd5e1" />
+          <Text style={styles.emptyText}>No data to chart for this selection</Text>
+        </View>
+      );
+    }
+    const top = rows.slice(0, 8); // chart-kit hates dense bars; cap at 8.
+    const chartData = {
+      labels: top.map((r) => truncLabel(r.label, 8)),
+      datasets: [{ data: top.map((r) => Number(r.totalSales) || 0) }],
+    };
+    const chartWidth = Math.max(Dimensions.get('window').width - 36, 320);
+    return (
+      <View style={styles.graphCard}>
+        <BarChart
+          data={chartData}
+          width={chartWidth}
+          height={240}
+          yAxisLabel=""
+          yAxisSuffix=""
+          chartConfig={{
+            backgroundColor: '#ffffff',
+            backgroundGradientFrom: '#ffffff',
+            backgroundGradientTo: '#ffffff',
+            decimalPlaces: 0,
+            color: (opacity = 1) => `rgba(46, 41, 78, ${opacity})`,
+            labelColor: () => '#1a1a2e',
+            barPercentage: 0.6,
+            propsForLabels: { fontSize: 10 },
+          }}
+          showValuesOnTopOfBars
+          fromZero
+          style={{ borderRadius: 12 }}
+        />
+        {rows.length > 8 ? (
+          <Text style={styles.graphFootnote}>Showing top 8 of {rows.length} groups</Text>
+        ) : null}
+      </View>
+    );
+  };
 
   // ───── Hero KPI strip ─────
   const renderHero = () => {
@@ -536,7 +1189,7 @@ const SalesReportScreen = ({ navigation }) => {
             <Text style={styles.heroLabel}>TOTAL SALES</Text>
             <Text style={styles.heroAmount}>{fmtMoney(total)}</Text>
             <View style={styles.heroSubRow}>
-              <Text style={styles.heroSub}>{periodLabel}</Text>
+              <Text style={styles.heroSub}>{dateRangeLabel}</Text>
               {totalDelta ? (
                 <View
                   style={[
@@ -585,7 +1238,7 @@ const SalesReportScreen = ({ navigation }) => {
           <TouchableOpacity
             style={styles.heroStat}
             activeOpacity={0.85}
-            onPress={() => navigation.navigate('OrdersAnalysis', { period: selectedPeriod, ordersData: salesData })}
+            onPress={() => navigation.navigate('OrdersAnalysis', { period: activeDateKey || 'all', ordersData: salesData })}
           >
             <View style={styles.heroStatIconWrap}>
               <MaterialIcons name="receipt-long" size={16} color={NAVY} />
@@ -621,65 +1274,47 @@ const SalesReportScreen = ({ navigation }) => {
     );
   };
 
-  // ───── Tab pills + export buttons (opposite the tabs) ─────
-  const renderTabs = () => (
-    <View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tabBar}
-      >
-        {TABS.map((t) => {
-          const active = selectedTab === t.key;
-          return (
-            <TouchableOpacity
-              key={t.key}
-              style={[styles.tabBtn, active && styles.tabBtnActive]}
-              activeOpacity={0.85}
-              onPress={() => setSelectedTab(t.key)}
-            >
-              <MaterialIcons name={t.icon} size={16} color={active ? '#fff' : NAVY} />
-              <Text style={[styles.tabBtnText, active && styles.tabBtnTextActive]}>{t.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-      <View style={styles.exportRow}>
-        <FeatureGate featureKey="sales_report.export_pdf">
-          <TouchableOpacity
-            style={[styles.exportBtn, styles.exportBtnPdf, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
-            activeOpacity={0.85}
-            disabled={pdfBusy || xlsBusy}
-            onPress={handleExportPdf}
-          >
-            {pdfBusy ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <MaterialIcons name="picture-as-pdf" size={14} color="#fff" />
-                <Text style={styles.exportBtnText}>PDF</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </FeatureGate>
-        <FeatureGate featureKey="sales_report.export_excel">
-          <TouchableOpacity
-            style={[styles.exportBtn, styles.exportBtnXls, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
-            activeOpacity={0.85}
-            disabled={pdfBusy || xlsBusy}
-            onPress={handleExportExcel}
-          >
-            {xlsBusy ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <MaterialIcons name="grid-on" size={14} color="#fff" />
-                <Text style={styles.exportBtnText}>Excel</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </FeatureGate>
-      </View>
+  // ───── View-mode toggle + PDF / Excel export buttons ─────
+  // The horizontal tab strip moved into the Section dropdown pill, so this
+  // row now stands alone directly below the filter bar / chips.
+  const renderExportBar = () => (
+    <View style={styles.exportRow}>
+      {renderViewModeToggle()}
+      <View style={{ flex: 1 }} />
+      <FeatureGate featureKey="sales_report.export_pdf">
+        <TouchableOpacity
+          style={[styles.exportBtn, styles.exportBtnPdf, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
+          activeOpacity={0.85}
+          disabled={pdfBusy || xlsBusy}
+          onPress={handleExportPdf}
+        >
+          {pdfBusy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <MaterialIcons name="picture-as-pdf" size={14} color="#fff" />
+              <Text style={styles.exportBtnText}>PDF</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </FeatureGate>
+      <FeatureGate featureKey="sales_report.export_excel">
+        <TouchableOpacity
+          style={[styles.exportBtn, styles.exportBtnXls, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
+          activeOpacity={0.85}
+          disabled={pdfBusy || xlsBusy}
+          onPress={handleExportExcel}
+        >
+          {xlsBusy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <MaterialIcons name="grid-on" size={14} color="#fff" />
+              <Text style={styles.exportBtnText}>Excel</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </FeatureGate>
     </View>
   );
 
@@ -877,7 +1512,48 @@ const SalesReportScreen = ({ navigation }) => {
   };
 
   // ───── Body switch ─────
+  // In List mode, every tab renders the same content it always has — keeps
+  // the default user experience identical to pre-Odoo-filter behaviour.
+  // Graph / Pivot modes share a single renderer per tab and read from
+  // `groupedRows` (memoized above) so we don't refetch anything.
+  const renderTabHeading = () => {
+    if (selectedTab === 'products')  return 'All Top Products';
+    if (selectedTab === 'customers') return 'All Top Customers';
+    if (selectedTab === 'payments')  return 'Payments Breakdown';
+    if (selectedTab === 'pnl')       return 'Profit & Loss';
+    return 'Overview';
+  };
+
+  const renderNonListView = () => {
+    const usingFallback = !activeGroupBy && !!effectiveGroupBy;
+    return (
+      <View>
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>
+            {renderTabHeading()}{effectiveGroupBy ? ` — by ${groupLabelFor(effectiveGroupBy)}` : ''}
+          </Text>
+        </View>
+        {usingFallback ? (
+          <Text style={styles.fallbackHint}>
+            Default grouping for this section — pick a Group By to change.
+          </Text>
+        ) : null}
+        {viewMode === 'graph' ? renderGraph(groupedRows) : renderPivot(groupedRows)}
+      </View>
+    );
+  };
+
   const renderBody = () => {
+    // Analysis mode is always the pivot/graph workspace — no per-section
+    // dashboard cards, no List view.
+    if (pageMode === 'analysis') {
+      return (
+        <View>
+          {renderHero()}
+          {renderNonListView()}
+        </View>
+      );
+    }
     if (selectedTab === 'overview') {
       return (
         <View>
@@ -962,8 +1638,10 @@ const SalesReportScreen = ({ navigation }) => {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={NAVY} />}
           contentContainerStyle={{ padding: 12, paddingBottom: 30 }}
         >
-          {renderPeriod()}
-          {renderTabs()}
+          {renderModeSwitcher()}
+          {pageMode === 'overview' ? renderSectionPill() : renderAnalysisFilterBar()}
+          {renderActiveChips()}
+          {renderExportBar()}
           {loading && !refreshing && (!salesData || !salesData.summary) ? (
             <View style={{ paddingVertical: 60, alignItems: 'center' }}>
               <ActivityIndicator size="large" color={NAVY} />
@@ -1065,6 +1743,165 @@ const SalesReportScreen = ({ navigation }) => {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      {/* Filters / Group By menu — Odoo-style multi-select popup */}
+      <Modal
+        visible={!!menuOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setMenuOpen(null)}
+      >
+        <TouchableWithoutFeedback onPress={() => setMenuOpen(null)}>
+          <View style={styles.menuBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.menuCard}>
+                <View style={styles.menuHead}>
+                  <Text style={styles.menuTitle}>
+                    {menuOpen === 'filter' ? 'Filters' : menuOpen === 'group' ? 'Group By' : 'Section'}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setMenuOpen(null)}
+                    style={styles.calendarCloseBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#1a1a2e" />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView style={{ maxHeight: 420 }}>
+                  {menuOpen === 'section' ? (
+                    TABS.map((t) => {
+                      const active = selectedTab === t.key;
+                      return (
+                        <TouchableOpacity
+                          key={t.key}
+                          activeOpacity={0.75}
+                          onPress={() => {
+                            setSelectedTab(t.key);
+                            setMenuOpen(null);
+                          }}
+                          style={styles.menuRow}
+                        >
+                          <MaterialIcons
+                            name={active ? 'radio-button-checked' : 'radio-button-unchecked'}
+                            size={18}
+                            color={active ? NAVY : '#cbd5e1'}
+                          />
+                          <Text
+                            style={[
+                              styles.menuRowText,
+                              active && { color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
+                            ]}
+                          >
+                            {t.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })
+                  ) : (menuOpen === 'filter' ? FILTER_OPTIONS : groupByOptionsForTab).map((opt) => {
+                    if (opt.type === 'expandable') {
+                      const expanded = menuExpandedKey === opt.key;
+                      const arr = menuOpen === 'filter' ? selectedFilters : selectedGroupBys;
+                      const activeChild = (opt.children || []).find((c) => arr.includes(c.key));
+                      return (
+                        <View key={opt.key}>
+                          <TouchableOpacity
+                            activeOpacity={0.75}
+                            onPress={() => setMenuExpandedKey(expanded ? null : opt.key)}
+                            style={styles.menuRow}
+                          >
+                            <MaterialIcons
+                              name={expanded ? 'arrow-drop-down' : 'arrow-right'}
+                              size={20}
+                              color={activeChild ? NAVY : '#94a3b8'}
+                            />
+                            <Text
+                              style={[
+                                styles.menuRowText,
+                                activeChild && { color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
+                              ]}
+                            >
+                              {opt.label}
+                              {activeChild ? ` · ${activeChild.label}` : ''}
+                            </Text>
+                          </TouchableOpacity>
+                          {expanded ? (
+                            <View style={styles.menuChildren}>
+                              {(opt.children || []).map((child) => {
+                                const isCustom = child.key === 'date:custom';
+                                const checked = arr.includes(child.key);
+                                return (
+                                  <TouchableOpacity
+                                    key={child.key}
+                                    activeOpacity={0.75}
+                                    onPress={() => {
+                                      if (isCustom) {
+                                        openCustomDateFlow();
+                                      } else if (menuOpen === 'filter') {
+                                        toggleFilter(child.key);
+                                      } else {
+                                        toggleGroupBy(child.key);
+                                      }
+                                    }}
+                                    style={[styles.menuRow, styles.menuChildRow]}
+                                  >
+                                    <MaterialIcons
+                                      name={checked ? 'check-box' : 'check-box-outline-blank'}
+                                      size={18}
+                                      color={checked ? NAVY : '#cbd5e1'}
+                                    />
+                                    <Text style={styles.menuRowText}>{child.label}</Text>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </View>
+                          ) : null}
+                        </View>
+                      );
+                    }
+                    // type: 'leaf' — plain checkbox row.
+                    const arr = menuOpen === 'filter' ? selectedFilters : selectedGroupBys;
+                    const checked = arr.includes(opt.key);
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        activeOpacity={0.75}
+                        onPress={() => (menuOpen === 'filter' ? toggleFilter(opt.key) : toggleGroupBy(opt.key))}
+                        style={styles.menuRow}
+                      >
+                        <MaterialIcons
+                          name={checked ? 'check-box' : 'check-box-outline-blank'}
+                          size={18}
+                          color={checked ? NAVY : '#cbd5e1'}
+                        />
+                        <Text style={styles.menuRowText}>{opt.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {menuOpen === 'group' && groupByOptionsForTab.length === 0 ? (
+                    <Text style={[styles.menuRowText, { padding: 14, color: MUTED }]}>
+                      No grouping options apply to this tab.
+                    </Text>
+                  ) : null}
+                </ScrollView>
+                {(menuOpen === 'filter' && selectedFilters.length > 0) ||
+                 (menuOpen === 'group' && selectedGroupBys.length > 0) ? (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.menuClearBtn}
+                    onPress={() => {
+                      if (menuOpen === 'filter') setSelectedFilters([]);
+                      else setSelectedGroupBys([]);
+                    }}
+                  >
+                    <MaterialIcons name="clear-all" size={14} color="#fff" />
+                    <Text style={styles.menuClearText}>Clear all</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -1077,65 +1914,6 @@ const cardShadow = Platform.select({
 });
 
 const styles = StyleSheet.create({
-  // Period segmented control
-  periodWrap: {
-    flexDirection: 'row',
-    backgroundColor: '#eef0f5',
-    borderRadius: 999,
-    padding: 4,
-    marginBottom: 12,
-  },
-  periodBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 999,
-    alignItems: 'center',
-  },
-  periodBtnActive: {
-    backgroundColor: NAVY,
-  },
-  periodBtnText: {
-    fontSize: 12,
-    color: NAVY,
-    fontFamily: FONT_FAMILY.urbanistBold,
-    letterSpacing: 0.3,
-  },
-  periodBtnTextActive: { color: '#fff' },
-
-  customRangeRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  customRangeCell: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  customRangeLabel: {
-    fontSize: 10,
-    color: MUTED,
-    fontFamily: FONT_FAMILY.urbanistBold,
-    letterSpacing: 0.5,
-  },
-  customRangeBtnInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 2,
-  },
-  customRangeInput: {
-    fontSize: 13,
-    color: '#1a1a2e',
-    fontFamily: FONT_FAMILY.urbanistBold,
-    padding: 0,
-    flex: 1,
-  },
-
   // Calendar popup
   calendarBackdrop: {
     flex: 1,
@@ -1176,33 +1954,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3f4f6',
     alignItems: 'center', justifyContent: 'center',
   },
-
-  // Tabs
-  tabBar: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  tabBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#fff',
-    borderWidth: 1.5,
-    borderColor: NAVY,
-    gap: 6,
-  },
-  tabBtnActive: { backgroundColor: NAVY, borderColor: NAVY },
-  tabBtnText: {
-    fontSize: 12,
-    color: NAVY,
-    fontFamily: FONT_FAMILY.urbanistBold,
-    letterSpacing: 0.3,
-  },
-  tabBtnTextActive: { color: '#fff' },
 
   exportRow: {
     flexDirection: 'row',
@@ -1343,6 +2094,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: ORANGE,
     fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  fallbackHint: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+    fontStyle: 'italic',
   },
 
   cardList: {
@@ -1532,6 +2291,240 @@ const styles = StyleSheet.create({
     color: MUTED,
     fontFamily: FONT_FAMILY.urbanistMedium,
     lineHeight: 15,
+  },
+
+  // ── Odoo-style Filter / Group By bar ──
+  // ── Top-level mode switcher (Overview / Filters & Group By) ──
+  modeSwitcher: {
+    flexDirection: 'row',
+    backgroundColor: '#eef0f5',
+    borderRadius: 999,
+    padding: 4,
+    marginBottom: 10,
+    gap: 4,
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    gap: 6,
+  },
+  modeBtnActive: {
+    backgroundColor: NAVY,
+  },
+  modeBtnText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  modeBtnTextActive: { color: '#fff' },
+
+  filterBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  filterBarPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+  },
+  filterBarPillActive: {
+    backgroundColor: NAVY,
+  },
+  filterBarPillText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  filterBarPillTextActive: { color: '#fff' },
+
+  activeChipsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingVertical: 2,
+    marginBottom: 8,
+  },
+  activeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: ORANGE,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  activeChipGroup: { backgroundColor: NAVY },
+  activeChipText: {
+    fontSize: 11,
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+
+  // ── View mode toggle (List / Graph / Pivot) ──
+  viewModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eef0f5',
+    borderRadius: 8,
+    padding: 2,
+    gap: 2,
+  },
+  viewModeBtn: {
+    width: 30,
+    height: 28,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewModeBtnActive: {
+    backgroundColor: NAVY,
+  },
+
+  // ── Filter / Group By menu modal ──
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  menuCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 16, shadowOffset: { width: 0, height: 6 } },
+      android: { elevation: 12 },
+    }),
+  },
+  menuHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef0f5',
+  },
+  menuTitle: {
+    fontSize: 15,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f4f5f9',
+  },
+  menuRowText: {
+    fontSize: 13,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  menuChildren: {
+    backgroundColor: '#f9fafc',
+  },
+  menuChildRow: {
+    paddingLeft: 36,
+    borderBottomColor: '#eef0f5',
+  },
+  menuClearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: NAVY,
+    paddingVertical: 10,
+  },
+  menuClearText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+
+  // ── Pivot table ──
+  pivotTable: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 14,
+    ...cardShadow,
+  },
+  pivotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f2f6',
+  },
+  pivotHeadRow: { backgroundColor: NAVY },
+  pivotTotalRow: { backgroundColor: '#fef3c7', borderBottomWidth: 0 },
+  pivotCell: {
+    width: 110,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    fontSize: 12,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    textAlign: 'right',
+  },
+  pivotCellLabel: {
+    width: 180,
+    textAlign: 'left',
+  },
+  pivotCellMoney: {
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: NAVY,
+  },
+  pivotHeadText: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+    fontSize: 11,
+    textTransform: 'uppercase',
+  },
+  pivotTotalText: {
+    color: '#92400E',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+
+  // ── Graph card ──
+  graphCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 14,
+    alignItems: 'center',
+    ...cardShadow,
+  },
+  graphFootnote: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 6,
   },
 
   // Empty

@@ -6152,7 +6152,7 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
 };
 
 // Fetch sales report data from Odoo
-export const fetchSalesReportData = async ({ startDate = null, endDate = null } = {}) => {
+export const fetchSalesReportData = async ({ startDate = null, endDate = null, filters = [] } = {}) => {
   try {
     // Only count completed sales — paid / done / invoiced. Excluding `draft`
     // means in-cart (unpaid) orders don't pollute the report. Excluding
@@ -6170,6 +6170,17 @@ export const fetchSalesReportData = async ({ startDate = null, endDate = null } 
       domain = [['state', 'in', PAID_STATES]];
     }
 
+    // Apply Odoo-style filters from the Sales Report's Filters menu.
+    // not_cancelled is implicit in the PAID_STATES list, so it's a no-op here.
+    if (Array.isArray(filters) && filters.length) {
+      if (filters.includes('invoiced')) {
+        domain.push(['account_move', '!=', false]);
+      }
+      if (filters.includes('not_invoiced')) {
+        domain.push(['account_move', '=', false]);
+      }
+    }
+
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
@@ -6178,7 +6189,7 @@ export const fetchSalesReportData = async ({ startDate = null, endDate = null } 
         method: 'search_read',
         args: [domain],
         kwargs: {
-          fields: ['id', 'name', 'partner_id', 'user_id', 'date_order', 'amount_total', 'amount_tax', 'state', 'lines', 'session_id', 'payment_ids'],
+          fields: ['id', 'name', 'partner_id', 'user_id', 'date_order', 'amount_total', 'amount_tax', 'state', 'lines', 'session_id', 'payment_ids', 'config_id', 'employee_id', 'account_move'],
           order: 'date_order desc',
         },
       },
