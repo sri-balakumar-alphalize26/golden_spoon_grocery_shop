@@ -401,8 +401,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
           }
         }}
         style={{
-          flexDirection: 'row',
-          alignItems: 'center',
+          flexDirection: 'column',
           marginHorizontal: 12,
           marginBottom: 10,
           backgroundColor: '#fff',
@@ -419,115 +418,128 @@ const TakeoutDelivery = ({ navigation, route }) => {
           elevation: 2,
         }}
       >
-        {multiSelectMode && (
+        {/* Top sub-row: checkbox? + thumbnail + name + qty + subtotal + trash */}
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          {multiSelectMode && (
+            <View style={{
+              width: 22, height: 22, borderRadius: 11,
+              borderWidth: 2,
+              borderColor: isChecked ? '#2E294E' : '#c5c9d4',
+              backgroundColor: isChecked ? '#2E294E' : 'transparent',
+              alignItems: 'center', justifyContent: 'center',
+              marginRight: 10,
+            }}>
+              {isChecked && <MaterialCommunityIcons name="check" size={14} color="#fff" />}
+            </View>
+          )}
+          {/* Thumbnail (image or letter) */}
           <View style={{
-            width: 22, height: 22, borderRadius: 11,
-            borderWidth: 2,
-            borderColor: isChecked ? '#2E294E' : '#c5c9d4',
-            backgroundColor: isChecked ? '#2E294E' : 'transparent',
+            width: 52, height: 52, borderRadius: 12,
+            backgroundColor: '#eef0f5',
             alignItems: 'center', justifyContent: 'center',
-            marginRight: 10,
+            overflow: 'hidden', marginRight: 12,
           }}>
-            {isChecked && <MaterialCommunityIcons name="check" size={14} color="#fff" />}
+            {imgUrl ? (
+              <Image
+                source={{ uri: imgUrl }}
+                style={{ width: '100%', height: '100%' }}
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={{ fontSize: 20, fontWeight: '800', color: '#2E294E' }}>{initial}</Text>
+            )}
           </View>
-        )}
-        {/* Thumbnail (image or letter) */}
-        <View style={{
-          width: 52, height: 52, borderRadius: 12,
-          backgroundColor: '#eef0f5',
-          alignItems: 'center', justifyContent: 'center',
-          overflow: 'hidden', marginRight: 12,
-        }}>
-          {imgUrl ? (
-            <Image
-              source={{ uri: imgUrl }}
-              style={{ width: '100%', height: '100%' }}
-              resizeMode="cover"
-            />
-          ) : (
-            <Text style={{ fontSize: 20, fontWeight: '800', color: '#2E294E' }}>{initial}</Text>
+
+          {/* Product name + unit price */}
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '800', color: '#1a1a2e', textAlign: 'left' }} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <Text style={{ fontSize: 11, color: '#8896ab', fontWeight: '600', marginTop: 2, textAlign: 'left' }} numberOfLines={1}>
+              {displayNum(item.unit)} each
+            </Text>
+          </View>
+
+          {/* Qty stepper (hidden in multi-select) */}
+          {!multiSelectMode && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center',
+              backgroundColor: '#f6f7fb', borderRadius: 999,
+              marginRight: 10, paddingHorizontal: 2,
+            }}>
+              <TouchableOpacity onPress={() => handleDecrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: '#2E294E' }}>−</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => openQtyEditor(item)}
+                hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              >
+                <Text style={{ minWidth: 28, textAlign: 'center', fontWeight: '800', color: '#1a1a2e', fontSize: 13, paddingHorizontal: 4 }}>
+                  {item.qty}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleIncrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E294E' }}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Subtotal */}
+          <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
+            {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
+          </Text>
+
+          {/* Per-row delete (hidden in multi-select) */}
+          {!multiSelectMode && (
+            <TouchableOpacity
+              onPress={() => removeProduct(item.id)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ marginLeft: 8, padding: 4 }}
+            >
+              <MaterialCommunityIcons name="trash-can-outline" size={20} color="#b91c1c" />
+            </TouchableOpacity>
           )}
         </View>
 
-        {/* Name + price-each + discount chip */}
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 14, fontWeight: '800', color: '#1a1a2e' }} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <Text style={{ fontSize: 11, color: '#8896ab', fontWeight: '600', marginTop: 2 }}>
-            {displayNum(item.unit)} each
-          </Text>
-          {(item.discount_amount > 0) ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-              <View style={{ backgroundColor: '#ffedd5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                <Text style={{ fontSize: 10, color: '#9a3412', fontWeight: '700' }}>
-                  −{displayNum(item.discount_amount)}
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setProductDiscount(item.rawItem?.id ?? item.id, 0)}
-                style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
-              >
-                <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-          {item.customer_note ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-              <View style={{ backgroundColor: '#ede9fe', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, maxWidth: 200 }}>
-                <Text numberOfLines={1} style={{ fontSize: 10, color: '#5b21b6', fontWeight: '700', fontStyle: 'italic' }}>
-                  📝 {item.customer_note}
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setLineNote(item.rawItem?.id ?? item.id, '')}
-                style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
-              >
-                <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-        </View>
-
-        {/* Qty stepper (hidden in multi-select) */}
-        {!multiSelectMode && (
+        {/* Bottom section: optional discount/note chips, each on its own row, indented past the thumbnail */}
+        {(item.discount_amount > 0 || item.customer_note) ? (
           <View style={{
-            flexDirection: 'row', alignItems: 'center',
-            backgroundColor: '#f6f7fb', borderRadius: 999,
-            marginRight: 10, paddingHorizontal: 2,
+            flexDirection: 'column',
+            marginTop: 4,
+            paddingLeft: multiSelectMode ? (52 + 12 + 22 + 10) : (52 + 12),
           }}>
-            <TouchableOpacity onPress={() => handleDecrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
-              <Text style={{ fontSize: 16, fontWeight: '800', color: '#2E294E' }}>−</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => openQtyEditor(item)}
-              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-            >
-              <Text style={{ minWidth: 28, textAlign: 'center', fontWeight: '800', color: '#1a1a2e', fontSize: 13, paddingHorizontal: 4 }}>
-                {item.qty}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => handleIncrement(item)} style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E294E' }}>
-              <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
-            </TouchableOpacity>
+            {(item.discount_amount > 0) ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ backgroundColor: '#ffedd5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                  <Text style={{ fontSize: 10, color: '#9a3412', fontWeight: '700' }}>
+                    −{displayNum(item.discount_amount)}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setProductDiscount(item.rawItem?.id ?? item.id, 0)}
+                  style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
+                >
+                  <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {item.customer_note ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                <View style={{ backgroundColor: '#ede9fe', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, maxWidth: 200 }}>
+                  <Text numberOfLines={1} style={{ fontSize: 10, color: '#5b21b6', fontWeight: '700', fontStyle: 'italic' }}>
+                    📝 {item.customer_note}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setLineNote(item.rawItem?.id ?? item.id, '')}
+                  style={{ marginLeft: 6, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 6, backgroundColor: '#fff5f5', borderWidth: 1, borderColor: '#fecaca' }}
+                >
+                  <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </View>
-        )}
-
-        {/* Subtotal */}
-        <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
-          {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
-        </Text>
-
-        {/* Per-row delete (hidden in multi-select) */}
-        {!multiSelectMode && (
-          <TouchableOpacity
-            onPress={() => removeProduct(item.id)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            style={{ marginLeft: 8, padding: 4 }}
-          >
-            <MaterialCommunityIcons name="trash-can-outline" size={20} color="#b91c1c" />
-          </TouchableOpacity>
-        )}
+        ) : null}
       </TouchableOpacity>
     );
   };
@@ -644,39 +656,6 @@ const TakeoutDelivery = ({ navigation, route }) => {
               <MaterialIcons name="person-outline" size={14} color="#6b21a8" style={{ marginRight: 4 }} />
               <Text style={{ fontWeight: '800', color: '#6b21a8', fontSize: 12 }}>{route?.params?.userName || 'Administrator'}</Text>
             </View>
-            <TouchableOpacity
-              onPress={() => { setNoteDraft(noteText); setNoteModalVisible(true); }}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: noteText ? '#fef3c7' : '#f3f4f6',
-                paddingVertical: 8,
-                paddingHorizontal: 12,
-                borderRadius: 999,
-                marginRight: 8,
-                marginBottom: 8,
-                borderWidth: noteText ? 1 : 0,
-                borderColor: '#f59e0b',
-              }}
-            >
-              <MaterialIcons
-                name="edit-note"
-                size={14}
-                color={noteText ? '#92400e' : '#374151'}
-                style={{ marginRight: 4 }}
-              />
-              <Text
-                numberOfLines={1}
-                style={{
-                  fontWeight: '800',
-                  color: noteText ? '#92400e' : '#374151',
-                  fontSize: 12,
-                  maxWidth: 140,
-                }}
-              >
-                {noteText ? noteText : 'Note'}
-              </Text>
-            </TouchableOpacity>
             {selectedLine ? (
               <TouchableOpacity onPress={() => setLineDiscountModalVisible(true)} style={{
                 flexDirection: 'row',

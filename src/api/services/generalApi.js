@@ -1387,8 +1387,11 @@ import handleApiError from "../utils/handleApiError";
 // list query doesn't see and "disappear" from MyOrders.
 const getActiveCompanyId = () => {
   try {
-    const u = useAuthStore.getState().user;
-    return u?.company_id || u?.company?.id || u?.companyId || 1;
+    const u = useAuthStore.getState().user || {};
+    const raw = u.company_id ?? u.company?.id ?? u.companyId ?? 1;
+    const id = Array.isArray(raw) ? raw[0] : raw;
+    const n = Number(id);
+    return Number.isFinite(n) && n > 0 ? n : 1;
   } catch (_) { return 1; }
 };
 

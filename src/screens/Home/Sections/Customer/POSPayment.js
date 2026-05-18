@@ -52,32 +52,6 @@ const ORANGE = '#F47B20';
 // Render a money value with the Odoo-configured company currency.
 const displayNum = (n) => formatCurrency(n);
 
-// Helper to fetch all payment methods from Odoo
-const fetchAllPaymentMethods = async () => {
-  try {
-    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'pos.payment.method',
-        method: 'search_read',
-        args: [[]],
-        kwargs: { fields: ['id', 'name', 'journal_id', 'is_cash_count', 'receivable_account_id', 'split_transactions'], limit: 100 },
-      },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    const methods = response.data?.result || [];
-    if (methods.length > 0) {
-      console.log('All pos.payment.method records:', methods);
-    } else {
-      console.log('No pos.payment.method records found');
-    }
-    return methods;
-  } catch (e) {
-    console.error('Error fetching all pos.payment.method records:', e);
-    return [];
-  }
-};
-
 // Helper to fetch payment method id for a journal
 const fetchPaymentMethodId = async (journalId) => {
   try {
@@ -207,8 +181,8 @@ const POSPayment = ({ navigation, route }) => {
   // customer-account/credit, etc.). `splitConfirmed` flips true once the
   // cashier confirms a valid split, gating the orange Validate button.
   const [splitModalVisible, setSplitModalVisible] = useState(false);
-  const [splitSlot1, setSplitSlot1] = useState({ methodId: null, amount: '' });
-  const [splitSlot2, setSplitSlot2] = useState({ methodId: null, amount: '' });
+  const [splitSlot1, setSplitSlot1] = useState({ methodKey: 'cash', amount: '' });
+  const [splitSlot2, setSplitSlot2] = useState({ methodKey: 'card', amount: '' });
   const [splitConfirmed, setSplitConfirmed] = useState(false);
 
   // Active POS config + its configured payment methods. Resolved once on
@@ -219,19 +193,6 @@ const POSPayment = ({ navigation, route }) => {
     route?.params?.registerId || route?.params?.posConfigId || null
   );
   const [posPaymentMethods, setPosPaymentMethods] = useState([]);
-  // Global pos.payment.method list — used as a fallback so Credit (or any
-  // other bank method that's defined in Odoo but not yet linked to this
-  // register's pos.config.payment_method_ids) still appears in the Split
-  // Payment popup. Without this, an admin who forgets to add Credit to the
-  // register would lose access to it from the app.
-  const [allPaymentMethods, setAllPaymentMethods] = useState([]);
-  useEffect(() => {
-    let alive = true;
-    fetchAllPaymentMethods()
-      .then((rows) => { if (alive) setAllPaymentMethods(Array.isArray(rows) ? rows : []); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
 
   // Map journals to Odoo-style payment modes (cash / card / customer account)
   const getJournalForMode = (mode) => {
@@ -277,8 +238,10 @@ const POSPayment = ({ navigation, route }) => {
     return () => { mounted = false; };
   }, [sessionId]);
 
-  // Pull pos.payment.method records configured on the active register, so
-  // the split-payment popup can render one chip per method.
+  // Pull pos.payment.method records configured on the active register.
+  // handlePay resolves the cashier's chip selection (cash / card / credit)
+  // to one of these records at submit time — the split modal itself renders
+  // a fixed three-chip row independent of this list.
   useEffect(() => {
     let mounted = true;
     if (!posConfigId) return;
@@ -287,16 +250,6 @@ const POSPayment = ({ navigation, route }) => {
         const methods = await fetchPosConfigPaymentMethods(posConfigId);
         if (!mounted) return;
         setPosPaymentMethods(methods || []);
-        // Seed the two split slots with the first two methods so the cashier
-        // sees sensible defaults the first time the popup opens.
-        if (methods && methods.length > 0) {
-          setSplitSlot1((s) => (s.methodId ? s : { ...s, methodId: methods[0].id }));
-          if (methods.length > 1) {
-            setSplitSlot2((s) => (s.methodId ? s : { ...s, methodId: methods[1].id }));
-          } else {
-            setSplitSlot2((s) => (s.methodId ? s : { ...s, methodId: methods[0].id }));
-          }
-        }
       } catch (e) {
         console.warn('Failed to load pos.payment.method records:', e?.message || e);
       }
@@ -529,18 +482,25 @@ const POSPayment = ({ navigation, route }) => {
           const payments = [];
 
           if (paymentMode === 'split') {
-            // Look up each slot's chosen pos.payment.method by id from the
-            // register's configured methods. The chips in the popup were
-            // sourced from the same list, so this lookup is just a sanity
-            // check — we still guard against missing ids in case the
-            // register configuration changed mid-session.
-            const slot1Method = posMethods.find((m) => m.id === splitSlot1.methodId);
-            const slot2Method = posMethods.find((m) => m.id === splitSlot2.methodId);
+            // Resolve each chip key to a real pos.payment.method using the
+            // same chain the single-method branch below uses. On a register
+            // that only has Cash configured, all three keys collapse onto
+            // the cash method — same forgiving behaviour the cashier
+            // already gets when tapping Card/Credit in normal mode.
+            const resolveByKey = (key) => {
+              if (key === 'cash') return cashMethod;
+              if (key === 'card') return cardMethod;
+              if (key === 'credit') return creditMethod;
+              return cashMethod;
+            };
+            const anyMethod = posMethods.find((m) => m.split_transactions !== true) || posMethods[0];
+            const slot1Method = resolveByKey(splitSlot1.methodKey) || anyMethod;
+            const slot2Method = resolveByKey(splitSlot2.methodKey) || anyMethod;
             if (!slot1Method || !slot2Method) {
               Toast.show({
                 type: 'error',
                 text1: 'Payment Error',
-                text2: 'A selected payment method is no longer available on this POS register.',
+                text2: 'No payment method is configured on this POS register. Add one in Odoo: Point of Sale → Configuration → Payment Methods.',
                 position: 'bottom',
               });
               return;
@@ -898,73 +858,29 @@ const POSPayment = ({ navigation, route }) => {
     (paymentMode === 'cash' || paymentMode === 'card') && paidAmount < total;
 
   // Split-payment validity — both amounts > 0, sum matches the total within
-  // 0.01 tolerance, and the two slots reference different pos.payment.method
-  // records (same method twice is just a single payment, not a split).
+  // 0.01 tolerance, and the two slots reference different chip keys (same
+  // method twice is just a single payment, not a split).
   const splitSlot1Amt = parseFloat(splitSlot1.amount) || 0;
   const splitSlot2Amt = parseFloat(splitSlot2.amount) || 0;
   const splitSum = splitSlot1Amt + splitSlot2Amt;
   const splitValid =
-    splitSlot1.methodId != null &&
-    splitSlot2.methodId != null &&
+    !!splitSlot1.methodKey &&
+    !!splitSlot2.methodKey &&
     splitSlot1Amt > 0 &&
     splitSlot2Amt > 0 &&
     Math.abs(splitSum - total) < 0.01 &&
-    splitSlot1.methodId !== splitSlot2.methodId;
+    splitSlot1.methodKey !== splitSlot2.methodKey;
 
-  // Helper: lookup a method record by id, plus pick a sensible icon for it.
-  const getSplitMethod = (id) =>
-    posPaymentMethods.find((m) => m.id === id)
-    || allPaymentMethods.find((m) => m.id === id)
-    || null;
-  // Methods eligible for the Split Payment popup — only pay-later methods
-  // (customer-account, flagged by split_transactions=true) are excluded
-  // because they can't settle a split-now payment.
-  //
-  // Force-merge: start from the config-scoped posPaymentMethods, then UNION
-  // any global pos.payment.method records that aren't already in the list.
-  // This guarantees Credit (and any other bank-type method defined in Odoo
-  // but not yet linked to this register's pos.config.payment_method_ids)
-  // appears in the popup. Cash, Card, Credit, and any other bank-type
-  // method are all shown regardless of register configuration.
-  const splitMethods = (() => {
-    // Only Cash / Card / Credit are valid for an in-app split payment.
-    // Pay-later methods (customer-account, split_transactions=true) excluded.
-    // Dedupe by lowercased name so duplicate global records — one per
-    // register/company — collapse to a single chip. Whitelist by name
-    // rejects unrelated entries (e.g. "Partial payment") that might appear
-    // in the global pos.payment.method list.
-    const allowedNames = new Set(['cash', 'card', 'credit']);
-    const seen = new Set();
-    const out = [];
-    const add = (m) => {
-      if (!m || m.split_transactions === true) return;
-      const name = String(m.name || '').trim().toLowerCase();
-      if (!name || !allowedNames.has(name)) return;
-      if (seen.has(name)) return;
-      seen.add(name);
-      out.push(m);
-    };
-    posPaymentMethods.forEach(add);
-    allPaymentMethods.forEach(add);
-    return out;
-  })();
-  // One-time debug so the user can confirm Credit is actually present on the
-  // active register's pos.config.payment_method_ids when the split popup
-  // opens. If `splitMethods` here doesn't include Credit, the register's
-  // Odoo configuration is missing it — fix it in Odoo Web (Point of Sale →
-  // Configuration → Point of Sale → this register → Payment Methods).
-  useEffect(() => {
-    if (posPaymentMethods.length > 0) {
-      console.log('[PAYMENT] posPaymentMethods=', posPaymentMethods.map((m) => `${m.id}:${m.name}`).join(', '));
-      console.log('[PAYMENT] splitMethods=', splitMethods.map((m) => m.name).join(', '));
-    }
-  }, [posPaymentMethods]);
-  const iconForMethod = (m) => {
-    if (!m) return 'help-outline';
-    if (m.is_cash_count === true) return 'payments';
-    if (m.split_transactions === true) return 'account-balance-wallet';
-    return 'credit-card';
-  };
+  // Fixed chip list for the Split Payment popup. The Odoo `pos.payment.method`
+  // is resolved at submit time inside handlePay (same resolver the normal
+  // Cash/Card/Credit buttons use), so these three chips render even on a
+  // register that only has Cash configured.
+  const SPLIT_CHIPS = [
+    { key: 'cash',   label: 'Cash',   icon: 'payments' },
+    { key: 'card',   label: 'Card',   icon: 'credit-card' },
+    { key: 'credit', label: 'Credit', icon: 'credit-score' },
+  ];
+  const getChipByKey = (key) => SPLIT_CHIPS.find((c) => c.key === key) || null;
 
   // Tap handler for the bottom Validate button. Shows a styled popup when the
   // user hasn't entered enough cash, otherwise runs the existing payment flow.
@@ -1056,7 +972,6 @@ const POSPayment = ({ navigation, route }) => {
                   const methods = response.data?.result || [];
                   if (methods.length > 0) console.log('Payment method(s) for journal', cashJournal.id, ':', methods);
                   else console.log('No payment method found for journal', cashJournal.id);
-                  await fetchAllPaymentMethods();
                 } catch (e) { console.error('Error fetching payment method details:', e); }
               }, 100);
             })}
@@ -1098,11 +1013,11 @@ const POSPayment = ({ navigation, route }) => {
                 <Text style={styles.splitSummaryLabel}>SPLIT PAYMENT</Text>
                 <Text style={styles.splitSummaryValue}>
                   {(() => {
-                    const m1 = getSplitMethod(splitSlot1.methodId);
-                    const m2 = getSplitMethod(splitSlot2.methodId);
+                    const m1 = getChipByKey(splitSlot1.methodKey);
+                    const m2 = getChipByKey(splitSlot2.methodKey);
                     const a1 = displayNum(parseFloat(splitSlot1.amount) || 0);
                     const a2 = displayNum(parseFloat(splitSlot2.amount) || 0);
-                    return `${m1?.name || 'Method 1'} ${a1} · ${m2?.name || 'Method 2'} ${a2}`;
+                    return `${m1?.label || 'Method 1'} ${a1} · ${m2?.label || 'Method 2'} ${a2}`;
                   })()}
                 </Text>
               </View>
@@ -1370,81 +1285,69 @@ const POSPayment = ({ navigation, route }) => {
               {`Total to collect: ${displayNum(total)}`}
             </Text>
 
-            {splitMethods.length === 0 ? (
-              <Text style={[styles.alertText, { marginTop: 14 }]}>
-                No payment methods are configured on this POS register.{'\n'}
-                Add some in Odoo: Point of Sale → Configuration → Payment Methods.
-              </Text>
-            ) : splitMethods.length < 2 ? (
-              <Text style={[styles.alertText, { marginTop: 14 }]}>
-                Split payment needs at least two payment methods on this register.{'\n'}
-                Currently configured: {splitMethods.map((m) => m.name).join(', ')}.
-              </Text>
-            ) : (
-              [
-                { slot: splitSlot1, setSlot: setSplitSlot1, label: 'Method 1' },
-                { slot: splitSlot2, setSlot: setSplitSlot2, label: 'Method 2' },
-              ].map(({ slot, setSlot, label }, idx) => (
-                <View key={idx} style={styles.splitSlotCard}>
-                  <Text style={styles.splitSlotLabel}>{label}</Text>
-                  <View style={styles.splitChipRow}>
-                    {splitMethods.map((m) => {
-                      const active = slot.methodId === m.id;
-                      return (
-                        <TouchableOpacity
-                          key={m.id}
-                          onPress={() => setSlot((s) => ({ ...s, methodId: m.id }))}
-                          activeOpacity={0.85}
-                          style={[
-                            styles.splitChip,
-                            active && styles.splitChipActive,
-                          ]}
-                        >
-                          <MaterialIcons
-                            name={iconForMethod(m)}
-                            size={16}
-                            color={active ? '#fff' : NAVY}
-                          />
-                          <Text
-                            style={[
-                              styles.splitChipText,
-                              active && styles.splitChipTextActive,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {m.name}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                  <TextInput
-                    value={slot.amount}
-                    onChangeText={(t) => setSlot((s) => ({ ...s, amount: t.replace(/[^0-9.]/g, '') }))}
-                    keyboardType="decimal-pad"
-                    placeholder="0.00"
-                    placeholderTextColor="#9ca3af"
-                    style={styles.splitAmountInput}
-                  />
-                  {(() => {
-                    const otherAmt = parseFloat(idx === 0 ? splitSlot2.amount : splitSlot1.amount) || 0;
-                    const remaining = Math.max(0, total - otherAmt);
+            {[
+              { slot: splitSlot1, setSlot: setSplitSlot1, label: 'Method 1' },
+              { slot: splitSlot2, setSlot: setSplitSlot2, label: 'Method 2' },
+            ].map(({ slot, setSlot, label }, idx) => (
+              <View key={idx} style={styles.splitSlotCard}>
+                <Text style={styles.splitSlotLabel}>{label}</Text>
+                <View style={styles.splitChipRow}>
+                  {SPLIT_CHIPS.map((c) => {
+                    const active = slot.methodKey === c.key;
                     return (
-                      <Text style={styles.splitRemainingHint}>
-                        {`Remaining ${displayNum(remaining)}`}
-                      </Text>
+                      <TouchableOpacity
+                        key={c.key}
+                        onPress={() => setSlot((s) => ({ ...s, methodKey: c.key }))}
+                        activeOpacity={0.85}
+                        style={[
+                          styles.splitChip,
+                          active && styles.splitChipActive,
+                        ]}
+                      >
+                        <MaterialIcons
+                          name={c.icon}
+                          size={16}
+                          color={active ? '#fff' : NAVY}
+                        />
+                        <Text
+                          style={[
+                            styles.splitChipText,
+                            active && styles.splitChipTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {c.label}
+                        </Text>
+                      </TouchableOpacity>
                     );
-                  })()}
+                  })}
                 </View>
-              ))
-            )}
+                <TextInput
+                  value={slot.amount}
+                  onChangeText={(t) => setSlot((s) => ({ ...s, amount: t.replace(/[^0-9.]/g, '') }))}
+                  keyboardType="decimal-pad"
+                  placeholder="0.00"
+                  placeholderTextColor="#9ca3af"
+                  style={styles.splitAmountInput}
+                />
+                {(() => {
+                  const otherAmt = parseFloat(idx === 0 ? splitSlot2.amount : splitSlot1.amount) || 0;
+                  const remaining = Math.max(0, total - otherAmt);
+                  return (
+                    <Text style={styles.splitRemainingHint}>
+                      {`Remaining ${displayNum(remaining)}`}
+                    </Text>
+                  );
+                })()}
+              </View>
+            ))}
 
             {/* Inline same-method error — appears the instant both slots
-                reference the same pos.payment.method so the cashier doesn't
-                have to tap Confirm to discover the problem. */}
-            {splitSlot1.methodId != null &&
-              splitSlot2.methodId != null &&
-              splitSlot1.methodId === splitSlot2.methodId ? (
+                reference the same chip so the cashier doesn't have to tap
+                Confirm to discover the problem. */}
+            {splitSlot1.methodKey &&
+              splitSlot2.methodKey &&
+              splitSlot1.methodKey === splitSlot2.methodKey ? (
               <Text style={styles.splitSameMethodError}>
                 Please select two different payment methods
               </Text>
@@ -1498,9 +1401,9 @@ const POSPayment = ({ navigation, route }) => {
                 onPress={() => {
                   if (!splitValid) {
                     let msg = 'Both amounts must be greater than zero';
-                    if (splitSlot1.methodId == null || splitSlot2.methodId == null) {
+                    if (!splitSlot1.methodKey || !splitSlot2.methodKey) {
                       msg = 'Pick a payment method for each slot';
-                    } else if (splitSlot1.methodId === splitSlot2.methodId) {
+                    } else if (splitSlot1.methodKey === splitSlot2.methodKey) {
                       msg = 'Pick two different payment methods';
                     } else if (Math.abs(splitSum - total) >= 0.01) {
                       msg = `Amounts must add up to ${displayNum(total)}`;
