@@ -1861,6 +1861,15 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   if (descriptionSale) vals.description_sale = String(descriptionSale).trim();
   if (image) vals.image_1920 = image;
 
+  // When the user typed an on-hand qty, the product must be storable in
+  // Odoo 17/18/19 for the stock write below to actually persist. Setting
+  // is_storable here piggybacks on the same create round-trip.
+  const wantsStock =
+    onHandQty !== undefined && onHandQty !== '' && onHandQty !== null;
+  if (wantsStock) {
+    vals.is_storable = true;
+  }
+
   const callCreate = async (payload) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
@@ -1885,6 +1894,7 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
       sale_ok: true,
       purchase_ok: true,
     };
+    if (vals.is_storable !== undefined) safe.is_storable = vals.is_storable;
     if (vals.list_price !== undefined) safe.list_price = vals.list_price;
     if (vals.standard_price !== undefined) safe.standard_price = vals.standard_price;
     if (vals.default_code) safe.default_code = vals.default_code;
@@ -1900,7 +1910,7 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   }
 
   // Optional: bump on-hand qty via stock.change.product.qty wizard.
-  if (onHandQty !== undefined && onHandQty !== '' && Number(onHandQty) > 0 && productId) {
+  if (wantsStock && productId) {
     try {
       const wizardResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0',
@@ -2037,6 +2047,14 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   // it.
   const tmplVals = { ...vals };
   delete tmplVals.barcode;
+  // When the user submitted an on-hand qty, flip the product to storable in
+  // the same template write so the stock.quant path below can land. Added to
+  // tmplVals (not vals) so it's not in the post-write verification list —
+  // Odoo may flip it computed based on `type`, and a verify mismatch would
+  // surface a false "is_storable didn't save" toast.
+  const wantsStock =
+    onHandQty !== undefined && onHandQty !== '' && onHandQty !== null;
+  if (wantsStock) tmplVals.is_storable = true;
   let barcodeWriteVal = vals.barcode;
 
   // Try the template write. If it fails, we don't fall back to a stripped

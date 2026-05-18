@@ -34,7 +34,7 @@ const SECTIONS = [
     accent: '#00BCD4',
     items: [
       { id: 'pos', title: 'POS', screen: 'POSRegister', featureKey: 'home.tile.pos', icon: require('@assets/images/Home/section/possss.png'), bg: '#E0F7FA', accent: '#00BCD4' },
-      { id: 'orders', title: 'Orders', screen: 'MyOrdersScreen', featureKey: 'home.tile.orders', icon: require('@assets/images/Home/section/ordersbtnhome.png'), bg: '#E3F2FD', accent: '#2196F3' },
+      { id: 'orders', title: 'Orders', screen: 'MyOrdersScreen', icon: require('@assets/images/Home/section/ordersbtnhome.png'), bg: '#E3F2FD', accent: '#2196F3' },
       { id: 'salesreport', title: 'Sales Report', screen: 'SalesReport', featureKey: 'home.tile.sales_report', icon: require('@assets/images/Home/section/salesreportbtn.png'), bg: '#F3E5F5', accent: '#9C27B0' },
     ],
   },

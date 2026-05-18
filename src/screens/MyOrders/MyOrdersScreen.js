@@ -23,8 +23,7 @@ import { COLORS } from '@constants/theme';
 const STATE_FILTERS = [
   { key: null,    label: 'All' },
   { key: 'paid',  label: 'Paid' },
-  { key: 'draft', label: 'Unpaid' },
-  { key: 'done',  label: 'Done' },
+  { key: 'draft', label: 'Unpaid / Draft' },
 ];
 
 const MyOrdersScreen = ({ navigation, route }) => {
