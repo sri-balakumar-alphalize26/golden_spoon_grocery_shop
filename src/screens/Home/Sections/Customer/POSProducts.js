@@ -249,7 +249,10 @@ const POSProducts = ({ navigation, route }) => {
   const addProductByBarcode = useCallback(async (barcode) => {
     if (!barcode) return;
     try {
-      const results = await fetchProductByBarcodeOdoo(String(barcode));
+      // Scope the lookup to the active POS config's category whitelist so a
+      // barcode from another POS (e.g. a shirt in the Furniture register)
+      // resolves to "not in this POS" instead of being silently added.
+      const results = await fetchProductByBarcodeOdoo(String(barcode), { allowedCategoryIds: allowedIds });
       console.log('[POSProducts] scan:', barcode, '→', results?.length || 0, 'hit(s)', results?.[0]);
       if (!results || results.length === 0) {
         setNotFoundBarcode(String(barcode));
@@ -271,7 +274,7 @@ const POSProducts = ({ navigation, route }) => {
       console.error('[POSProducts] barcode scan error:', e?.message || e);
       Toast.show({ type: 'error', text1: 'Scan failed', text2: e?.message || 'Try again' });
     }
-  }, [handleQuickAdd]);
+  }, [handleQuickAdd, allowedIds]);
 
   const handleOpenScanner = useCallback(() => {
     navigation.navigate('Scanner', {
@@ -416,7 +419,7 @@ const POSProducts = ({ navigation, route }) => {
             </View>
             <Text style={notFoundStyles.title}>Product Not Found</Text>
             <Text style={notFoundStyles.text}>
-              {`No product matches the scanned barcode${notFoundBarcode ? ` ${notFoundBarcode}` : ''}. Try scanning again or add the product manually.`}
+              {`The barcode${notFoundBarcode ? ` ${notFoundBarcode}` : ''} is not available in this POS. Switch to the correct POS or add the product manually.`}
             </Text>
             <TouchableOpacity
               onPress={() => setNotFoundVisible(false)}

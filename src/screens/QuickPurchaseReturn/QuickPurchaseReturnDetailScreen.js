@@ -5,9 +5,12 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
@@ -24,6 +27,7 @@ import {
   readSourceInvoice,
 } from '@api/services/quickPurchaseReturnApi';
 import { FeatureGate } from '@components/FeatureGate';
+import { generateQuickReturnInvoiceHtml } from '@utils/invoiceHtml';
 
 const NAVY = COLORS.primaryThemeColor;
 const RED = '#B91C1C';
@@ -46,10 +50,12 @@ const fmtDate = (raw) => {
 const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
   const id = route?.params?.id;
   const currency = useAuthStore((s) => s.currency);
+  const companyProfile = useAuthStore((s) => s.companyProfile);
 
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [linked, setLinked] = useState({ creditNote: null, picking: null, source: null });
 
   const load = useCallback(async (isRefresh = false) => {
@@ -96,6 +102,45 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
       load(false);
     } catch (e) {
       showToastMessage(e?.message || 'Cancel failed');
+    }
+  };
+
+  // Render the return as an A4 PDF using the OS save/share pattern. Mirrors
+  // EasyPurchaseDetailScreen.onExportInvoice — Android = SAF folder picker,
+  // iOS = share sheet.
+  const handleExportInvoice = async () => {
+    if (!record) return;
+    setPdfBusy(true);
+    try {
+      const html = generateQuickReturnInvoiceHtml({ ret: record, companyProfile });
+      const { uri } = await Print.printToFileAsync({ html });
+      const filename = `QuickReturn-${(record.name || id || '').replace(/[\/\\]/g, '-')}.pdf`;
+      if (Platform.OS === 'android') {
+        const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!perm?.granted) { showToastMessage('Save cancelled'); return; }
+        const newUri = await FileSystem.StorageAccessFramework.createFileAsync(
+          perm.directoryUri, filename, 'application/pdf'
+        );
+        const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+        await FileSystem.writeAsStringAsync(newUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+        showToastMessage(`Saved ${filename}`);
+        return;
+      }
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          UTI: 'com.adobe.pdf',
+          dialogTitle: filename,
+        });
+      } else {
+        showToastMessage('Sharing not available');
+      }
+    } catch (e) {
+      console.warn('QR invoice export failed:', e?.message || e);
+      showToastMessage(e?.message || 'Could not generate PDF');
+    } finally {
+      setPdfBusy(false);
     }
   };
 
@@ -242,6 +287,25 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
             <Text style={styles.actionBtnDangerText}>Cancel Return</Text>
           </TouchableOpacity>
         ) : null}
+        {record.state === 'done' ? (
+          <FeatureGate featureKey="quick_purchase_return.export_invoice">
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.actionBtnPrimary, pdfBusy && { opacity: 0.6 }]}
+              onPress={handleExportInvoice}
+              disabled={pdfBusy}
+              activeOpacity={0.85}
+            >
+              {pdfBusy ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <MaterialIcons name="picture-as-pdf" size={18} color="#fff" />
+                  <Text style={styles.actionBtnPrimaryText}>Download Invoice</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </FeatureGate>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -358,6 +422,8 @@ const styles = StyleSheet.create({
   actionBtnGhostText: { color: NAVY, fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
   actionBtnDanger: { backgroundColor: RED },
   actionBtnDangerText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
+  actionBtnPrimary: { backgroundColor: NAVY },
+  actionBtnPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
 });
 
 export default QuickPurchaseReturnDetailScreen;

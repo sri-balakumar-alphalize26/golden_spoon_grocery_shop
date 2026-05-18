@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   Modal,
   Dimensions,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { BarChart } from 'react-native-chart-kit';
@@ -20,6 +22,7 @@ import {
   fetchPaymentMethods,
   fetchSalesProfitOdoo,
   fetchOperatingExpensesOdoo,
+  fetchOrderLinesForProduct,
 } from '@api/services/generalApi';
 import { OverlayLoader } from '@components/Loader';
 import { RoundedContainer, SafeAreaView } from '@components/containers';
@@ -37,6 +40,12 @@ import { FeatureGate } from '@components/FeatureGate';
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
 const MUTED = '#8896ab';
+
+// Android requires explicit opt-in for LayoutAnimation in newer RN versions.
+// Calling setLayoutAnimationEnabledExperimental once at module load is enough.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: 'dashboard' },
@@ -110,6 +119,17 @@ const VIEW_MODES = [
   { key: 'list',  icon: 'view-list',  label: 'List'  },
   { key: 'graph', icon: 'bar-chart',  label: 'Graph' },
   { key: 'pivot', icon: 'grid-on',    label: 'Pivot' },
+];
+
+// Measures the user can pick for the pivot's column dimension. `requiresQty`
+// means the measure only makes sense when the active grouping carries qty
+// (currently: product-style groupings via topProducts). Tax intentionally
+// excluded from the Sales Report.
+const MEASURES = [
+  { key: 'orderCount', label: 'Order',            type: 'number' },
+  { key: 'qty',        label: 'Product Quantity', type: 'number', requiresQty: true },
+  { key: 'totalSales', label: 'Total Price',      type: 'money' },
+  { key: 'avgOrder',   label: 'Average Price',    type: 'money' },
 ];
 
 // Pull the single active date:* / order_date:* key out of an array — only one
@@ -276,6 +296,16 @@ const SalesReportScreen = ({ navigation }) => {
   // Top-level mode tab. Overview = the dashboard. Analysis = the
   // Odoo-style filters/group-by/pivot/graph workspace.
   const [pageMode, setPageMode] = useState('overview'); // 'overview' | 'analysis'
+  // Pivot-specific controls (Analysis mode only): which measure columns to
+  // show, and whether to flip rows↔columns. Both reset whenever the user
+  // re-enters Analysis mode so each entry starts clean. Default to the three
+  // visible columns in Odoo's Orders Analysis pivot (Order / Qty / Total Price).
+  const [selectedMeasures, setSelectedMeasures] = useState(['orderCount', 'qty', 'totalSales']);
+  const [flipAxis, setFlipAxis] = useState(false);
+
+  // Drill-down Modal state for "tap an Order count → see the underlying orders".
+  const [drillProduct, setDrillProduct] = useState(null); // { id, name } | null
+  const [drillOrders, setDrillOrders] = useState(null);   // null=loading, []=loaded
   // Which expandable section (e.g. 'order_date') is open inside the menu.
   // Reset whenever the menu opens so navigation always starts collapsed.
   const [menuExpandedKey, setMenuExpandedKey] = useState(null);
@@ -367,9 +397,14 @@ const SalesReportScreen = ({ navigation }) => {
       // The previous-period fetch deliberately omits `filters` so the
       // delta-vs-prev badge in the hero stays a clean baseline; otherwise the
       // % swing would be a comparison of differently-filtered universes.
+      // In Analysis mode the pivot needs every product (not a top-10 slice),
+      // so request the full set. Overview / dashboard keeps the top-N.
+      const productsArgs = pageMode === 'analysis'
+        ? { ...range, full: true }
+        : { ...range, limit: 10 };
       const [sales, products, payments, prevSales, profit, opexTotal] = await Promise.all([
         fetchSalesReportData({ ...range, filters: domainFilters }),
-        fetchTopProducts({ ...range, limit: 10 }),
+        fetchTopProducts(productsArgs),
         fetchPaymentMethods(range),
         prev.startDate
           ? fetchSalesReportData({ startDate: prev.startDate, endDate: prev.endDate })
@@ -399,10 +434,29 @@ const SalesReportScreen = ({ navigation }) => {
   }, []);
 
   useEffect(() => {
-    if (hasLoadedRef.current) fetchReportData();
+    if (hasLoadedRef.current) {
+      // Soft refetch — keep the existing body visible while the new data
+      // loads so the filter-change feels like a smooth update rather than a
+      // full reload. The hero / pivot will simply re-render once data lands.
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      fetchReportData(false);
+    }
     // Refire when any filter (incl. the date:* key) changes, or when the user
-    // edits the custom range inputs.
-  }, [customStart, customEnd, selectedFilters]);
+    // edits the custom range inputs. pageMode also triggers a refetch so the
+    // product fetch can switch between top-10 (Overview) and full (Analysis).
+  }, [customStart, customEnd, selectedFilters, pageMode]);
+
+  // Animate layout when filters/groupings/mode change — softens chip strip
+  // appearance and the Overview <-> Analysis body swap.
+  useEffect(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  }, [selectedGroupBys, pageMode, viewMode]);
+
+  // Never let the user end up with zero measures selected — the table would
+  // collapse to nothing. Coerce back to the default if they deselect everything.
+  useEffect(() => {
+    if (selectedMeasures.length === 0) setSelectedMeasures(['orderCount', 'qty', 'totalSales']);
+  }, [selectedMeasures]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -422,9 +476,15 @@ const SalesReportScreen = ({ navigation }) => {
   // Human label for the active section/tab — shown inline on the Section pill.
   const sectionLabel = (TABS.find((t) => t.key === selectedTab) || TABS[0]).label;
 
-  // Switching pageMode: Analysis mode disallows 'list' — auto-coerce to 'pivot'
-  // so the body has something sensible to render.
+  // Switching pageMode resets filter/group-by + pivot controls so each mode
+  // lands in a clean slate. Analysis mode also coerces 'list' to 'pivot' since
+  // List isn't available there.
   const setPageModeSafe = (next) => {
+    if (next === pageMode) return;
+    setSelectedFilters([]);
+    setSelectedGroupBys([]);
+    setSelectedMeasures(['orderCount', 'qty', 'totalSales']);
+    setFlipAxis(false);
     if (next === 'analysis' && viewMode === 'list') setViewMode('pivot');
     setPageMode(next);
   };
@@ -449,10 +509,11 @@ const SalesReportScreen = ({ navigation }) => {
     pnl:       null,
   };
   // In Analysis mode the dropdown is cross-section, so fallback is always
-  // day-bucketed unless the user picks an explicit Group By. In Overview mode
-  // the fallback follows the active section pill.
+  // Product (mirrors Odoo's Orders Analysis default — rows are product names,
+  // not date buckets) unless the user picks an explicit Group By. In Overview
+  // mode the fallback follows the active section pill.
   const fallbackGroupBy = pageMode === 'analysis'
-    ? 'order_date:day'
+    ? 'product'
     : (SECTION_FALLBACK_GROUPBY[selectedTab] || null);
   const effectiveGroupBy = activeGroupBy || fallbackGroupBy;
 
@@ -489,12 +550,18 @@ const SalesReportScreen = ({ navigation }) => {
       // Category buckets aren't a separate Odoo call here — they degrade to
       // per-product rows. Good enough for v1; a true category aggregation
       // can be added later if the user asks for it.
+      // orderCount = distinct order_id count per product (matches Odoo's
+      // "Order" column in Orders Analysis). Note: the Total row sums these
+      // per-product counts, which double-counts orders that contain multiple
+      // products — same arithmetic Odoo's pivot uses.
       return (topProducts || []).map((p) => ({
         key: p.id ?? p.name,
         label: p.name || 'Unknown',
         totalSales: Number(p.revenue) || 0,
-        orderCount: 0,
-        avgOrder: 0,
+        orderCount: Number(p.order_count) || 0,
+        avgOrder: (Number(p.order_count) || 0) > 0
+          ? (Number(p.revenue) || 0) / (Number(p.order_count) || 1)
+          : 0,
         tax: 0,
         qty: Number(p.quantity) || 0,
       }));
@@ -598,7 +665,6 @@ const SalesReportScreen = ({ navigation }) => {
           <td style="padding:8px 10px;background:#fafbfc;border:1px solid #eef0f5;"><b>Total Sales</b><br/>${escapeHtml(fmtMoney(summary.totalSales))}</td>
           <td style="padding:8px 10px;background:#fafbfc;border:1px solid #eef0f5;"><b>Orders</b><br/>${formatNumber(summary.totalOrders || 0)}</td>
           <td style="padding:8px 10px;background:#fafbfc;border:1px solid #eef0f5;"><b>Avg Order</b><br/>${escapeHtml(fmtMoney(summary.averageOrder))}</td>
-          <td style="padding:8px 10px;background:#fafbfc;border:1px solid #eef0f5;"><b>Tax</b><br/>${escapeHtml(fmtMoney(summary.totalTax))}</td>
         </tr>
       </table>
     `;
@@ -654,39 +720,63 @@ const SalesReportScreen = ({ navigation }) => {
         <tr style="background:#dcfce7;"><td><b>Net Profit (${_netPct.toFixed(1)}%)</b></td><td style="text-align:right;"><b>${escapeHtml(fmtMoney(_net))}</b></td></tr>
       </tbody></table>
     `;
-    // Pivot / Graph view: emit a single grouped table instead of all sections.
-    // Graph view falls back to a numeric table (PDF can't host a live chart).
+    // Pivot / Graph view: emit a single grouped table that reflects whatever
+    // measures / flip-axis the user picked. Graph view falls back to a numeric
+    // table (PDF can't host a live chart).
     let bodyHtml;
-    if (viewMode === 'pivot' || viewMode === 'graph') {
+    if (pageMode === 'analysis') {
       const groupLabel = groupLabelFor(effectiveGroupBy) || 'Group';
-      const hasQty = (groupedRows || []).some((r) => typeof r.qty === 'number');
-      const rowsHtml = (groupedRows || []).map((r) => `
-        <tr>
-          <td>${escapeHtml(r.label || '')}</td>
-          ${hasQty ? `<td style="text-align:right;">${formatNumber(r.qty || 0)}</td>` : ''}
-          <td style="text-align:right;">${formatNumber(r.orderCount || 0)}</td>
-          <td style="text-align:right;">${escapeHtml(fmtMoney(r.totalSales || 0))}</td>
-        </tr>
-      `).join('') || `<tr><td colspan="${hasQty ? 4 : 3}" style="text-align:center;color:#6b7280;padding:14px;">No rows</td></tr>`;
-      const totalSales = (groupedRows || []).reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
-      const totalOrders = (groupedRows || []).reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
-      const totalQty = (groupedRows || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
-      bodyHtml = `
-        <h2>${viewMode === 'graph' ? 'Graph data' : 'Pivot'} — by ${escapeHtml(groupLabel)}</h2>
-        <table style="${tableStyle}"><thead><tr>
+      const hasQtyExp = (groupedRows || []).some((r) => typeof r.qty === 'number');
+      const measuresExp = MEASURES.filter((m) =>
+        selectedMeasures.includes(m.key) && (!m.requiresQty || hasQtyExp)
+      );
+      const fmtM = (val, type) => type === 'money' ? fmtMoney(val || 0) : formatNumber(val || 0);
+      const totalsExp = measuresExp.reduce((acc, m) => {
+        acc[m.key] = (groupedRows || []).reduce((s, r) => s + (Number(r[m.key]) || 0), 0);
+        return acc;
+      }, {});
+      if ('avgOrder' in totalsExp) {
+        const ts = (groupedRows || []).reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
+        const to = (groupedRows || []).reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
+        totalsExp.avgOrder = to > 0 ? ts / to : 0;
+      }
+      // Pick orientation. Same logic as renderPivot — flipped puts measures as
+      // rows and groups as columns.
+      let pivotTable;
+      if (!flipAxis) {
+        const headHtml = `<tr>
           <th style="${thStyle}">${escapeHtml(groupLabel)}</th>
-          ${hasQty ? `<th style="${thStyle}; text-align:right;">Qty</th>` : ''}
-          <th style="${thStyle}; text-align:right;">Orders</th>
-          <th style="${thStyle}; text-align:right;">Total</th>
-        </tr></thead>
-        <tbody>${rowsHtml}</tbody>
-        <tfoot><tr style="background:#fef3c7;">
+          ${measuresExp.map((m) => `<th style="${thStyle}; text-align:right;">${escapeHtml(m.label)}</th>`).join('')}
+        </tr>`;
+        const totalsHtml = `<tr style="background:#fef3c7;">
           <td><b>Total</b></td>
-          ${hasQty ? `<td style="text-align:right;"><b>${formatNumber(totalQty)}</b></td>` : ''}
-          <td style="text-align:right;"><b>${formatNumber(totalOrders)}</b></td>
-          <td style="text-align:right;"><b>${escapeHtml(fmtMoney(totalSales))}</b></td>
-        </tr></tfoot>
-        </table>
+          ${measuresExp.map((m) => `<td style="text-align:right;"><b>${escapeHtml(fmtM(totalsExp[m.key], m.type))}</b></td>`).join('')}
+        </tr>`;
+        const rowsHtmlExp = (groupedRows || []).map((r) => `
+          <tr>
+            <td>${escapeHtml(r.label || '')}</td>
+            ${measuresExp.map((m) => `<td style="text-align:right;">${escapeHtml(fmtM(r[m.key], m.type))}</td>`).join('')}
+          </tr>
+        `).join('') || `<tr><td colspan="${measuresExp.length + 1}" style="text-align:center;color:#6b7280;padding:14px;">No rows</td></tr>`;
+        pivotTable = `<table style="${tableStyle}"><thead>${headHtml}${totalsHtml}</thead><tbody>${rowsHtmlExp}</tbody>`;
+      } else {
+        const headHtml = `<tr>
+          <th style="${thStyle}">Measure</th>
+          ${(groupedRows || []).map((r) => `<th style="${thStyle}; text-align:right;">${escapeHtml(r.label || '')}</th>`).join('')}
+          <th style="${thStyle}; text-align:right;">Total</th>
+        </tr>`;
+        const rowsHtmlExp = measuresExp.map((m) => `
+          <tr>
+            <td><b>${escapeHtml(m.label)}</b></td>
+            ${(groupedRows || []).map((r) => `<td style="text-align:right;">${escapeHtml(fmtM(r[m.key], m.type))}</td>`).join('')}
+            <td style="text-align:right;background:#fef3c7;"><b>${escapeHtml(fmtM(totalsExp[m.key], m.type))}</b></td>
+          </tr>
+        `).join('');
+        pivotTable = `<table style="${tableStyle}"><thead>${headHtml}</thead><tbody>${rowsHtmlExp}</tbody>`;
+      }
+      bodyHtml = `
+        <h2>${viewMode === 'graph' ? 'Graph data' : 'Pivot'} — by ${escapeHtml(groupLabel)}${flipAxis ? ' (Axis: Flipped)' : ''}</h2>
+        ${pivotTable}</table>
       `;
     } else {
       bodyHtml = `
@@ -739,30 +829,45 @@ const SalesReportScreen = ({ navigation }) => {
     lines.push(['Tab', tabLabel].map(csvEscape).join(','));
     lines.push(['Filters', exportFilterLabel()].map(csvEscape).join(','));
     lines.push(['Group By', exportGroupLabel()].map(csvEscape).join(','));
+    if (pageMode === 'analysis' && viewMode === 'pivot') {
+      const measureLabels = MEASURES.filter((m) => selectedMeasures.includes(m.key)).map((m) => m.label).join(', ');
+      lines.push(['Measures', measureLabels || 'Total Price'].map(csvEscape).join(','));
+      lines.push(['Axis', flipAxis ? 'Flipped' : 'Standard'].map(csvEscape).join(','));
+    }
     lines.push('');
     lines.push(['Metric', 'Value'].map(csvEscape).join(','));
     lines.push(['Total Sales', summary.totalSales || 0].map(csvEscape).join(','));
     lines.push(['Orders', summary.totalOrders || 0].map(csvEscape).join(','));
     lines.push(['Avg Order', summary.averageOrder || 0].map(csvEscape).join(','));
-    lines.push(['Tax', summary.totalTax || 0].map(csvEscape).join(','));
     lines.push('');
 
-    if (viewMode === 'pivot' || viewMode === 'graph') {
+    if (pageMode === 'analysis') {
       const groupLabel = groupLabelFor(effectiveGroupBy) || 'Group';
-      const hasQty = (groupedRows || []).some((r) => typeof r.qty === 'number');
-      lines.push([`# ${viewMode === 'graph' ? 'Graph data' : 'Pivot'} — by ${groupLabel}`].map(csvEscape).join(','));
-      lines.push(
-        (hasQty
-          ? [groupLabel, 'Qty', 'Orders', 'Total']
-          : [groupLabel, 'Orders', 'Total']
-        ).map(csvEscape).join(',')
+      const hasQtyCsv = (groupedRows || []).some((r) => typeof r.qty === 'number');
+      const measuresCsv = MEASURES.filter((m) =>
+        selectedMeasures.includes(m.key) && (!m.requiresQty || hasQtyCsv)
       );
-      (groupedRows || []).forEach((r) => {
-        const row = hasQty
-          ? [r.label || '', r.qty || 0, r.orderCount || 0, r.totalSales || 0]
-          : [r.label || '', r.orderCount || 0, r.totalSales || 0];
-        lines.push(row.map(csvEscape).join(','));
-      });
+      lines.push([`# ${viewMode === 'graph' ? 'Graph data' : 'Pivot'} — by ${groupLabel}${flipAxis ? ' (Axis: Flipped)' : ''}`].map(csvEscape).join(','));
+      if (!flipAxis) {
+        lines.push([groupLabel, ...measuresCsv.map((m) => m.label)].map(csvEscape).join(','));
+        (groupedRows || []).forEach((r) => {
+          lines.push([r.label || '', ...measuresCsv.map((m) => r[m.key] || 0)].map(csvEscape).join(','));
+        });
+      } else {
+        lines.push(['Measure', ...(groupedRows || []).map((r) => r.label || ''), 'Total'].map(csvEscape).join(','));
+        const totalsCsv = measuresCsv.reduce((acc, m) => {
+          acc[m.key] = (groupedRows || []).reduce((s, r) => s + (Number(r[m.key]) || 0), 0);
+          return acc;
+        }, {});
+        if ('avgOrder' in totalsCsv) {
+          const ts = (groupedRows || []).reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
+          const to = (groupedRows || []).reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
+          totalsCsv.avgOrder = to > 0 ? ts / to : 0;
+        }
+        measuresCsv.forEach((m) => {
+          lines.push([m.label, ...(groupedRows || []).map((r) => r[m.key] || 0), totalsCsv[m.key]].map(csvEscape).join(','));
+        });
+      }
       return lines.join('\r\n');
     }
 
@@ -917,6 +1022,22 @@ const SalesReportScreen = ({ navigation }) => {
     setCalendarOpen('from');
   };
 
+  // Drill-down: tap an Order count cell in the pivot to see the underlying
+  // pos.order rows for that product within the active date range.
+  const openDrillDown = async ({ id, name }) => {
+    if (!id) return;
+    setDrillProduct({ id, name });
+    setDrillOrders(null);
+    try {
+      const range = getDateRange(activeDateKey);
+      const list = await fetchOrderLinesForProduct({ ...range, productId: id });
+      setDrillOrders(list || []);
+    } catch (e) {
+      console.warn('Drill-down fetch failed:', e?.message || e);
+      setDrillOrders([]);
+    }
+  };
+
   const openMenu = (kind) => {
     setMenuExpandedKey(null);
     setMenuOpen(kind);
@@ -947,9 +1068,13 @@ const SalesReportScreen = ({ navigation }) => {
     </View>
   );
 
-  // Overview mode shows only the Section pill (which 5-tab to view).
+  // Overview mode shows the Section pill and a Date pill — same date presets
+  // as the old period chips (Today / Last 7 Days / Last 30 Days / This Month /
+  // This Year / All Time / Custom Range), exposed as a dropdown for parity
+  // with the Section pill styling.
   const renderSectionPill = () => {
     const sectionActive = selectedTab !== 'overview';
+    const dateActive = !!activeDateKey;
     return (
       <View style={styles.filterBar}>
         <TouchableOpacity
@@ -965,6 +1090,20 @@ const SalesReportScreen = ({ navigation }) => {
             {sectionLabel}
           </Text>
           <MaterialIcons name="arrow-drop-down" size={16} color={sectionActive ? '#fff' : NAVY} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.filterBarPill, dateActive && styles.filterBarPillActive]}
+          activeOpacity={0.85}
+          onPress={() => openMenu('date')}
+        >
+          <MaterialIcons name="event" size={14} color={dateActive ? '#fff' : NAVY} />
+          <Text
+            numberOfLines={1}
+            style={[styles.filterBarPillText, dateActive && styles.filterBarPillTextActive]}
+          >
+            {dateRangeLabel}
+          </Text>
+          <MaterialIcons name="arrow-drop-down" size={16} color={dateActive ? '#fff' : NAVY} />
         </TouchableOpacity>
       </View>
     );
@@ -1088,34 +1227,140 @@ const SalesReportScreen = ({ navigation }) => {
       );
     }
     const hasQty = rows.some((r) => typeof r.qty === 'number');
-    const totalSales = rows.reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
-    const totalOrders = rows.reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
-    const totalQty = rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    // Active measure columns honour the user's Measures dropdown selection,
+    // hiding qty-based measures when the active grouping doesn't carry qty.
+    const activeMeasures = MEASURES.filter((m) =>
+      selectedMeasures.includes(m.key) && (!m.requiresQty || hasQty)
+    );
+    const formatMeasure = (val, type) => type === 'money' ? fmtMoney(val || 0) : formatNumber(val || 0);
+
+    // Per-measure totals across all groups. Average Price can't be summed
+    // arithmetically — recompute it from the totals of totalSales / orderCount
+    // so the totals row stays honest.
+    const totals = activeMeasures.reduce((acc, m) => {
+      acc[m.key] = rows.reduce((s, r) => s + (Number(r[m.key]) || 0), 0);
+      return acc;
+    }, {});
+    if ('avgOrder' in totals) {
+      const totalSalesSum = rows.reduce((s, r) => s + (Number(r.totalSales) || 0), 0);
+      const totalOrdersSum = rows.reduce((s, r) => s + (Number(r.orderCount) || 0), 0);
+      totals.avgOrder = totalOrdersSum > 0 ? totalSalesSum / totalOrdersSum : 0;
+    }
+
+    const groupHeaderLabel = groupLabelFor(effectiveGroupBy) || 'Group';
+    // Drill-down is wired only for product-style groupings — those are the
+    // only ones where "show me the underlying orders" is unambiguous today.
+    const isProductGrouping = effectiveGroupBy === 'product'
+      || effectiveGroupBy === 'product_category'
+      || effectiveGroupBy === 'pos_categ';
+
+    if (!flipAxis) {
+      // Standard orientation: groups as rows, measures as columns.
+      return (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.pivotTable}>
+            <View style={[styles.pivotRow, styles.pivotHeadRow]}>
+              <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotHeadText]}>
+                {groupHeaderLabel}
+              </Text>
+              {activeMeasures.map((m) => (
+                <Text key={m.key} style={[styles.pivotCell, styles.pivotHeadText]}>{m.label}</Text>
+              ))}
+            </View>
+            <View style={[styles.pivotRow, styles.pivotTotalRow]}>
+              <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotTotalText]}>Total</Text>
+              {activeMeasures.map((m) => (
+                <Text
+                  key={m.key}
+                  style={[styles.pivotCell, m.type === 'money' && styles.pivotCellMoney, styles.pivotTotalText]}
+                >
+                  {formatMeasure(totals[m.key], m.type)}
+                </Text>
+              ))}
+            </View>
+            {rows.map((r) => (
+              <View key={String(r.key)} style={styles.pivotRow}>
+                <Text style={[styles.pivotCell, styles.pivotCellLabel]} numberOfLines={1}>{r.label}</Text>
+                {activeMeasures.map((m) => {
+                  // Make Order count cells tappable for product groupings —
+                  // tapping drills into the underlying orders for that product.
+                  const drillable = m.key === 'orderCount' && isProductGrouping;
+                  if (drillable) {
+                    return (
+                      <TouchableOpacity
+                        key={m.key}
+                        activeOpacity={0.7}
+                        onPress={() => openDrillDown({ id: r.key, name: r.label })}
+                      >
+                        <Text style={[styles.pivotCell, styles.pivotCellLink]}>
+                          {formatMeasure(r[m.key], m.type)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  return (
+                    <Text
+                      key={m.key}
+                      style={[styles.pivotCell, m.type === 'money' && styles.pivotCellMoney]}
+                    >
+                      {formatMeasure(r[m.key], m.type)}
+                    </Text>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      );
+    }
+
+    // Flipped orientation: measures as rows, groups as columns + a Total column
+    // on the right. Super-header band spans the group columns (mirrors Odoo).
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={styles.pivotTable}>
           <View style={[styles.pivotRow, styles.pivotHeadRow]}>
-            <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotHeadText]}>
-              {groupLabelFor(effectiveGroupBy) || 'Group'}
-            </Text>
-            {hasQty ? <Text style={[styles.pivotCell, styles.pivotHeadText]}>Qty</Text> : null}
-            <Text style={[styles.pivotCell, styles.pivotHeadText]}>Orders</Text>
+            <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotHeadText]}>Measure</Text>
+            {rows.map((r) => (
+              isProductGrouping ? (
+                <TouchableOpacity
+                  key={String(r.key)}
+                  activeOpacity={0.7}
+                  onPress={() => openDrillDown({ id: r.key, name: r.label })}
+                >
+                  <Text
+                    style={[styles.pivotCell, styles.pivotHeadText, styles.pivotHeadTextLink]}
+                    numberOfLines={1}
+                  >
+                    {r.label}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <Text key={String(r.key)} style={[styles.pivotCell, styles.pivotHeadText]} numberOfLines={1}>
+                  {r.label}
+                </Text>
+              )
+            ))}
             <Text style={[styles.pivotCell, styles.pivotHeadText]}>Total</Text>
           </View>
-          {rows.map((r) => (
-            <View key={String(r.key)} style={styles.pivotRow}>
-              <Text style={[styles.pivotCell, styles.pivotCellLabel]} numberOfLines={1}>{r.label}</Text>
-              {hasQty ? <Text style={styles.pivotCell}>{formatNumber(r.qty || 0)}</Text> : null}
-              <Text style={styles.pivotCell}>{formatNumber(r.orderCount || 0)}</Text>
-              <Text style={[styles.pivotCell, styles.pivotCellMoney]}>{fmtMoney(r.totalSales || 0)}</Text>
+          {activeMeasures.map((m) => (
+            <View key={m.key} style={styles.pivotRow}>
+              <Text style={[styles.pivotCell, styles.pivotCellLabel]}>{m.label}</Text>
+              {rows.map((r) => (
+                <Text
+                  key={String(r.key)}
+                  style={[styles.pivotCell, m.type === 'money' && styles.pivotCellMoney]}
+                >
+                  {formatMeasure(r[m.key], m.type)}
+                </Text>
+              ))}
+              <Text
+                style={[styles.pivotCell, m.type === 'money' && styles.pivotCellMoney, styles.pivotTotalText]}
+              >
+                {formatMeasure(totals[m.key], m.type)}
+              </Text>
             </View>
           ))}
-          <View style={[styles.pivotRow, styles.pivotTotalRow]}>
-            <Text style={[styles.pivotCell, styles.pivotCellLabel, styles.pivotTotalText]}>Total</Text>
-            {hasQty ? <Text style={[styles.pivotCell, styles.pivotTotalText]}>{formatNumber(totalQty)}</Text> : null}
-            <Text style={[styles.pivotCell, styles.pivotTotalText]}>{formatNumber(totalOrders)}</Text>
-            <Text style={[styles.pivotCell, styles.pivotCellMoney, styles.pivotTotalText]}>{fmtMoney(totalSales)}</Text>
-          </View>
         </View>
       </ScrollView>
     );
@@ -1180,7 +1425,6 @@ const SalesReportScreen = ({ navigation }) => {
     const total = summary.totalSales || 0;
     const orders = summary.totalOrders || 0;
     const avg = summary.averageOrder || 0;
-    const tax = summary.totalTax || 0;
 
     return (
       <View style={styles.heroCard}>
@@ -1259,16 +1503,6 @@ const SalesReportScreen = ({ navigation }) => {
               <Text style={styles.heroStatLabel}>Avg Order</Text>
             </View>
           </View>
-
-          <View style={styles.heroStat}>
-            <View style={styles.heroStatIconWrap}>
-              <MaterialIcons name="account-balance" size={16} color={NAVY} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroStatValue}>{fmtMoney(tax)}</Text>
-              <Text style={styles.heroStatLabel}>Tax</Text>
-            </View>
-          </View>
         </View>
       </View>
     );
@@ -1280,6 +1514,30 @@ const SalesReportScreen = ({ navigation }) => {
   const renderExportBar = () => (
     <View style={styles.exportRow}>
       {renderViewModeToggle()}
+      {pageMode === 'analysis' && viewMode === 'pivot' ? (
+        <>
+          <TouchableOpacity
+            style={[styles.exportBarPill, selectedMeasures.length > 1 && styles.exportBarPillActive]}
+            activeOpacity={0.85}
+            onPress={() => openMenu('measures')}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <MaterialIcons name="straighten" size={14} color={selectedMeasures.length > 1 ? '#fff' : NAVY} />
+            <Text style={[styles.exportBarPillText, selectedMeasures.length > 1 && styles.exportBarPillTextActive]}>
+              Measures{selectedMeasures.length > 1 ? ` · ${selectedMeasures.length}` : ''}
+            </Text>
+            <MaterialIcons name="arrow-drop-down" size={16} color={selectedMeasures.length > 1 ? '#fff' : NAVY} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.flipBtn, flipAxis && styles.flipBtnActive]}
+            activeOpacity={0.85}
+            onPress={() => setFlipAxis((v) => !v)}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <MaterialIcons name="swap-horiz" size={16} color={flipAxis ? '#fff' : NAVY} />
+          </TouchableOpacity>
+        </>
+      ) : null}
       <View style={{ flex: 1 }} />
       <FeatureGate featureKey="sales_report.export_pdf">
         <TouchableOpacity
@@ -1526,12 +1784,15 @@ const SalesReportScreen = ({ navigation }) => {
 
   const renderNonListView = () => {
     const usingFallback = !activeGroupBy && !!effectiveGroupBy;
+    // In Analysis mode the heading is just the grouping label (no "Overview"
+    // prefix, since the section pill doesn't apply here).
+    const heading = pageMode === 'analysis'
+      ? (effectiveGroupBy ? `By ${groupLabelFor(effectiveGroupBy)}` : 'Analysis')
+      : `${renderTabHeading()}${effectiveGroupBy ? ` — by ${groupLabelFor(effectiveGroupBy)}` : ''}`;
     return (
       <View>
         <View style={styles.sectionHead}>
-          <Text style={styles.sectionTitle}>
-            {renderTabHeading()}{effectiveGroupBy ? ` — by ${groupLabelFor(effectiveGroupBy)}` : ''}
-          </Text>
+          <Text style={styles.sectionTitle}>{heading}</Text>
         </View>
         {usingFallback ? (
           <Text style={styles.fallbackHint}>
@@ -1545,14 +1806,10 @@ const SalesReportScreen = ({ navigation }) => {
 
   const renderBody = () => {
     // Analysis mode is always the pivot/graph workspace — no per-section
-    // dashboard cards, no List view.
+    // dashboard cards, no List view, no hero card (per spec: that big blue
+    // Total Sales bar belongs to the Overview dashboard only).
     if (pageMode === 'analysis') {
-      return (
-        <View>
-          {renderHero()}
-          {renderNonListView()}
-        </View>
-      );
+      return renderNonListView();
     }
     if (selectedTab === 'overview') {
       return (
@@ -1665,9 +1922,14 @@ const SalesReportScreen = ({ navigation }) => {
             <TouchableWithoutFeedback>
               <View style={styles.calendarCard}>
                 <View style={styles.calendarHead}>
-                  <Text style={styles.calendarTitle}>
-                    {calendarOpen === 'from' ? 'Pick start date' : 'Pick end date'}
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.calendarTitle}>
+                      {calendarOpen === 'from' ? 'Pick start date' : 'Pick end date'}
+                    </Text>
+                    <Text style={styles.calendarSubtitle}>
+                      {calendarOpen === 'from' ? 'Step 1 of 2' : 'Step 2 of 2'}
+                    </Text>
+                  </View>
                   <TouchableOpacity
                     onPress={() => setCalendarOpen(null)}
                     style={styles.calendarCloseBtn}
@@ -1676,24 +1938,60 @@ const SalesReportScreen = ({ navigation }) => {
                     <MaterialIcons name="close" size={20} color="#1a1a2e" />
                   </TouchableOpacity>
                 </View>
+                {/* From / To label cells — the active step gets a highlighted
+                    border so the user always knows which date they're picking. */}
+                <View style={styles.fromToRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setCalendarOpen('from')}
+                    style={[
+                      styles.fromToCell,
+                      calendarOpen === 'from' && styles.fromToCellActive,
+                    ]}
+                  >
+                    <Text style={styles.fromToLabel}>FROM</Text>
+                    <Text style={styles.fromToValue}>
+                      {customStart || '—'}
+                    </Text>
+                  </TouchableOpacity>
+                  <View style={styles.fromToArrow}>
+                    <MaterialIcons name="arrow-forward" size={16} color={MUTED} />
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setCalendarOpen('to')}
+                    style={[
+                      styles.fromToCell,
+                      calendarOpen === 'to' && styles.fromToCellActive,
+                    ]}
+                  >
+                    <Text style={styles.fromToLabel}>TO</Text>
+                    <Text style={styles.fromToValue}>
+                      {customEnd && customEnd !== customStart ? customEnd : '—'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
                 <Calendar
                   current={calendarOpen === 'from' ? customStart : customEnd}
                   maxDate={isoDateOnly(new Date())}
                   onDayPress={({ dateString }) => {
                     if (calendarOpen === 'from') {
-                      let from = dateString;
-                      let to = customEnd;
-                      if (from > to) { to = from; }
-                      setCustomStart(from);
-                      setCustomEnd(to);
+                      // First tap selects the start of the range. Clear the
+                      // previous end so the user explicitly picks both, then
+                      // advance to the end-date step instead of closing.
+                      setCustomStart(dateString);
+                      setCustomEnd(dateString);
+                      setCalendarOpen('to');
                     } else {
+                      // Second tap selects the end. Snap backward if the user
+                      // picks a date earlier than the current start.
                       let to = dateString;
                       let from = customStart;
                       if (to < from) { from = to; }
                       setCustomEnd(to);
                       setCustomStart(from);
+                      setCalendarOpen(null);
                     }
-                    setCalendarOpen(null);
                   }}
                   markedDates={(() => {
                     const m = {};
@@ -1744,6 +2042,90 @@ const SalesReportScreen = ({ navigation }) => {
         </TouchableWithoutFeedback>
       </Modal>
 
+      {/* Drill-down popup — tap an Order cell to see the underlying orders */}
+      <Modal
+        visible={!!drillProduct}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setDrillProduct(null)}
+      >
+        <TouchableWithoutFeedback onPress={() => setDrillProduct(null)}>
+          <View style={styles.menuBackdrop}>
+            {/* Card claims responder via onStartShouldSetResponder instead of
+                being wrapped in TouchableWithoutFeedback — TWF intercepts the
+                ScrollView's scroll gestures and prevents the user from
+                dragging the order list. Plain responder claim absorbs taps
+                without breaking scroll. */}
+            <View
+              onStartShouldSetResponder={() => true}
+              style={[
+                styles.menuCard,
+                { maxWidth: 480, maxHeight: Dimensions.get('window').height * 0.8, flexShrink: 1 },
+              ]}
+            >
+              <View style={styles.menuHead}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuTitle}>Orders</Text>
+                  <Text style={styles.calendarSubtitle} numberOfLines={1}>
+                    {drillProduct?.name || ''}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setDrillProduct(null)}
+                  style={styles.calendarCloseBtn}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <MaterialIcons name="close" size={20} color="#1a1a2e" />
+                </TouchableOpacity>
+              </View>
+              {drillOrders === null ? (
+                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                  <ActivityIndicator size="large" color={NAVY} />
+                </View>
+              ) : drillOrders.length === 0 ? (
+                <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                  <Text style={styles.emptyText}>No orders for this product in the active range.</Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={{ flexShrink: 1 }}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {drillOrders.map((row, idx) => {
+                      const dateLabel = (() => {
+                        if (!row.date_order) return '';
+                        const iso = String(row.date_order).replace(' ', 'T');
+                        const d = new Date(iso.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z');
+                        if (isNaN(d.getTime())) return row.date_order;
+                        return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+                      })();
+                      return (
+                        <View key={`${row.order_id}-${idx}`} style={styles.drillRow}>
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={styles.drillOrderName} numberOfLines={1}>
+                              {row.order_name || `Order ${row.order_id}`}
+                            </Text>
+                            <Text style={styles.drillMeta} numberOfLines={1}>
+                              {dateLabel}
+                              {row.state ? `  ·  ${row.state}` : ''}
+                              {Array.isArray(row.partner_id) ? `  ·  ${row.partner_id[1]}` : ''}
+                            </Text>
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text style={styles.drillTotal}>{fmtMoney(row.line_total)}</Text>
+                            <Text style={styles.drillQty}>Qty {formatNumber(row.qty || 0)}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
       {/* Filters / Group By menu — Odoo-style multi-select popup */}
       <Modal
         visible={!!menuOpen}
@@ -1757,7 +2139,11 @@ const SalesReportScreen = ({ navigation }) => {
               <View style={styles.menuCard}>
                 <View style={styles.menuHead}>
                   <Text style={styles.menuTitle}>
-                    {menuOpen === 'filter' ? 'Filters' : menuOpen === 'group' ? 'Group By' : 'Section'}
+                    {menuOpen === 'filter'   ? 'Filters'
+                     : menuOpen === 'group'   ? 'Group By'
+                     : menuOpen === 'date'    ? 'Date Range'
+                     : menuOpen === 'measures'? 'Measures'
+                     : 'Section'}
                   </Text>
                   <TouchableOpacity
                     onPress={() => setMenuOpen(null)}
@@ -1797,6 +2183,79 @@ const SalesReportScreen = ({ navigation }) => {
                         </TouchableOpacity>
                       );
                     })
+                  ) : menuOpen === 'date' ? (
+                    [
+                      { key: null,           label: 'All Time'      },
+                      { key: 'date:today',   label: 'Today'         },
+                      { key: 'date:7d',      label: 'Last 7 Days'   },
+                      { key: 'date:30d',     label: 'Last 30 Days'  },
+                      { key: 'date:month',   label: 'This Month'    },
+                      { key: 'date:year',    label: 'This Year'     },
+                      { key: 'date:custom',  label: 'Custom Range…' },
+                    ].map((opt) => {
+                      const active = (opt.key === null && !activeDateKey) || activeDateKey === opt.key;
+                      return (
+                        <TouchableOpacity
+                          key={opt.key || 'all'}
+                          activeOpacity={0.75}
+                          onPress={() => {
+                            if (opt.key === 'date:custom') {
+                              openCustomDateFlow();
+                              return;
+                            }
+                            // Replace any existing date:* key with the new one (or
+                            // clear all date keys for "All Time").
+                            setSelectedFilters((prev) => {
+                              const cleaned = prev.filter((k) => !String(k).startsWith('date:'));
+                              return opt.key ? cleaned.concat(opt.key) : cleaned;
+                            });
+                            setMenuOpen(null);
+                          }}
+                          style={styles.menuRow}
+                        >
+                          <MaterialIcons
+                            name={active ? 'radio-button-checked' : 'radio-button-unchecked'}
+                            size={18}
+                            color={active ? NAVY : '#cbd5e1'}
+                          />
+                          <Text
+                            style={[
+                              styles.menuRowText,
+                              active && { color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
+                            ]}
+                          >
+                            {opt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })
+                  ) : menuOpen === 'measures' ? (
+                    MEASURES
+                      .filter((m) => !m.requiresQty || (groupedRows || []).some((r) => typeof r.qty === 'number'))
+                      .map((m) => {
+                        const checked = selectedMeasures.includes(m.key);
+                        return (
+                          <TouchableOpacity
+                            key={m.key}
+                            activeOpacity={0.75}
+                            onPress={() => {
+                              setSelectedMeasures((prev) => (
+                                prev.includes(m.key)
+                                  ? prev.filter((k) => k !== m.key)
+                                  : prev.concat(m.key)
+                              ));
+                            }}
+                            style={styles.menuRow}
+                          >
+                            <MaterialIcons
+                              name={checked ? 'check-box' : 'check-box-outline-blank'}
+                              size={18}
+                              color={checked ? NAVY : '#cbd5e1'}
+                            />
+                            <Text style={styles.menuRowText}>{m.label}</Text>
+                          </TouchableOpacity>
+                        );
+                      })
                   ) : (menuOpen === 'filter' ? FILTER_OPTIONS : groupByOptionsForTab).map((opt) => {
                     if (opt.type === 'expandable') {
                       const expanded = menuExpandedKey === opt.key;
@@ -1949,10 +2408,52 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.2,
   },
+  calendarSubtitle: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 2,
+  },
   calendarCloseBtn: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: '#f3f4f6',
     alignItems: 'center', justifyContent: 'center',
+  },
+  fromToRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 6,
+    gap: 8,
+  },
+  fromToCell: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#fff',
+  },
+  fromToCellActive: {
+    borderColor: NAVY,
+    backgroundColor: '#f5f4ff',
+  },
+  fromToLabel: {
+    fontSize: 10,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+  },
+  fromToValue: {
+    fontSize: 13,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    marginTop: 2,
+  },
+  fromToArrow: {
+    paddingHorizontal: 2,
   },
 
   exportRow: {
@@ -2395,6 +2896,44 @@ const styles = StyleSheet.create({
     backgroundColor: NAVY,
   },
 
+  // ── Measures pill (Analysis + Pivot only) ──
+  exportBarPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    marginLeft: 6,
+  },
+  exportBarPillActive: {
+    backgroundColor: NAVY,
+  },
+  exportBarPillText: {
+    fontSize: 11,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  exportBarPillTextActive: { color: '#fff' },
+
+  // ── Flip Axis button ──
+  flipBtn: {
+    width: 30,
+    height: 28,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eef0f5',
+    marginLeft: 6,
+  },
+  flipBtnActive: {
+    backgroundColor: NAVY,
+  },
+
   // ── Filter / Group By menu modal ──
   menuBackdrop: {
     flex: 1,
@@ -2480,7 +3019,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f1f2f6',
   },
   pivotHeadRow: { backgroundColor: NAVY },
-  pivotTotalRow: { backgroundColor: '#fef3c7', borderBottomWidth: 0 },
+  pivotTotalRow: { backgroundColor: '#fef3c7' },
   pivotCell: {
     width: 110,
     paddingHorizontal: 10,
@@ -2498,6 +3037,11 @@ const styles = StyleSheet.create({
     fontFamily: FONT_FAMILY.urbanistBold,
     color: NAVY,
   },
+  pivotCellLink: {
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textDecorationLine: 'underline',
+  },
   pivotHeadText: {
     color: '#fff',
     fontFamily: FONT_FAMILY.urbanistBold,
@@ -2505,10 +3049,46 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textTransform: 'uppercase',
   },
+  pivotHeadTextLink: {
+    textDecorationLine: 'underline',
+  },
   pivotTotalText: {
     color: '#92400E',
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.2,
+  },
+
+  // ── Drill-down Modal rows ──
+  drillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f2f6',
+    gap: 10,
+  },
+  drillOrderName: {
+    fontSize: 13,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  drillMeta: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 2,
+  },
+  drillTotal: {
+    fontSize: 13,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  drillQty: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 2,
   },
 
   // ── Graph card ──

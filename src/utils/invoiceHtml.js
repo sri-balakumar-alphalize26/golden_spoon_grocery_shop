@@ -380,4 +380,231 @@ export const generateDailySaleHtml = ({
 </html>`;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Easy Purchase / Quick Return — A4 invoice generators
+//
+// Used by:
+//   - src/screens/EasyPurchase/EasyPurchaseDetailScreen.js (Invoice PDF button)
+//   - src/screens/QuickPurchaseReturn/QuickPurchaseReturnDetailScreen.js (same)
+//
+// Different paper format (A4) and visual style from the 80mm thermal receipt
+// — these are for filing / supplier hand-off, not point-of-sale tickets.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Build the company letterhead block (shop name / address / contact). Pulls
+// every field defensively so a partially-loaded companyProfile still renders.
+const _buildLetterhead = (companyProfile) => {
+  const addressLine = [companyProfile?.city, companyProfile?.state, companyProfile?.zip]
+    .filter(Boolean)
+    .join(', ');
+  const contactBits = [companyProfile?.phone, companyProfile?.email].filter(Boolean);
+  const logoSrc = companyProfile?.image_1920
+    ? `data:image/png;base64,${companyProfile.image_1920}`
+    : null;
+  return `
+    <div class="letterhead">
+      ${logoSrc ? `<img class="logo" src="${logoSrc}" alt="logo" />` : ''}
+      <div class="company-block">
+        <div class="company-name">${escapeHtml(companyProfile?.name || 'Company')}</div>
+        ${companyProfile?.street ? `<div class="company-meta">${escapeHtml(companyProfile.street)}</div>` : ''}
+        ${companyProfile?.street2 ? `<div class="company-meta">${escapeHtml(companyProfile.street2)}</div>` : ''}
+        ${addressLine ? `<div class="company-meta">${escapeHtml(addressLine)}</div>` : ''}
+        ${companyProfile?.country ? `<div class="company-meta">${escapeHtml(companyProfile.country)}</div>` : ''}
+        ${contactBits.length ? `<div class="company-meta">${escapeHtml(contactBits.join('  ·  '))}</div>` : ''}
+      </div>
+    </div>
+  `;
+};
+
+// Common A4 stylesheet — kept inline so the PDF renderer doesn't need to
+// resolve external resources.
+const _a4Styles = `
+  @page { size: A4; margin: 12mm; }
+  html, body { margin:0; padding:0; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a2e; }
+  body { font-size: 11px; }
+  .letterhead { display:flex; align-items:flex-start; gap:14px; border-bottom:2px solid #1a1a2e; padding-bottom:12px; margin-bottom:16px; }
+  .logo { width:60px; height:60px; object-fit:contain; }
+  .company-block { flex:1; }
+  .company-name { font-size:18px; font-weight:800; letter-spacing:0.3px; color:#1a1a2e; }
+  .company-meta { font-size:10px; color:#475569; margin-top:1px; }
+  .title-row { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:18px; }
+  .doc-title { font-size:22px; font-weight:800; color:#1a1a2e; letter-spacing:0.4px; text-transform:uppercase; }
+  .doc-meta { text-align:right; font-size:11px; color:#475569; }
+  .doc-meta b { color:#1a1a2e; }
+  .info-grid { display:flex; gap:14px; margin-bottom:14px; }
+  .info-card { flex:1; border:1px solid #e5e7eb; border-radius:6px; padding:8px 10px; }
+  .info-card .label { font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; }
+  .info-card .value { font-size:12px; color:#1a1a2e; font-weight:700; margin-top:2px; }
+  table.lines { width:100%; border-collapse:collapse; margin-bottom:14px; }
+  table.lines th { background:#1a1a2e; color:#fff; padding:7px 8px; font-size:10px; text-align:left; letter-spacing:0.3px; text-transform:uppercase; }
+  table.lines th.r { text-align:right; }
+  table.lines td { padding:7px 8px; border-bottom:1px solid #eef0f5; font-size:11px; vertical-align:top; }
+  table.lines td.r { text-align:right; }
+  table.lines tr:nth-child(even) td { background:#fafbfc; }
+  .totals { display:flex; justify-content:flex-end; margin-bottom:14px; }
+  .totals table { border-collapse:collapse; min-width:240px; }
+  .totals td { padding:6px 10px; font-size:12px; }
+  .totals tr.grand td { background:#fef3c7; font-weight:800; font-size:13px; border-top:2px solid #1a1a2e; }
+  .meta-block { display:flex; gap:14px; margin-bottom:14px; }
+  .meta-block .col { flex:1; }
+  .meta-block .label { font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; }
+  .meta-block .value { font-size:11px; color:#1a1a2e; font-weight:600; margin-top:2px; }
+  .notes-box { border:1px dashed #cbd5e1; border-radius:6px; padding:10px 12px; font-size:11px; color:#1a1a2e; margin-bottom:14px; white-space:pre-wrap; }
+  .footer { margin-top:18px; padding-top:8px; border-top:1px solid #e5e7eb; font-size:10px; color:#94a3b8; text-align:center; }
+`;
+
+// Format a currency-style number using the active currency at module load
+// time. We can't rely on `formatCurrency` directly because it expects a
+// caller-passed config object, but `getActiveCurrency` gives us the same
+// symbol + position that's used elsewhere.
+const _fmtCur = (val) => {
+  const _cur = getActiveCurrency();
+  const sym = _cur?.symbol || _cur?.name || '';
+  const digits = getDigits('Product Price', 2);
+  const safe = Number.isFinite(Number(val)) ? Number(val) : 0;
+  return sym ? `${sym} ${safe.toFixed(digits)}` : safe.toFixed(digits);
+};
+
+const _fmtDate = (raw) => {
+  if (!raw) return '';
+  const str = String(raw);
+  // Odoo gives "YYYY-MM-DD" for date fields and "YYYY-MM-DD HH:mm:ss" UTC for datetimes.
+  const isoLike = str.includes(' ') ? str.replace(' ', 'T') : str;
+  const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(isoLike) ? isoLike : isoLike + (str.length > 10 ? 'Z' : ''));
+  if (isNaN(d.getTime())) return str;
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+const _tuple = (v) => (Array.isArray(v) ? v[1] : '');
+
+// Easy Purchase invoice — full A4 with supplier block, lines, totals,
+// payment/warehouse meta, notes, footer.
+export const generateEasyPurchaseInvoiceHtml = ({ purchase = {}, companyProfile = null } = {}) => {
+  const lines = Array.isArray(purchase?.lines) ? purchase.lines : [];
+  const supplierName = _tuple(purchase?.partner_id);
+  const paymentMethod = _tuple(purchase?.payment_method_id);
+  const paymentTerm   = _tuple(purchase?.payment_term_id);
+  const warehouse     = _tuple(purchase?.warehouse_id);
+  const linesHtml = lines.length === 0
+    ? `<tr><td colspan="7" style="text-align:center;color:#6b7280;padding:12px;">No lines</td></tr>`
+    : lines.map((l, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escapeHtml(_tuple(l.product_id) || l.name || '')}${l.description ? `<div style="font-size:10px;color:#6b7280;">${escapeHtml(l.description)}</div>` : ''}</td>
+          <td class="r">${escapeHtml(String(l.quantity || 0))} ${escapeHtml(_tuple(l.uom_id))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.price_unit))}</td>
+          <td class="r">${escapeHtml(String(l.discount || 0))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.tax_amount))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.total))}</td>
+        </tr>
+      `).join('');
+  return `<!doctype html>
+<html><head><meta charset="utf-8" /><style>${_a4Styles}</style></head>
+<body>
+  ${_buildLetterhead(companyProfile)}
+  <div class="title-row">
+    <div class="doc-title">Purchase Invoice</div>
+    <div class="doc-meta">
+      <div><b>Invoice #</b> ${escapeHtml(purchase?.name || '—')}</div>
+      <div><b>Date:</b> ${escapeHtml(_fmtDate(purchase?.date))}</div>
+    </div>
+  </div>
+  <div class="info-grid">
+    <div class="info-card">
+      <div class="label">Supplier</div>
+      <div class="value">${escapeHtml(supplierName || '—')}</div>
+      ${purchase?.reference ? `<div class="company-meta" style="margin-top:4px;">Ref: ${escapeHtml(purchase.reference)}</div>` : ''}
+    </div>
+    <div class="info-card">
+      <div class="label">Warehouse</div>
+      <div class="value">${escapeHtml(warehouse || '—')}</div>
+    </div>
+  </div>
+  <table class="lines">
+    <thead><tr>
+      <th>#</th><th>Product</th>
+      <th class="r">Qty</th><th class="r">Unit Price</th>
+      <th class="r">Discount</th><th class="r">Tax</th><th class="r">Subtotal</th>
+    </tr></thead>
+    <tbody>${linesHtml}</tbody>
+  </table>
+  <div class="totals">
+    <table>
+      <tr><td>Subtotal</td><td class="r" style="text-align:right;">${escapeHtml(_fmtCur(purchase?.amount_untaxed))}</td></tr>
+      <tr><td>Tax</td><td class="r" style="text-align:right;">${escapeHtml(_fmtCur(purchase?.amount_tax))}</td></tr>
+      <tr class="grand"><td>Total</td><td class="r" style="text-align:right;">${escapeHtml(_fmtCur(purchase?.amount_total))}</td></tr>
+    </table>
+  </div>
+  <div class="meta-block">
+    <div class="col"><div class="label">Payment Method</div><div class="value">${escapeHtml(paymentMethod || '—')}</div></div>
+    ${paymentTerm ? `<div class="col"><div class="label">Payment Term</div><div class="value">${escapeHtml(paymentTerm)}</div></div>` : ''}
+  </div>
+  ${purchase?.notes ? `<div class="notes-box">${escapeHtml(purchase.notes)}</div>` : ''}
+  <div class="footer">Generated by Grocery Shop POS  ·  ${escapeHtml(new Date().toLocaleString('en-US'))}</div>
+</body></html>`;
+};
+
+// Quick Return invoice — return-specific A4 layout (refund amounts, source
+// purchase ref, reason / notes).
+export const generateQuickReturnInvoiceHtml = ({ ret = {}, companyProfile = null } = {}) => {
+  const lines = Array.isArray(ret?.lines) ? ret.lines : [];
+  const supplierName = _tuple(ret?.partner_id);
+  const warehouse    = _tuple(ret?.warehouse_id);
+  const sourceBill   = _tuple(ret?.source_invoice_id);
+  const linesHtml = lines.length === 0
+    ? `<tr><td colspan="7" style="text-align:center;color:#6b7280;padding:12px;">No lines</td></tr>`
+    : lines.map((l, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escapeHtml(_tuple(l.product_id) || l.name || '')}${l.description ? `<div style="font-size:10px;color:#6b7280;">${escapeHtml(l.description)}</div>` : ''}</td>
+          <td class="r">${escapeHtml(String(l.return_qty || 0))} ${escapeHtml(_tuple(l.uom_id))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.price_unit))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.subtotal))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.tax_amount))}</td>
+          <td class="r">${escapeHtml(_fmtCur(l.total))}</td>
+        </tr>
+      `).join('');
+  return `<!doctype html>
+<html><head><meta charset="utf-8" /><style>${_a4Styles}</style></head>
+<body>
+  ${_buildLetterhead(companyProfile)}
+  <div class="title-row">
+    <div class="doc-title">Return Invoice</div>
+    <div class="doc-meta">
+      <div><b>Return #</b> ${escapeHtml(ret?.name || '—')}</div>
+      <div><b>Date:</b> ${escapeHtml(_fmtDate(ret?.date))}</div>
+      ${sourceBill ? `<div><b>Original:</b> ${escapeHtml(sourceBill)}</div>` : ''}
+    </div>
+  </div>
+  <div class="info-grid">
+    <div class="info-card">
+      <div class="label">Supplier</div>
+      <div class="value">${escapeHtml(supplierName || '—')}</div>
+      ${ret?.invoice_date ? `<div class="company-meta" style="margin-top:4px;">Original Bill Date: ${escapeHtml(_fmtDate(ret.invoice_date))}</div>` : ''}
+    </div>
+    <div class="info-card">
+      <div class="label">Warehouse</div>
+      <div class="value">${escapeHtml(warehouse || '—')}</div>
+    </div>
+  </div>
+  <table class="lines">
+    <thead><tr>
+      <th>#</th><th>Product</th>
+      <th class="r">Returned Qty</th><th class="r">Unit Price</th>
+      <th class="r">Refund Subtotal</th><th class="r">Tax Refund</th><th class="r">Line Refund</th>
+    </tr></thead>
+    <tbody>${linesHtml}</tbody>
+  </table>
+  <div class="totals">
+    <table>
+      <tr><td>Subtotal Refund</td><td class="r" style="text-align:right;">${escapeHtml(_fmtCur(ret?.amount_untaxed))}</td></tr>
+      <tr><td>Tax Refund</td><td class="r" style="text-align:right;">${escapeHtml(_fmtCur(ret?.amount_tax))}</td></tr>
+      <tr class="grand"><td>Total Refund</td><td class="r" style="text-align:right;">${escapeHtml(_fmtCur(ret?.amount_total))}</td></tr>
+    </table>
+  </div>
+  ${ret?.notes ? `<div class="notes-box"><b>Reason / Notes:</b>\n${escapeHtml(ret.notes)}</div>` : ''}
+  <div class="footer">Generated by Grocery Shop POS  ·  ${escapeHtml(new Date().toLocaleString('en-US'))}</div>
+</body></html>`;
+};
+
 export default generateInvoiceHtml;

@@ -34,6 +34,7 @@ import { fetchWarehouses } from '@api/services/easyPurchaseApi';
 import { FeatureGate } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
+const ORANGE = '#F47B20';
 const RED = '#B91C1C';
 
 const QuickPurchaseReturnFormScreen = ({ navigation }) => {
@@ -476,118 +477,137 @@ const QuickPurchaseReturnFormScreen = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f3f4f6' },
+  // Visual tokens lifted from EasyPurchaseFormScreen — same off-white bg,
+  // urbanist font family, navy section accents — so the two forms feel like
+  // siblings while keeping QR's existing JSX structure intact.
+  container: { flex: 1, backgroundColor: '#f6f7fb' },
   sectionLabel: {
-    fontSize: 11, color: '#6b7280',
-    letterSpacing: 0.6, fontWeight: '700',
-    marginTop: 12, marginBottom: 8,
+    fontSize: 12, color: '#6b7280',
+    letterSpacing: 0.6, marginTop: 14, marginBottom: 6,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textTransform: 'uppercase',
   },
 
   pickerField: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: '#fff',
     borderRadius: 12, paddingVertical: 12, paddingHorizontal: 12,
     borderWidth: 1, borderColor: '#e5e7eb',
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
-  pickerValue: { fontSize: 14, fontWeight: '700', color: '#111' },
-  pickerSub: { fontSize: 12, color: '#6b7280', marginTop: 2 },
-  pickerPlaceholder: { fontSize: 13, color: '#9ca3af' },
+  pickerValue: { fontSize: 14, color: '#111827', fontFamily: FONT_FAMILY.urbanistBold },
+  pickerSub: { fontSize: 12, color: '#6b7280', marginTop: 2, fontFamily: FONT_FAMILY.urbanistMedium },
+  pickerPlaceholder: { fontSize: 13, color: '#9ca3af', fontFamily: FONT_FAMILY.urbanistMedium },
 
+  // Lines container styled as an EP-style card.
   linesCard: {
-    marginTop: 14,
-    backgroundColor: '#fff', borderRadius: 12,
-    paddingVertical: 10, paddingHorizontal: 12,
-    borderWidth: 1, borderColor: '#e5e7eb',
+    marginTop: 6,
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingVertical: 12, paddingHorizontal: 14,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
   linesHeaderRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
-    marginBottom: 6,
+    paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#f1f2f6',
+    marginBottom: 8,
   },
-  linesTitle: { fontSize: 13, fontWeight: '800', color: '#111' },
+  linesTitle: { fontSize: 14, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
   returnAllBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8,
-    backgroundColor: NAVY,
+    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10,
+    backgroundColor: ORANGE,
   },
-  returnAllBtnText: { color: '#fff', fontWeight: '700', fontSize: 11 },
+  returnAllBtnText: { color: '#fff', fontSize: 11, fontFamily: FONT_FAMILY.urbanistBold },
 
+  // Each line gets the EP "lineCard" treatment — a tinted inner card.
   lineRow: {
-    flexDirection: 'row', paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
+    flexDirection: 'row',
+    backgroundColor: '#f8f9fc',
+    borderRadius: 10,
+    paddingVertical: 10, paddingHorizontal: 10,
+    marginTop: 8,
+    borderWidth: 1, borderColor: '#eef0f5',
   },
-  lineProduct: { fontSize: 13, fontWeight: '700', color: '#111' },
-  lineMeta: { fontSize: 11, color: '#6b7280', marginTop: 3 },
-  linePrice: { fontSize: 11, color: '#374151', marginTop: 3, fontWeight: '600' },
-  qtyCol: { width: 90, alignItems: 'flex-end' },
-  qtyLabel: { fontSize: 9, color: '#9ca3af', letterSpacing: 0.5, fontWeight: '700' },
+  lineProduct: { fontSize: 13, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
+  lineMeta: { fontSize: 11, color: '#6b7280', marginTop: 3, fontFamily: FONT_FAMILY.urbanistMedium },
+  linePrice: { fontSize: 11, color: '#374151', marginTop: 3, fontFamily: FONT_FAMILY.urbanistSemiBold },
+  qtyCol: { width: 96, alignItems: 'flex-end' },
+  qtyLabel: { fontSize: 10, color: '#8896ab', letterSpacing: 0.4, fontFamily: FONT_FAMILY.urbanistBold, textTransform: 'uppercase' },
   qtyInput: {
     marginTop: 4,
     width: '100%',
     borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8,
     paddingVertical: 6, paddingHorizontal: 8,
     fontSize: 14, color: '#111', textAlign: 'right',
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
-  qtyMax: { fontSize: 10, color: '#9ca3af', marginTop: 3 },
-  qtyMaxBad: { color: RED, fontWeight: '700' },
+  qtyMax: { fontSize: 10, color: '#9ca3af', marginTop: 3, fontFamily: FONT_FAMILY.urbanistMedium },
+  qtyMaxBad: { color: RED, fontFamily: FONT_FAMILY.urbanistBold },
 
   totalsRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6',
-    marginTop: 4,
+    paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f1f2f6',
+    marginTop: 6,
   },
-  totalsLabel: { fontSize: 13, color: '#6b7280' },
-  totalsValue: { fontSize: 15, fontWeight: '800', color: NAVY },
+  totalsLabel: { fontSize: 13, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistSemiBold },
+  totalsValue: { fontSize: 17, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
 
   linesEmpty: {
-    marginTop: 14,
-    backgroundColor: '#fff', borderRadius: 12,
-    paddingVertical: 24, paddingHorizontal: 16,
-    borderWidth: 1, borderColor: '#e5e7eb',
+    marginTop: 6,
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingVertical: 28, paddingHorizontal: 16,
     alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
-  linesEmptyText: { color: '#6b7280', fontSize: 13 },
+  linesEmptyText: { color: '#6b7280', fontSize: 13, fontFamily: FONT_FAMILY.urbanistMedium },
 
   settingsCard: {
-    backgroundColor: '#fff', borderRadius: 12,
-    paddingHorizontal: 12,
-    borderWidth: 1, borderColor: '#e5e7eb',
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingHorizontal: 14,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
   toggleRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
+    borderBottomWidth: 1, borderBottomColor: '#f1f2f6',
   },
-  toggleLabel: { fontSize: 13, fontWeight: '700', color: '#111' },
-  toggleSub: { fontSize: 11, color: '#6b7280', marginTop: 2 },
+  toggleLabel: { fontSize: 13, color: '#111827', fontFamily: FONT_FAMILY.urbanistBold },
+  toggleSub: { fontSize: 11, color: '#6b7280', marginTop: 2, fontFamily: FONT_FAMILY.urbanistMedium },
   warehouseField: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 12,
   },
 
   notesInput: {
-    backgroundColor: '#fff', borderRadius: 12,
-    borderWidth: 1, borderColor: '#e5e7eb',
-    paddingVertical: 10, paddingHorizontal: 12,
+    backgroundColor: '#fff', borderRadius: 14,
+    paddingVertical: 12, paddingHorizontal: 14,
     fontSize: 13, color: '#111',
-    textAlignVertical: 'top', minHeight: 80,
+    textAlignVertical: 'top', minHeight: 88,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
 
+  // Bottom action bar — same shape as EP, with the Confirm button in ORANGE
+  // (matching EP's primary CTA) instead of red.
   footer: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
     flexDirection: 'row', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 10,
+    paddingHorizontal: 14, paddingVertical: 12,
     backgroundColor: '#fff',
-    borderTopWidth: 1, borderTopColor: '#e5e7eb',
+    borderTopWidth: 1, borderTopColor: '#eee',
   },
   footerBtn: {
-    flex: 1, paddingVertical: 13, borderRadius: 10,
+    flex: 1, paddingVertical: 13, borderRadius: 12,
     alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', gap: 6,
   },
-  footerBtnGhost: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: NAVY },
-  footerBtnGhostText: { color: NAVY, fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
-  footerBtnPrimary: { backgroundColor: RED },
-  footerBtnPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
+  footerBtnGhost: { backgroundColor: '#f3f4f6' },
+  footerBtnGhostText: { color: '#374151', fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold },
+  footerBtnPrimary: {
+    backgroundColor: ORANGE,
+    shadowColor: ORANGE, shadowOpacity: 0.32, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 6,
+  },
+  footerBtnPrimaryText: { color: '#fff', fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold },
 
   modalBg: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',

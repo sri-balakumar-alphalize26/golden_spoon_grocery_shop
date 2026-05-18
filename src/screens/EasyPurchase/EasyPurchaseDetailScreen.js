@@ -1,6 +1,9 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Alert, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,6 +19,7 @@ import { useAuthStore } from '@stores/auth';
 import { formatCurrency } from '@utils/currency';
 import { FeatureGate } from '@components/FeatureGate';
 import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
+import { generateEasyPurchaseInvoiceHtml } from '@utils/invoiceHtml';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -51,9 +55,11 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
   const id = route?.params?.id;
   // Subscribe so the screen re-renders when the currency hydrates / changes.
   useAuthStore((s) => s.currency);
+  const companyProfile = useAuthStore((s) => s.companyProfile);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [linked, setLinked] = useState({ po: null, picking: null, bill: null, payments: [] });
   const [taxesById, setTaxesById] = useState({});
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -135,6 +141,45 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
     try { await draftEasyPurchase(id); await load(); showToastMessage('Reset to draft'); }
     catch (e) { showToastMessage(e?.message || 'Failed'); }
     finally { setBusy(false); }
+  };
+
+  // Render the purchase as an A4 PDF and hand it to the OS for save / share.
+  // Android: StorageAccessFramework folder picker → write base64 PDF.
+  // iOS: Sharing.shareAsync (user picks "Save to Files" or shares onward).
+  const onExportInvoice = async () => {
+    if (!data) return;
+    setPdfBusy(true);
+    try {
+      const html = generateEasyPurchaseInvoiceHtml({ purchase: data, companyProfile });
+      const { uri } = await Print.printToFileAsync({ html });
+      const filename = `Purchase-${(data.name || id || '').replace(/[\/\\]/g, '-')}.pdf`;
+      if (Platform.OS === 'android') {
+        const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!perm?.granted) { showToastMessage('Save cancelled'); return; }
+        const newUri = await FileSystem.StorageAccessFramework.createFileAsync(
+          perm.directoryUri, filename, 'application/pdf'
+        );
+        const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+        await FileSystem.writeAsStringAsync(newUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+        showToastMessage(`Saved ${filename}`);
+        return;
+      }
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          UTI: 'com.adobe.pdf',
+          dialogTitle: filename,
+        });
+      } else {
+        showToastMessage('Sharing not available');
+      }
+    } catch (e) {
+      console.warn('EP invoice export failed:', e?.message || e);
+      showToastMessage(e?.message || 'Could not generate PDF');
+    } finally {
+      setPdfBusy(false);
+    }
   };
 
   if (loading && !data) {
@@ -343,9 +388,27 @@ const EasyPurchaseDetailScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           </FeatureGate>
         ) : (
-          <View style={styles.donePill}>
-            <MaterialIcons name="check-circle" size={18} color="#15803d" />
-            <Text style={styles.donePillText}>Completed</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={[styles.donePill, { flex: 0 }]}>
+              <MaterialIcons name="check-circle" size={18} color="#15803d" />
+              <Text style={styles.donePillText}>Completed</Text>
+            </View>
+            <FeatureGate featureKey="easy_purchase.export_invoice">
+              <TouchableOpacity
+                style={[styles.btn, styles.btnPrimary, { flex: 1 }, pdfBusy && { opacity: 0.6 }]}
+                disabled={pdfBusy}
+                onPress={onExportInvoice}
+              >
+                {pdfBusy ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="picture-as-pdf" size={18} color="#fff" />
+                    <Text style={styles.btnPrimaryText}>Download Invoice</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </FeatureGate>
           </View>
         )}
       </View>

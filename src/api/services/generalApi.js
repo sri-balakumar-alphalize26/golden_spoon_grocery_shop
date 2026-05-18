@@ -6154,20 +6154,19 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
 // Fetch sales report data from Odoo
 export const fetchSalesReportData = async ({ startDate = null, endDate = null, filters = [] } = {}) => {
   try {
-    // Only count completed sales — paid / done / invoiced. Excluding `draft`
-    // means in-cart (unpaid) orders don't pollute the report. Excluding
-    // `cancel` was already implicit via the inclusive list.
-    const PAID_STATES = ['paid', 'done', 'invoiced'];
+    // Match Odoo's Orders Analysis default filter ("Not Cancelled") so the
+    // app's totals line up with what staff see in Odoo. This includes draft
+    // (open / unpaid) orders the same way Odoo does.
     let domain = [];
 
     if (startDate && endDate) {
       domain = [
         ['date_order', '>=', startDate],
         ['date_order', '<=', endDate],
-        ['state', 'in', PAID_STATES],
+        ['state', '!=', 'cancel'],
       ];
     } else {
-      domain = [['state', 'in', PAID_STATES]];
+      domain = [['state', '!=', 'cancel']];
     }
 
     // Apply Odoo-style filters from the Sales Report's Filters menu.
@@ -6226,16 +6225,22 @@ export const fetchSalesReportData = async ({ startDate = null, endDate = null, f
   }
 };
 
-// Fetch top selling products
-export const fetchTopProducts = async ({ startDate = null, endDate = null, limit = 10 } = {}) => {
+// Fetch top selling products. When `full` is true, returns every product that
+// had at least one line in the date range (no top-N slice) — used by the
+// Sales Report pivot. Default behaviour stays a top-N slice for the dashboard.
+// State filter aligned with fetchSalesReportData (paid/done/invoiced) so the
+// per-product breakdown matches the overall totals.
+export const fetchTopProducts = async ({ startDate = null, endDate = null, limit = 10, full = false } = {}) => {
   try {
+    // Aligned with fetchSalesReportData: "Not Cancelled" filter to mirror
+    // Odoo's Orders Analysis default. Includes draft / paid / done / invoiced.
     let domain = [];
 
     if (startDate && endDate) {
       domain = [
         ['order_id.date_order', '>=', startDate],
         ['order_id.date_order', '<=', endDate],
-        ['order_id.state', '!=', 'cancel']
+        ['order_id.state', '!=', 'cancel'],
       ];
     } else {
       domain = [['order_id.state', '!=', 'cancel']];
@@ -6249,8 +6254,8 @@ export const fetchTopProducts = async ({ startDate = null, endDate = null, limit
         method: 'search_read',
         args: [domain],
         kwargs: {
-          fields: ['product_id', 'qty', 'price_subtotal', 'price_subtotal_incl'],
-          limit: 1000, // Get many lines to aggregate
+          fields: ['product_id', 'order_id', 'qty', 'price_subtotal', 'price_subtotal_incl'],
+          limit: full ? 100000 : 1000,
         },
       },
       id: new Date().getTime(),
@@ -6263,11 +6268,12 @@ export const fetchTopProducts = async ({ startDate = null, endDate = null, limit
 
     const orderLines = response.data.result || [];
 
-    // Aggregate by product
+    // Aggregate by product, tracking distinct order_id count alongside qty/revenue.
     const productMap = {};
     orderLines.forEach(line => {
       const productId = Array.isArray(line.product_id) ? line.product_id[0] : line.product_id;
       const productName = Array.isArray(line.product_id) ? line.product_id[1] : 'Unknown Product';
+      const orderId = Array.isArray(line.order_id) ? line.order_id[0] : line.order_id;
 
       if (!productMap[productId]) {
         productMap[productId] = {
@@ -6275,23 +6281,109 @@ export const fetchTopProducts = async ({ startDate = null, endDate = null, limit
           name: productName,
           quantity: 0,
           revenue: 0,
+          _orderIds: new Set(),
         };
       }
 
       productMap[productId].quantity += line.qty || 0;
       productMap[productId].revenue += line.price_subtotal_incl || 0;
+      if (orderId != null) productMap[productId]._orderIds.add(orderId);
     });
 
-    // Convert to array and sort by revenue
-    const topProducts = Object.values(productMap)
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, limit);
+    // Materialise distinct-order count and shed the Set before returning.
+    const aggregated = Object.values(productMap)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        quantity: p.quantity,
+        revenue: p.revenue,
+        order_count: p._orderIds.size,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
 
-    console.log('[FETCH TOP PRODUCTS] Top products count:', topProducts.length);
+    const topProducts = full ? aggregated : aggregated.slice(0, limit);
+
+    console.log('[FETCH TOP PRODUCTS] Top products count:', topProducts.length, full ? '(full)' : `(top ${limit})`);
     return topProducts;
   } catch (error) {
     console.error('fetchTopProducts error:', error);
     throw error;
+  }
+};
+
+// Fetch the order lines for a single product within a date range. Used by the
+// Sales Report pivot's drill-down Modal — tap an Order count cell → see the
+// underlying order lines. Includes related pos.order fields via dot-notation.
+export const fetchOrderLinesForProduct = async ({ startDate = null, endDate = null, productId } = {}) => {
+  if (!productId) return [];
+  try {
+    // Aligned with fetchSalesReportData / fetchTopProducts: "Not Cancelled".
+    let domain = [['product_id', '=', productId]];
+    if (startDate && endDate) {
+      domain.push(['order_id.date_order', '>=', startDate]);
+      domain.push(['order_id.date_order', '<=', endDate]);
+    }
+    domain.push(['order_id.state', '!=', 'cancel']);
+
+    const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order.line',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: ['order_id', 'qty', 'price_subtotal_incl'],
+          limit: 10000,
+        },
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    if (response.data && response.data.error) {
+      console.error('[FETCH ORDER LINES FOR PRODUCT] Odoo error:', response.data.error);
+      return [];
+    }
+    const lines = response.data.result || [];
+
+    // Collect distinct order_ids and fetch their summary fields in one read.
+    const orderIds = Array.from(new Set(
+      lines.map((l) => (Array.isArray(l.order_id) ? l.order_id[0] : l.order_id)).filter((x) => x != null)
+    ));
+    if (orderIds.length === 0) return [];
+
+    const ordersResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'read',
+        args: [orderIds, ['name', 'date_order', 'state', 'partner_id', 'amount_total']],
+        kwargs: {},
+      },
+      id: new Date().getTime(),
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    const orderMeta = {};
+    (ordersResp.data?.result || []).forEach((o) => { orderMeta[o.id] = o; });
+
+    return lines.map((l) => {
+      const oid = Array.isArray(l.order_id) ? l.order_id[0] : l.order_id;
+      const meta = orderMeta[oid] || {};
+      return {
+        order_id: oid,
+        order_name: meta.name || '',
+        date_order: meta.date_order || '',
+        state: meta.state || '',
+        partner_id: meta.partner_id || null,
+        qty: l.qty || 0,
+        line_total: l.price_subtotal_incl || 0,
+        order_total: meta.amount_total || 0,
+      };
+    }).sort((a, b) => (a.date_order < b.date_order ? 1 : -1));
+  } catch (error) {
+    console.error('fetchOrderLinesForProduct error:', error);
+    return [];
   }
 };
 
@@ -7682,17 +7774,25 @@ export const postExpenseEntriesOdoo = (sheetId, expenseId) =>
 // the user pointed at as the known-working reference. Hits product.product
 // search_read directly (no detail-API round trip) so the scanner can push
 // straight to the cart store without losing fields in translation.
-export const fetchProductByBarcodeOdoo = async (barcode) => {
+// Look up a product by barcode. When `allowedCategoryIds` is a non-empty
+// array, the search is restricted to products whose pos_categ_ids overlaps
+// that set — used so a barcode scanned in one POS register doesn't return a
+// product that lives only in a different POS config's category whitelist.
+export const fetchProductByBarcodeOdoo = async (barcode, { allowedCategoryIds } = {}) => {
   if (!barcode) return [];
   const baseUrl = getOdooUrl();
   try {
+    let domain = [['barcode', '=', String(barcode)]];
+    if (Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0) {
+      domain = domain.concat([['pos_categ_ids', 'in', allowedCategoryIds.map(Number)]]);
+    }
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
       params: {
         model: 'product.product',
         method: 'search_read',
-        args: [[['barcode', '=', String(barcode)]]],
+        args: [domain],
         kwargs: {
           fields: [
             'id', 'name', 'list_price', 'lst_price', 'standard_price',
