@@ -121,7 +121,7 @@ const TakeoutDelivery = ({ navigation, route }) => {
 
   const total = useMemo(() => items.reduce((s, it) => s + (it.subtotal || (it.unit * it.qty)), 0), [items]);
   const discountApplied = Number(discountAmount) || 0;
-  const finalTotal = Math.max(0, total - discountApplied);
+  const finalTotal = total - discountApplied;
 
   // Fingerprint of the current cart — sorted by id then a tuple of
   // (id, qty, price). Used to detect "same cart as the existing draft"

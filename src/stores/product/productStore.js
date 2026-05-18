@@ -56,8 +56,8 @@ const useProductStore = create((set, get) => ({
       // Fixed discount amount stays the same regardless of qty change
       const discountAmt = Number(existing.discount_amount || 0);
       const discounted = discountAmt > 0 ? Number((rawSubtotal - discountAmt).toFixed(3)) : Number(rawSubtotal.toFixed(3));
-      existing.price_subtotal = Math.max(0, discounted);
-      existing.price_subtotal_incl = Math.max(0, discounted);
+      existing.price_subtotal = discounted;
+      existing.price_subtotal_incl = discounted;
       currentCart[idx] = existing;
     } else {
       // Add new item
@@ -104,8 +104,8 @@ const useProductStore = create((set, get) => ({
     item.discount_amount = discountAmt;
     // Also store percent for display purposes
     item.discount_percent = rawSubtotal > 0 ? Number(((discountAmt / rawSubtotal) * 100).toFixed(2)) : 0;
-    item.price_subtotal = Math.max(0, discounted);
-    item.price_subtotal_incl = Math.max(0, discounted);
+    item.price_subtotal = discounted;
+    item.price_subtotal_incl = discounted;
     currentCart[idx] = item;
     return {
       ...state,
