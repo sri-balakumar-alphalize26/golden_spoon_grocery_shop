@@ -299,10 +299,16 @@ const POSPayment = ({ navigation, route }) => {
     : 0;
   const computeTotal = () => {
     if (totalIsExternal) return totalAmount;
-    return Math.max(0, subtotal - computedDiscountAmount);
+    return subtotal - computedDiscountAmount;
   };
-  const paidAmount = parseFloat(inputAmount) || 0;
   const total = computeTotal();
+  // Refund flow: when the order total is negative, treat the entered amount
+  // as money going out (negative payment). The cashier still types positive
+  // digits on the keypad; we flip the sign internally so the Remaining/Change
+  // badge and the displayed entered amount read correctly.
+  const isRefund = total < 0;
+  const paidAmountRaw = parseFloat(inputAmount) || 0;
+  const paidAmount = isRefund ? -Math.abs(paidAmountRaw) : paidAmountRaw;
   const remaining = total - paidAmount;
 
   const handleKeypad = (val) => {
@@ -855,7 +861,8 @@ const POSPayment = ({ navigation, route }) => {
   };
 
   const amountInsufficient =
-    (paymentMode === 'cash' || paymentMode === 'card') && paidAmount < total;
+    (paymentMode === 'cash' || paymentMode === 'card') &&
+    (isRefund ? paidAmount > total : paidAmount < total);
 
   // Split-payment validity — both amounts > 0, sum matches the total within
   // 0.01 tolerance, and the two slots reference different chip keys (same
@@ -1045,7 +1052,7 @@ const POSPayment = ({ navigation, route }) => {
               ) : (
                 <View style={styles.inputRow}>
                   <Text style={styles.inputAmount}>
-                    {inputAmount ? displayNum(parseFloat(inputAmount)) : '0'}
+                    {inputAmount ? displayNum(paidAmount) : '0'}
                   </Text>
                   {inputAmount ? (
                     <TouchableOpacity onPress={() => setInputAmount('')} style={styles.clearBtn}>
@@ -1057,14 +1064,14 @@ const POSPayment = ({ navigation, route }) => {
 
               {paymentMode !== 'account' ? (
                 <View style={styles.statusPillRow}>
-                  {remaining > 0 ? (
+                  {(isRefund ? remaining < 0 : remaining > 0) ? (
                     <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
                       <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
                       <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
                         Remaining {displayNum(remaining)}
                       </Text>
                     </View>
-                  ) : remaining < 0 ? (
+                  ) : (isRefund ? remaining > 0 : remaining < 0) ? (
                     <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
                       <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
                       <Text style={[styles.statusPillText, { color: '#15803d' }]}>
