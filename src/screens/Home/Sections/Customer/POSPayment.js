@@ -7,7 +7,7 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import {
-  fetchPaymentJournalsOdoo, createAccountPaymentOdoo, fetchPOSSessions,
+  fetchPaymentJournalsOdoo, createAccountPaymentOdoo, registerPaymentForInvoiceOdoo, fetchPOSSessions,
   createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
@@ -578,15 +578,32 @@ const POSPayment = ({ navigation, route }) => {
           console.log('[PAYMENT] pos.config payment methods:', posMethods);
 
           const cashMethod = posMethods.find((m) => m.is_cash_count === true);
-          // Card / Credit are both bank-type pos.payment.methods, distinguished
-          // by name. Fall back to the first bank-type method if the exact name
-          // isn't found (keeps single-bank-method shops working).
+          // Bank methods = card-style payment (immediate journal posting).
+          // Excludes pay_later / split_transactions methods which are
+          // Odoo's customer-account flag — those post to the partner's
+          // receivable, not a bank journal.
           const bankMethods = posMethods.filter(
-            (m) => m.is_cash_count === false && m.split_transactions !== true
+            (m) => m.is_cash_count === false
+                && m.split_transactions !== true
+                && m.type !== 'pay_later'
+          );
+          // Pay-later methods = Odoo's "Customer Account" payment methods.
+          // type='pay_later' OR split_transactions=true marks them. These
+          // are what we want for the Credit portion so the amount lands
+          // on the partner's account.move.line as a receivable.
+          const payLaterMethods = posMethods.filter(
+            (m) => m.type === 'pay_later' || m.split_transactions === true
           );
           const findByName = (n) => bankMethods.find((m) => (m.name || '').toLowerCase() === n);
           const cardMethod = findByName('card') || bankMethods.find((m) => (m.name || '').toLowerCase() !== 'credit') || bankMethods[0];
-          const creditMethod = findByName('credit') || bankMethods.find((m) => (m.name || '').toLowerCase() !== 'card') || bankMethods[1] || bankMethods[0];
+          // Credit always resolves to a pay-later method when one is
+          // configured on this register. Only fall back to a bank method
+          // if the register has no pay_later method at all (legacy setup).
+          const creditMethod =
+            payLaterMethods.find((m) => /credit|customer\s*account|account|pay\s*later/i.test(m.name || ''))
+            || payLaterMethods[0]
+            || findByName('credit')
+            || bankMethods[1] || bankMethods[0];
 
           const payments = [];
 
@@ -677,6 +694,7 @@ const POSPayment = ({ navigation, route }) => {
               if (doPartial) {
                 const nowMethod = creditNowMethod === 'cash' ? cashMethod : cardMethod;
                 if (!nowMethod) {
+                  push(`partial-split: missing ${creditNowMethod} method on this register`);
                   Toast.show({
                     type: 'error',
                     text1: 'Payment Error',
@@ -685,6 +703,24 @@ const POSPayment = ({ navigation, route }) => {
                   });
                   return;
                 }
+                // Resolved "now" method — confirms which pos.payment.method
+                // the cash/card slot picked up (id, journal, is_cash_count).
+                console.log('[Payment] partial-pay nowMethod resolved:', {
+                  id: nowMethod.id,
+                  name: nowMethod.name,
+                  is_cash_count: nowMethod.is_cash_count,
+                  journal_id: nowMethod.journal_id,
+                  type: nowMethod.type,
+                });
+                // Resolved Credit method — should be pay_later /
+                // split_transactions=true for receivables to post correctly.
+                console.log('[Payment] partial-pay creditMethod resolved:', {
+                  id: method?.id,
+                  name: method?.name,
+                  type: method?.type,
+                  split_transactions: method?.split_transactions,
+                  journal_id: method?.journal_id,
+                });
                 const nowJournalId = Array.isArray(nowMethod.journal_id) ? nowMethod.journal_id[0] : nowMethod.journal_id;
                 payments.length = 0; // reset to ensure clean 2-row split
                 payments.push({
@@ -700,8 +736,16 @@ const POSPayment = ({ navigation, route }) => {
                   paymentMode: 'credit',
                 });
                 paymentMethodLabel = `${nowMethod.name} + ${method.name || 'Credit'}`;
+                // Final 2-element payments array — confirms both rows have
+                // distinct paymentMethodId + journalId before submit.
+                console.log('[Payment] partial-pay final payments:', JSON.stringify(payments));
+                // Surface the partial-split state in the Flow trace Alert
+                // so the user sees "partial-split: now=cash 3 / credit 2.25"
+                // at a glance.
+                push(`partial-split: now=${creditNowMethod} ${creditNowAmount} / credit ${creditDueAmount}`);
                 console.log('[Payment] credit partial split, payments=', payments);
               } else {
+                push(`credit full: ${total}`);
                 payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
                 console.log(`💳 Credit payment: Total=${total}`);
               }
@@ -946,6 +990,51 @@ const POSPayment = ({ navigation, route }) => {
                         // invoice. Posting another account.payment here would
                         // double-count the total on the invoice.
                         console.log('[INVOICE PAYMENT] split mode — relying on pos.payment reconciliation, no extra account.payment posted');
+                      } else if (paymentMode === 'credit' && creditNowMethod && creditNowAmount > 0) {
+                        // Credit-partial: reconcile ONLY the now (cash/card)
+                        // portion against the invoice. The remainder stays
+                        // open on the invoice (Amount Due = creditDueAmount)
+                        // and posts as receivable via Odoo's customer-account
+                        // pos.payment.method side. Use the now-method's bank
+                        // journal — selectedJournal is null for credit mode.
+                        const nowMethodResolved = creditNowMethod === 'cash' ? cashMethod : cardMethod;
+                        const nowJournalId = Array.isArray(nowMethodResolved?.journal_id)
+                          ? nowMethodResolved.journal_id[0]
+                          : nowMethodResolved?.journal_id;
+                        if (nowJournalId) {
+                          try {
+                            // Use the account.payment.register wizard — it
+                            // creates the payment AND reconciles it against
+                            // the invoice's receivable line in one shot, so
+                            // Amount Due actually drops by creditNowAmount.
+                            // Bare account.payment.create (the old helper)
+                            // skipped reconcile, leaving the payment as an
+                            // orphan Outstanding Credit on the customer.
+                            const regResp = await registerPaymentForInvoiceOdoo({
+                              invoiceId,
+                              amount: creditNowAmount,
+                              journalId: nowJournalId,
+                              partnerId,
+                            });
+                            if (regResp?.error) {
+                              push(`reconcile now: err ${regResp.error?.message || JSON.stringify(regResp.error)}`);
+                            } else {
+                              push(`reconcile now: ${creditNowAmount} → invoice ${invoiceId} (residual=${regResp.amount_residual} state=${regResp.payment_state})`);
+                            }
+                            console.log('[INVOICE PAYMENT] partial-pay register response:', regResp);
+                          } catch (payErr) {
+                            push(`reconcile now: err ${payErr?.message || payErr}`);
+                            console.warn('[INVOICE PAYMENT] partial-pay reconcile failed:', payErr);
+                          }
+                        } else {
+                          push(`reconcile now: skipped (no journal on ${creditNowMethod} method)`);
+                        }
+                      } else if (paymentMode === 'credit') {
+                        // Full credit (no now-portion): no payment to reconcile
+                        // against the invoice. Amount Due = full invoice total;
+                        // the customer-account pos.payment.method posts it to
+                        // the partner's receivable automatically.
+                        console.log('[INVOICE PAYMENT] full-credit mode — invoice stays open, receivable handled by pay_later method');
                       } else if (selectedJournal && selectedJournal.id && totalPaymentAmount2 >= total) {
                         try {
                           const payResp = await createAccountPaymentOdoo({ partnerId, journalId: selectedJournal.id, amount: total, invoiceId });

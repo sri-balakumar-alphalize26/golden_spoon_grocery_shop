@@ -4342,6 +4342,100 @@ export const updatePartnerOdoo = async (partnerId, values) => {
   }
 };
 
+// Register + reconcile a payment against a posted customer invoice using
+// Odoo's `account.payment.register` wizard. This is what Odoo's invoice
+// "Pay" button calls under the hood — it creates the account.payment AND
+// reconciles it against the invoice's receivable line in one transaction.
+// Use this instead of createAccountPaymentOdoo when you want the payment
+// to actually reduce the invoice's Amount Due (vs. sitting as an orphan
+// Outstanding Credit on the customer).
+//
+// Returns `{ wizardId, amount_total, amount_residual, payment_state }` on
+// success, `{ error: {...} }` on failure. amount_residual lets the caller
+// verify the invoice's outstanding balance dropped as expected.
+export const registerPaymentForInvoiceOdoo = async ({
+  invoiceId,
+  amount,
+  journalId,
+  partnerId = null,
+  paymentDate = null,
+} = {}) => {
+  if (!invoiceId || !amount || !journalId) {
+    return { error: { message: 'invoiceId, amount, journalId required' } };
+  }
+  try {
+    const baseUrl = getOdooUrl();
+    // The wizard reads the invoice off the active_model/active_ids context
+    // — without it the wizard won't know which move to reconcile against.
+    const ctx = { active_model: 'account.move', active_ids: [Number(invoiceId)] };
+
+    const wizardVals = {
+      amount: Number(amount),
+      journal_id: Number(journalId),
+      ...(partnerId ? { partner_id: Number(partnerId) } : {}),
+      ...(paymentDate ? { payment_date: paymentDate } : {}),
+    };
+    const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.payment.register',
+        method: 'create',
+        args: [wizardVals],
+        kwargs: { context: ctx },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (createResp.data?.error) {
+      console.warn('[registerPaymentForInvoiceOdoo] wizard create error:', createResp.data.error);
+      return { error: createResp.data.error };
+    }
+    const wizardId = createResp.data?.result;
+    if (!wizardId) return { error: { message: 'wizard create returned no id' } };
+
+    // action_create_payments creates the account.payment AND reconciles it
+    // against the invoice's open receivable line. This is the step bare
+    // account.payment.create skipped, which is why Outstanding Credits had
+    // an orphan [Add] button before.
+    const postResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.payment.register',
+        method: 'action_create_payments',
+        args: [[wizardId]],
+        kwargs: { context: ctx },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (postResp.data?.error) {
+      console.warn('[registerPaymentForInvoiceOdoo] action_create_payments error:', postResp.data.error);
+      return { error: postResp.data.error };
+    }
+
+    // Read the invoice's residual + payment_state so the caller (and the
+    // Flow trace) can confirm the reconciliation actually took effect.
+    const invResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move',
+        method: 'read',
+        args: [[Number(invoiceId)], ['amount_total', 'amount_residual', 'payment_state']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const inv = invResp.data?.result?.[0] || {};
+    return {
+      wizardId,
+      amount_total: inv.amount_total,
+      amount_residual: inv.amount_residual,
+      payment_state: inv.payment_state,
+    };
+  } catch (e) {
+    console.error('registerPaymentForInvoiceOdoo exception:', e);
+    return { error: { message: e?.message || String(e) } };
+  }
+};
+
 // Create Account Payment for Odoo
 export const createAccountPaymentOdoo = async ({ partnerId, journalId, amount, invoiceId = null } = {}) => {
   try {
