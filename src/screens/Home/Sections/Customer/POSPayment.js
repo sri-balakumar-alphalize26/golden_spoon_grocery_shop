@@ -178,6 +178,7 @@ const POSPayment = ({ navigation, route }) => {
   // discountType is currently visual-only (both modes ship the same
   // uniform per-line % to Odoo); the toggle is wired so a future
   // per-item-picking flow can drop in without state changes here.
+  const [taxDetailsModalVisible, setTaxDetailsModalVisible] = useState(false);
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountType, setDiscountType] = useState('total');          // 'total' | 'items'
   const [discountFormat, setDiscountFormat] = useState('percentage'); // 'percentage' | 'amount'
@@ -326,27 +327,47 @@ const POSPayment = ({ navigation, route }) => {
   const effectiveDiscountPercent = subtotal > 0
     ? Math.round((computedDiscountAmount / subtotal) * 1000000) / 10000  // 4-decimal precision
     : 0;
-  // Tax amount — sum (post-discount line value × rate) for each cart
-  // product whose taxes_id resolved a non-zero rate. Toggle off → 0, so
-  // it disappears from the breakdown AND we ship tax_ids=[] to Odoo.
+  // Single source of truth for per-line tax. The IIFE-summed total and the
+  // Tax Details popup both call this so they can never disagree.
+  // price_include products already carry the tax inside `price`, so the
+  // visible tax = gross - gross / (1 + rate/100). Tax-exclusive: rate × gross.
+  const computeLineTax = (p) => {
+    const info = productTaxMap[Number(p.remoteId || p.id)];
+    if (!info || !info.rate) return { info, gross: 0, tax: 0, lineTotal: 0 };
+    const price = Number(p.price) || 0;
+    const qty = Number(p.quantity || p.qty || 0);
+    const gross = price * qty * (1 - (effectiveDiscountPercent || 0) / 100);
+    const tax = info.priceInclude
+      ? gross - gross / (1 + info.rate / 100)
+      : gross * info.rate / 100;
+    const lineTotal = info.priceInclude ? gross : gross + tax;
+    return { info, gross, tax, lineTotal };
+  };
+
+  // Tax amount — sum across cart. Toggle off → 0, so it disappears from
+  // the breakdown AND we ship tax_ids=[] to Odoo.
   const taxAmount = (() => {
     if (!withTaxMode) return 0;
     let sum = 0;
     for (const p of products || []) {
-      const pid = Number(p.remoteId || p.id);
-      const info = productTaxMap[pid];
-      if (!info || !info.rate) continue;
-      const price = Number(p.price) || 0;
-      const qty = Number(p.quantity || p.qty || 0);
-      const gross = price * qty * (1 - (effectiveDiscountPercent || 0) / 100);
-      // price_include products already carry the tax inside `price`, so
-      // the visible tax = gross - gross / (1 + rate/100). Tax-exclusive
-      // products: tax = gross * rate / 100.
-      sum += info.priceInclude
-        ? gross - gross / (1 + info.rate / 100)
-        : gross * info.rate / 100;
+      sum += computeLineTax(p).tax;
     }
     return Math.round(sum * 1000) / 1000;
+  })();
+  // If every taxed line in the cart shares the same rate we can annotate
+  // the Tax row in the breakdown with that rate (parallels the existing
+  // Discount (15%) styling). Mixed-rate carts get a plain "Tax" label —
+  // the per-line popup is where the full breakdown lives.
+  const commonTaxRate = (() => {
+    if (!withTaxMode) return null;
+    let r = null;
+    for (const p of products || []) {
+      const info = productTaxMap[Number(p.remoteId || p.id)];
+      if (!info || !info.rate) continue;
+      if (r === null) { r = info.rate; continue; }
+      if (info.rate !== r) return null;
+    }
+    return r;
   })();
   console.log('[WithTax] totals', {
     subtotal,
@@ -1021,10 +1042,19 @@ const POSPayment = ({ navigation, route }) => {
               </View>
             ) : null}
             {withTaxMode && taxAmount > 0 ? (
-              <View style={styles.totalBreakdownRow}>
-                <Text style={styles.totalBreakdownLabel}>Tax</Text>
-                <Text style={styles.totalBreakdownValue}>{displayNum(taxAmount)}</Text>
-              </View>
+              <TouchableOpacity
+                onPress={() => setTaxDetailsModalVisible(true)}
+                activeOpacity={0.7}
+                style={styles.totalBreakdownRow}
+              >
+                <Text style={styles.totalBreakdownLabel}>
+                  {commonTaxRate ? `Tax (${commonTaxRate}%)` : 'Tax'}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={styles.totalBreakdownValue}>{displayNum(taxAmount)}</Text>
+                  <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.85)" />
+                </View>
+              </TouchableOpacity>
             ) : null}
           </View>
         ) : null}
@@ -1288,9 +1318,7 @@ const POSPayment = ({ navigation, route }) => {
               ]}
               numberOfLines={1}
             >
-              {withTaxMode
-                ? (taxAmount > 0 ? `With Tax  +${displayNum(taxAmount)}` : 'With Tax')
-                : 'Without Tax'}
+              {withTaxMode ? 'With Tax' : 'Without Tax'}
             </Text>
           </TouchableOpacity>
           {!totalIsExternal ? (
@@ -1800,6 +1828,104 @@ const POSPayment = ({ navigation, route }) => {
               activeOpacity={0.85}
             >
               <Text style={styles.discountCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Tax Details popup — per-line breakdown shown when the cashier taps
+          the Tax row in the totals breakdown. Mirrors the discount modal's
+          backdrop-dismiss pattern. */}
+      <Modal
+        visible={taxDetailsModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTaxDetailsModalVisible(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setTaxDetailsModalVisible(false)}
+          style={styles.discountOverlay}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={styles.taxModalCard}>
+            <View style={styles.discountHeader}>
+              <View style={styles.discountTitleRow}>
+                <MaterialIcons name="receipt-long" size={22} color={NAVY} />
+                <Text style={styles.discountTitle}>Tax Breakdown</Text>
+              </View>
+              <TouchableOpacity onPress={() => setTaxDetailsModalVisible(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <MaterialIcons name="close" size={22} color={NAVY} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.discountSubtitle}>Total tax {displayNum(taxAmount)}</Text>
+
+            <ScrollView style={styles.taxModalScroll} showsVerticalScrollIndicator={false}>
+              {(products || []).map((p, idx) => {
+                const { info, tax, lineTotal } = computeLineTax(p);
+                const code = p.product_code || p.default_code;
+                const qty = Number(p.quantity || p.qty || 0);
+                const unitPrice = Number(p.price) || 0;
+                const hasTax = !!info && !!info.rate;
+                const lineTotalDisplay = hasTax ? lineTotal : (unitPrice * qty * (1 - (effectiveDiscountPercent || 0) / 100));
+                return (
+                  <View
+                    key={p.id ?? p.remoteId ?? idx}
+                    style={[styles.taxLineCard, !hasTax && styles.taxLineCardMuted]}
+                  >
+                    <View style={styles.taxLineRowTop}>
+                      <Text style={styles.taxLineName} numberOfLines={2}>{p.name || 'Product'}</Text>
+                      {code ? <Text style={styles.taxLineCode}>{String(code)}</Text> : null}
+                    </View>
+                    <View style={styles.taxLineRow}>
+                      <Text style={styles.taxLineMeta}>{`${qty} × ${displayNum(unitPrice)}`}</Text>
+                      <Text style={styles.taxLineMeta}>{`Line total ${displayNum(lineTotalDisplay)}`}</Text>
+                    </View>
+                    {hasTax ? (
+                      <View style={styles.taxLineRow}>
+                        <Text style={styles.taxLineTaxLabel}>
+                          {`Tax ${info.rate}%${info.priceInclude ? ' (included)' : ''}`}
+                        </Text>
+                        <Text style={styles.taxLineTaxValue}>{displayNum(tax)}</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.taxLineRow}>
+                        <Text style={styles.taxLineNoTax}>No tax</Text>
+                        <Text style={styles.taxLineNoTax}>—</Text>
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.taxModalFooter}>
+              <View style={styles.taxFooterRow}>
+                <Text style={styles.taxFooterLabel}>Subtotal</Text>
+                <Text style={styles.taxFooterValue}>{displayNum(subtotal)}</Text>
+              </View>
+              {computedDiscountAmount > 0 ? (
+                <View style={styles.taxFooterRow}>
+                  <Text style={styles.taxFooterLabel}>Discount</Text>
+                  <Text style={[styles.taxFooterValue, { color: '#DC2626' }]}>−{displayNum(computedDiscountAmount)}</Text>
+                </View>
+              ) : null}
+              <View style={styles.taxFooterRow}>
+                <Text style={styles.taxFooterLabel}>Total Tax</Text>
+                <Text style={styles.taxFooterValue}>{displayNum(taxAmount)}</Text>
+              </View>
+              <View style={styles.taxFooterDivider} />
+              <View style={styles.taxFooterRow}>
+                <Text style={styles.taxFooterGrandLabel}>Grand Total</Text>
+                <Text style={styles.taxFooterGrandValue}>{displayNum(total)}</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.taxModalCloseBtn}
+              onPress={() => setTaxDetailsModalVisible(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.taxModalCloseText}>Close</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -2597,5 +2723,139 @@ letterSpacing: 0.4,
     color: '#374151',
     fontFamily: FONT_FAMILY.urbanistBold,
     fontSize: 13,
+  },
+
+  // Tax Details popup — opened by tapping the Tax row in the hero
+  // breakdown. Mirrors the discount popup's card shape so the cashier
+  // sees a familiar layout, but with a scrollable per-line body.
+  taxModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: NAVY,
+    padding: 18,
+    width: '100%',
+    maxWidth: 460,
+    maxHeight: '85%',
+  },
+  taxModalScroll: {
+    marginTop: 10,
+    maxHeight: 320,
+  },
+  taxLineCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+  },
+  taxLineCardMuted: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#e5e7eb',
+    opacity: 0.78,
+  },
+  taxLineRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 4,
+  },
+  taxLineName: {
+    flex: 1,
+    color: NAVY,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  taxLineCode: {
+    color: '#6b7280',
+    fontSize: 10,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  taxLineRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
+  taxLineMeta: {
+    color: '#475569',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  taxLineTaxLabel: {
+    color: ORANGE,
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  taxLineTaxValue: {
+    color: ORANGE,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  taxLineNoTax: {
+    color: '#9ca3af',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    fontStyle: 'italic',
+  },
+  taxModalFooter: {
+    marginTop: 8,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  taxFooterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+  taxFooterLabel: {
+    color: '#475569',
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+  taxFooterValue: {
+    color: NAVY,
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  taxFooterDivider: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
+    marginVertical: 6,
+  },
+  taxFooterGrandLabel: {
+    color: NAVY,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  taxFooterGrandValue: {
+    color: ORANGE,
+    fontSize: 18,
+    fontFamily: FONT_FAMILY.urbanistExtraBold,
+  },
+  taxModalCloseBtn: {
+    marginTop: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: ORANGE,
+    ...ctaShadow(ORANGE),
+  },
+  taxModalCloseText: {
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistExtraBold,
+    fontSize: 14,
+    letterSpacing: 0.3,
   },
 });
