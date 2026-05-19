@@ -34,6 +34,7 @@ import {
 } from '@api/services/generalApi';
 import PayInvoiceModal from '@components/Modal/PayInvoiceModal';
 import ConfirmModal from '@components/Modal/ConfirmModal';
+import { FeatureGate } from '@components/FeatureGate';
 
 const formatDate = (s) => {
   if (!s) return '—';
@@ -448,25 +449,37 @@ const InvoiceDetailScreen = ({ navigation, route }) => {
                 sheet. Available on posted/cancelled (report renders for
                 both); hidden for drafts since Odoo won't render those. */}
             {!isDraft ? (
-              <ActionButton
-                icon="file-download"
-                label={downloading ? 'Downloading…' : 'Download PDF'}
-                onPress={onPreviewPdf}
-                disabled={acting || downloading}
-                variant="secondary"
-              />
+              <FeatureGate featureKey="accounting.invoice.download_pdf">
+                <ActionButton
+                  icon="file-download"
+                  label={downloading ? 'Downloading…' : 'Download PDF'}
+                  onPress={onPreviewPdf}
+                  disabled={acting || downloading}
+                  variant="secondary"
+                />
+              </FeatureGate>
             ) : null}
             {isDraft ? (
-              <ActionButton icon="check-circle" label="Confirm & Post" onPress={onPost} disabled={acting} />
+              <FeatureGate featureKey="accounting.invoice.post">
+                <ActionButton icon="check-circle" label="Confirm & Post" onPress={onPost} disabled={acting} />
+              </FeatureGate>
             ) : null}
             {isPosted && residual > 0 ? (
-              <ActionButton icon="payments" label={`Pay ${formatCurrency(residual, currency)}`} onPress={onPay} disabled={acting} />
+              <FeatureGate featureKey="accounting.invoice.pay">
+                <ActionButton icon="payments" label={`Pay ${formatCurrency(residual, currency)}`} onPress={onPay} disabled={acting} />
+              </FeatureGate>
             ) : null}
             {(isPosted || isCancel) ? (
-              <ActionButton icon="restore" label="Reset to Draft" onPress={onResetToDraft} disabled={acting} variant="secondary" />
+              <FeatureGate featureKey="accounting.invoice.reset_to_draft">
+                <ActionButton icon="restore" label="Reset to Draft" onPress={onResetToDraft} disabled={acting} variant="secondary" />
+              </FeatureGate>
             ) : null}
             {!isCancel && !isDraft ? null : (
-              !isCancel ? <ActionButton icon="cancel" label="Cancel Invoice" onPress={onCancel} disabled={acting} variant="danger" /> : null
+              !isCancel ? (
+                <FeatureGate featureKey="accounting.invoice.cancel">
+                  <ActionButton icon="cancel" label="Cancel Invoice" onPress={onCancel} disabled={acting} variant="danger" />
+                </FeatureGate>
+              ) : null
             )}
           </View>
         </ScrollView>

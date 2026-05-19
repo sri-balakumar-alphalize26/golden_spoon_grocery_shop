@@ -10,15 +10,21 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { MaterialIcons } from '@expo/vector-icons';
 import Modal from 'react-native-modal';
 import Text from '@components/Text';
+import { useAuthStore } from '@stores/auth';
 
 const SUB_TILES = [
-  { label: 'Sales',          icon: 'point-of-sale',          bg: '#E7F1FD', accent: '#1E88E5', journalTypes: ['sale'] },
-  { label: 'Purchases',      icon: 'shopping-cart',          bg: '#FFF3E0', accent: '#FF9800', journalTypes: ['purchase'] },
-  { label: 'Bank & Cash',    icon: 'account-balance-wallet', bg: '#DCFCE7', accent: '#16A34A', journalTypes: ['bank', 'cash'] },
-  { label: 'Miscellaneous',  icon: 'receipt-long',           bg: '#F3E5F5', accent: '#7B2D8E', journalTypes: ['general'] },
+  { label: 'Sales',          icon: 'point-of-sale',          bg: '#E7F1FD', accent: '#1E88E5', journalTypes: ['sale'],            featureKey: 'accounting.journals.sales' },
+  { label: 'Purchases',      icon: 'shopping-cart',          bg: '#FFF3E0', accent: '#FF9800', journalTypes: ['purchase'],        featureKey: 'accounting.journals.purchases' },
+  { label: 'Bank & Cash',    icon: 'account-balance-wallet', bg: '#DCFCE7', accent: '#16A34A', journalTypes: ['bank', 'cash'],    featureKey: 'accounting.journals.bank_cash' },
+  { label: 'Miscellaneous',  icon: 'receipt-long',           bg: '#F3E5F5', accent: '#7B2D8E', journalTypes: ['general'],         featureKey: 'accounting.journals.miscellaneous' },
 ];
 
 const JournalsTilePopup = ({ isVisible, onClose, onPick }) => {
+  // Filter the 4 sub-tiles by the per-tile feature gate. Admin can
+  // hide e.g. "Purchases" for a user; that tile disappears from the
+  // popup for that user.
+  const hiddenFeatures = useAuthStore((s) => s.hiddenFeatures);
+  const visibleTiles = SUB_TILES.filter((t) => !(hiddenFeatures && hiddenFeatures.has && hiddenFeatures.has(t.featureKey)));
   return (
     <Modal
       isVisible={isVisible}
@@ -35,7 +41,7 @@ const JournalsTilePopup = ({ isVisible, onClose, onPick }) => {
       <View style={styles.card}>
         <Text style={styles.title}>Select Journal</Text>
         <View style={styles.grid}>
-          {SUB_TILES.map((t) => (
+          {visibleTiles.map((t) => (
             <TouchableOpacity
               key={t.label}
               style={styles.tile}

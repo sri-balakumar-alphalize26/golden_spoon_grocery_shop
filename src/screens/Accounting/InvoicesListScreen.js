@@ -18,6 +18,7 @@ import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
 import InvoiceFiltersModal from '@components/Modal/InvoiceFiltersModal';
 import InvoiceGroupByModal from '@components/Modal/InvoiceGroupByModal';
 import { SectionList } from 'react-native';
+import { FeatureGate } from '@components/FeatureGate';
 
 const STATE_FILTERS = [
   { key: 'all',    states: [],                       label: 'All' },
@@ -264,26 +265,30 @@ const InvoicesListScreen = ({ navigation }) => {
           All state filtering (Draft/Posted/Cancelled etc.) lives inside
           the Filters popup. */}
       <View style={styles.filterBar}>
-        <TouchableOpacity
-          style={styles.filtersBtn}
-          activeOpacity={0.85}
-          onPress={() => setFiltersModalVisible(true)}
-        >
-          <Icon name="filter-list" size={18} color="#1E88E5" />
-          <Text style={styles.filtersBtnText}>
-            {filterKeys.length > 0 ? `Filters (${filterKeys.length})` : 'Filters'}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filtersBtn, { marginLeft: 8 }]}
-          activeOpacity={0.85}
-          onPress={() => setGroupByModalVisible(true)}
-        >
-          <Icon name="layers" size={18} color="#1E88E5" />
-          <Text style={styles.filtersBtnText}>
-            {groupBy ? `Group: ${groupBy}` : 'Group By'}
-          </Text>
-        </TouchableOpacity>
+        <FeatureGate featureKey="accounting.invoice.filters">
+          <TouchableOpacity
+            style={styles.filtersBtn}
+            activeOpacity={0.85}
+            onPress={() => setFiltersModalVisible(true)}
+          >
+            <Icon name="filter-list" size={18} color="#1E88E5" />
+            <Text style={styles.filtersBtnText}>
+              {filterKeys.length > 0 ? `Filters (${filterKeys.length})` : 'Filters'}
+            </Text>
+          </TouchableOpacity>
+        </FeatureGate>
+        <FeatureGate featureKey="accounting.invoice.group_by">
+          <TouchableOpacity
+            style={[styles.filtersBtn, { marginLeft: 8 }]}
+            activeOpacity={0.85}
+            onPress={() => setGroupByModalVisible(true)}
+          >
+            <Icon name="layers" size={18} color="#1E88E5" />
+            <Text style={styles.filtersBtnText}>
+              {groupBy ? `Group: ${groupBy}` : 'Group By'}
+            </Text>
+          </TouchableOpacity>
+        </FeatureGate>
       </View>
       <RoundedContainer>
         {loading ? (

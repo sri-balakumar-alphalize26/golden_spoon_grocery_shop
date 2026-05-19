@@ -967,6 +967,11 @@ export const fetchJournalEntriesOdoo = async ({
         ['partner_id.name', 'ilike', term],
       );
     }
+    // "See own data only" scope — restrict to moves authored by the
+    // logged-in user when the admin has hidden the feature for them.
+    if (_ownDataOnly() && _currentUid()) {
+      domain.push(['invoice_user_id', '=', _currentUid()]);
+    }
     const companyId = getActiveCompanyId();
     const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
@@ -1024,6 +1029,12 @@ export const fetchPartnerLedgerOdoo = async ({
         ['move_id.name', 'ilike', term],
         ['account_id.name', 'ilike', term],
       );
+    }
+    // "See own data only" scope — restrict to lines whose parent move
+    // was authored by the logged-in user. Traversing via `move_id` works
+    // because every account.move.line has a move_id ref.
+    if (_ownDataOnly() && _currentUid()) {
+      domain.push(['move_id.invoice_user_id', '=', _currentUid()]);
     }
     const companyId = getActiveCompanyId();
     const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -1088,6 +1099,11 @@ export const fetchCustomerInvoicesOdoo = async ({
       const today = new Date().toISOString().slice(0, 10);
       domain.push(['invoice_date_due', '<', today]);
       domain.push(['payment_state', 'not in', ['paid', 'reversed']]);
+    }
+    // "See own data only" scope — restrict to invoices authored by the
+    // logged-in user when the admin has hidden the feature for them.
+    if (_ownDataOnly() && _currentUid()) {
+      domain.push(['invoice_user_id', '=', _currentUid()]);
     }
     const companyId = getActiveCompanyId();
     const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -2116,6 +2132,30 @@ const getActiveCompanyId = () => {
     const n = Number(id);
     return Number.isFinite(n) && n > 0 ? n : 1;
   } catch (_) { return 1; }
+};
+
+// "See own data only" scope filter — wired to the
+// `accounting.see_all_data` app-privilege feature key. Admins enable the
+// feature → users see every record. When the admin HIDES the feature
+// for a specific user, that user's fetches get a `user_id = <my uid>`
+// (or invoice_user_id) domain leaf, scoping the list to their own
+// records. Returns true when the gate is in the hiddenFeatures set.
+const _ownDataOnly = () => {
+  try {
+    const s = useAuthStore.getState();
+    const hidden = s?.hiddenFeatures;
+    return !!(hidden && typeof hidden.has === 'function' && hidden.has('accounting.see_all_data'));
+  } catch (_) { return false; }
+};
+// Resolve the current Odoo user's uid from the auth store. Used as the
+// scoping value when _ownDataOnly() is true.
+const _currentUid = () => {
+  try {
+    const u = useAuthStore.getState().user || {};
+    const uid = u.uid ?? u.id ?? null;
+    const n = Number(uid);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch (_) { return null; }
 };
 
 // Debugging output for useAuthStore
@@ -6890,6 +6930,11 @@ export const fetchOrdersOdoo = async ({
       domain.push(['state', '=', stateList[0]]);
     } else if (stateList.length > 1) {
       domain.push(['state', 'in', stateList]);
+    }
+    // App-privilege "See own data only" — scope to records authored by
+    // the logged-in user when the admin has hidden the feature.
+    if (_ownDataOnly() && _currentUid()) {
+      domain.push(['user_id', '=', _currentUid()]);
     }
 
     const companyId = getActiveCompanyId();
