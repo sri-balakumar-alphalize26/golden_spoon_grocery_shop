@@ -3,10 +3,14 @@ import {
   View,
   StyleSheet,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   ActivityIndicator,
   Platform,
   ScrollView,
+  Modal,
+  Dimensions,
 } from 'react-native';
+import { Calendar } from 'react-native-calendars';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -72,6 +76,30 @@ const formatDate = (s) => {
   return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
+// Date-range filter helpers — mirror SalesReportScreen pattern so the
+// chips behave identically across screens.
+const isoDateOnly = (d) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+const parseIsoDate = (s) => {
+  if (!s) return null;
+  const [y, m, d] = String(s).split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+};
+const fmtDt = (d) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
+const DATE_FILTERS = [
+  { key: 'all',    label: 'All Time'       },
+  { key: '7d',     label: 'Last 7 Days'    },
+  { key: '30d',    label: 'Last 30 Days'   },
+  { key: 'custom', label: 'Custom Range…'  },
+];
+
 const ExpensesScreen = ({ navigation }) => {
   const authUser = useAuthStore((state) => state.user);
   const currency = useAuthStore((state) => state.currency) || { symbol: '', name: '', position: 'before' };
@@ -96,6 +124,52 @@ const ExpensesScreen = ({ navigation }) => {
   const [pdfBusy, setPdfBusy] = useState(false);
   const [xlsBusy, setXlsBusy] = useState(false);
 
+  // Date-range filter (server-side narrowing on hr.expense.date).
+  const [dateFilter, setDateFilter] = useState('all');             // 'all' | '7d' | '30d' | 'custom'
+  const [customStart, setCustomStart] = useState(isoDateOnly(new Date()));
+  const [customEnd, setCustomEnd]     = useState(isoDateOnly(new Date()));
+  const [calendarOpen, setCalendarOpen] = useState(null);          // 'from' | 'to' | null
+  const [menuOpen, setMenuOpen] = useState(null);                  // 'date' | null — drives the radio popup
+
+  // Label shown on the dropdown-pill trigger.
+  const dateRangeLabel = (() => {
+    switch (dateFilter) {
+      case 'all':    return 'All Time';
+      case '7d':     return 'Last 7 Days';
+      case '30d':    return 'Last 30 Days';
+      case 'custom': return `${customStart} → ${customEnd}`;
+      default:       return 'All Time';
+    }
+  })();
+  const dateActive = dateFilter !== 'all';
+
+  // Translate the active date chip into ISO date-time bounds for the
+  // hr.expense.date domain clause. 'all' → no bounds.
+  const getDateRange = () => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    switch (dateFilter) {
+      case 'all': return { startDate: null, endDate: null };
+      case '7d': {
+        const s = new Date(today); s.setDate(today.getDate() - 7);
+        return { startDate: fmtDt(s), endDate: fmtDt(endOfToday) };
+      }
+      case '30d': {
+        const s = new Date(today); s.setDate(today.getDate() - 30);
+        return { startDate: fmtDt(s), endDate: fmtDt(endOfToday) };
+      }
+      case 'custom': {
+        const s = parseIsoDate(customStart);
+        const e = parseIsoDate(customEnd);
+        if (!s || !e) return { startDate: null, endDate: null };
+        const eEnd = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+        return { startDate: fmtDt(s), endDate: fmtDt(eEnd) };
+      }
+      default: return { startDate: null, endDate: null };
+    }
+  };
+
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     () => loadList(employee?.id),
     400
@@ -116,8 +190,9 @@ const ExpensesScreen = ({ navigation }) => {
     if (!employeeId) return;
     setLoading(true);
     try {
+      const { startDate, endDate } = getDateRange();
       const [rows, sums] = await Promise.all([
-        fetchExpensesOdoo({ searchText, state: null, limit: 500 }),
+        fetchExpensesOdoo({ searchText, state: null, startDate, endDate, limit: 500 }),
         fetchExpenseTotalsOdoo({ employeeId }),
       ]);
       setData(rows || []);
@@ -125,7 +200,8 @@ const ExpensesScreen = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
-  }, [searchText]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchText, dateFilter, customStart, customEnd]);
 
   useFocusEffect(
     useCallback(() => {
@@ -324,6 +400,22 @@ const ExpensesScreen = ({ navigation }) => {
             </TouchableOpacity>
           );
         })}
+        {/* Date-range dropdown pill — sits as the last chip in the row so it
+            shares horizontal space with Draft/Submitted/…/Refused chips. */}
+        <TouchableOpacity
+          style={[styles.filterBarPill, dateActive && styles.filterBarPillActive]}
+          activeOpacity={0.85}
+          onPress={() => setMenuOpen('date')}
+        >
+          <MaterialIcons name="event" size={14} color={dateActive ? '#fff' : NAVY} />
+          <Text
+            numberOfLines={1}
+            style={[styles.filterBarPillText, dateActive && styles.filterBarPillTextActive]}
+          >
+            {dateRangeLabel}
+          </Text>
+          <MaterialIcons name="arrow-drop-down" size={16} color={dateActive ? '#fff' : NAVY} />
+        </TouchableOpacity>
       </ScrollView>
       <View style={styles.exportGroup}>
         <TouchableOpacity
@@ -474,6 +566,184 @@ const ExpensesScreen = ({ navigation }) => {
         ) : null}
       </RoundedContainer>
       <OverlayLoader visible={loading && (!data || data.length === 0)} />
+
+      {/* Date-Range dropdown popup — radio-list of presets (mirrors SalesReport). */}
+      <Modal
+        visible={menuOpen === 'date'}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setMenuOpen(null)}
+      >
+        <TouchableWithoutFeedback onPress={() => setMenuOpen(null)}>
+          <View style={styles.menuBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.menuCard}>
+                <View style={styles.menuHead}>
+                  <Text style={styles.menuTitle}>Date Range</Text>
+                  <TouchableOpacity
+                    onPress={() => setMenuOpen(null)}
+                    style={styles.calendarCloseBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#1a1a2e" />
+                  </TouchableOpacity>
+                </View>
+                {DATE_FILTERS.map((opt) => {
+                  const active = dateFilter === opt.key;
+                  return (
+                    <TouchableOpacity
+                      key={opt.key}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        if (opt.key === 'custom') {
+                          setDateFilter('custom');
+                          setMenuOpen(null);
+                          setCalendarOpen('from');
+                        } else {
+                          setDateFilter(opt.key);
+                          setMenuOpen(null);
+                        }
+                      }}
+                      style={styles.menuRow}
+                    >
+                      <MaterialIcons
+                        name={active ? 'radio-button-checked' : 'radio-button-unchecked'}
+                        size={18}
+                        color={active ? NAVY : '#cbd5e1'}
+                      />
+                      <Text
+                        style={[
+                          styles.menuRowText,
+                          active && { color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
+                        ]}
+                      >
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Custom date-range picker — matches SalesReport's pattern: FROM / TO
+          boxes at the top show the current values, the active step has a
+          navy border + lavender fill, the calendar disables future dates
+          and paints the range between start and end. */}
+      <Modal
+        visible={!!calendarOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setCalendarOpen(null)}
+      >
+        <TouchableWithoutFeedback onPress={() => setCalendarOpen(null)}>
+          <View style={styles.calendarBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.calendarCard}>
+                <View style={styles.calendarHead}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.calendarTitle}>
+                      {calendarOpen === 'from' ? 'Pick start date' : 'Pick end date'}
+                    </Text>
+                    <Text style={styles.calendarSubtitle}>
+                      {calendarOpen === 'from' ? 'Step 1 of 2' : 'Step 2 of 2'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setCalendarOpen(null)}
+                    style={styles.calendarCloseBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#1a1a2e" />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.fromToRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setCalendarOpen('from')}
+                    style={[
+                      styles.fromToCell,
+                      calendarOpen === 'from' && styles.fromToCellActive,
+                    ]}
+                  >
+                    <Text style={styles.fromToLabel}>FROM</Text>
+                    <Text style={styles.fromToValue}>{customStart || '—'}</Text>
+                  </TouchableOpacity>
+                  <View style={styles.fromToArrow}>
+                    <MaterialIcons name="arrow-forward" size={16} color={MUTED} />
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setCalendarOpen('to')}
+                    style={[
+                      styles.fromToCell,
+                      calendarOpen === 'to' && styles.fromToCellActive,
+                    ]}
+                  >
+                    <Text style={styles.fromToLabel}>TO</Text>
+                    <Text style={styles.fromToValue}>
+                      {customEnd && customEnd !== customStart ? customEnd : '—'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <Calendar
+                  current={calendarOpen === 'from' ? customStart : customEnd}
+                  maxDate={isoDateOnly(new Date())}
+                  onDayPress={({ dateString }) => {
+                    if (calendarOpen === 'from') {
+                      setCustomStart(dateString);
+                      setCustomEnd(dateString);
+                      setCalendarOpen('to');
+                    } else {
+                      let to = dateString;
+                      let from = customStart;
+                      if (to < from) { from = to; }
+                      setCustomEnd(to);
+                      setCustomStart(from);
+                      setCalendarOpen(null);
+                    }
+                  }}
+                  markedDates={(() => {
+                    const m = {};
+                    if (customStart) {
+                      m[customStart] = { startingDay: true, color: NAVY, textColor: '#fff' };
+                    }
+                    if (customEnd && customEnd !== customStart) {
+                      m[customEnd] = { endingDay: true, color: NAVY, textColor: '#fff' };
+                      try {
+                        const s = new Date(customStart);
+                        const e = new Date(customEnd);
+                        const cur = new Date(s);
+                        cur.setDate(cur.getDate() + 1);
+                        while (cur < e) {
+                          m[isoDateOnly(cur)] = { color: '#eef0f5', textColor: NAVY };
+                          cur.setDate(cur.getDate() + 1);
+                        }
+                      } catch (_) {}
+                    }
+                    return m;
+                  })()}
+                  markingType="period"
+                  theme={{
+                    backgroundColor: '#fff',
+                    calendarBackground: '#fff',
+                    selectedDayBackgroundColor: NAVY,
+                    selectedDayTextColor: '#fff',
+                    todayTextColor: ORANGE,
+                    arrowColor: NAVY,
+                    monthTextColor: NAVY,
+                    textMonthFontWeight: '700',
+                    textDayHeaderFontWeight: '700',
+                    textDayFontWeight: '600',
+                  }}
+                />
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -519,6 +789,156 @@ const styles = StyleSheet.create({
     height: 48,
     paddingTop: 6,
     paddingBottom: 6,
+  },
+  filterBarPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: NAVY,
+  },
+  filterBarPillActive: {
+    backgroundColor: NAVY,
+  },
+  filterBarPillText: {
+    fontSize: 12,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  filterBarPillTextActive: { color: '#fff' },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  menuCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 16, shadowOffset: { width: 0, height: 6 } },
+      android: { elevation: 12 },
+    }),
+  },
+  menuHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef0f5',
+  },
+  menuTitle: {
+    fontSize: 15,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f4f5f9',
+  },
+  menuRowText: {
+    fontSize: 13,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistMedium,
+  },
+
+  calendarBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  calendarCard: {
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: Math.min(Dimensions.get('window').height * 0.85, 600),
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } },
+      android: { elevation: 14 },
+    }),
+  },
+  calendarHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef0f5',
+  },
+  calendarTitle: {
+    fontSize: 16,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.2,
+  },
+  calendarSubtitle: {
+    fontSize: 11,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    marginTop: 2,
+  },
+  calendarCloseBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  fromToRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 6,
+    gap: 8,
+  },
+  fromToCell: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#fff',
+  },
+  fromToCellActive: {
+    borderColor: NAVY,
+    backgroundColor: '#f5f4ff',
+  },
+  fromToLabel: {
+    fontSize: 10,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+  },
+  fromToValue: {
+    fontSize: 13,
+    color: '#1a1a2e',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    marginTop: 2,
+  },
+  fromToArrow: {
+    paddingHorizontal: 2,
   },
   exportGroup: {
     flexDirection: 'row',

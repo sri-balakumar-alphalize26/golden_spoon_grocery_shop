@@ -7080,7 +7080,7 @@ const HR_EXPENSE_STATE_ALIASES = {
 // List of hr.expense rows for the current employee. Optional state filter
 // ('draft' | 'reported'/'submitted' | 'approved' | 'done'/'paid' | 'refused')
 // and a free-text search across the description.
-export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = null, offset = 0, limit = 50 } = {}) => {
+export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = null, startDate = null, endDate = null, offset = 0, limit = 50 } = {}) => {
   const baseUrl = getOdooUrl();
   // No explicit employee filter by default — let Odoo's own access rules
   // decide what the logged-in user can see. Admins/managers see every
@@ -7100,6 +7100,11 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
     const states = HR_EXPENSE_STATE_ALIASES[state] || [state];
     domain = domain.concat([['state', 'in', states]]);
   }
+  // Date-range narrowing on hr.expense.date (the expense date — same field
+  // the row meta + list view show). Drives the All Time / 7 Days / 30 Days
+  // / Custom chip row on the Expenses screen.
+  if (startDate) domain = domain.concat([['date', '>=', startDate]]);
+  if (endDate)   domain = domain.concat([['date', '<=', endDate]]);
   // Three-step fetch:
   //   1. richFields  — everything (works on Odoo 14–17 with sheets)
   //   2. midFields   — drops `sheet_id` (Odoo 18+ removed it) but keeps
