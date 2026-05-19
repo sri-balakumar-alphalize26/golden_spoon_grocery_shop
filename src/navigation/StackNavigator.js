@@ -28,6 +28,9 @@ import POSPayment from "@screens/Home/Sections/Customer/POSPayment";
 import TakeoutDelivery from '@screens/Home/Sections/Customer/TakeoutDelivery';
 import CreateInvoice from '@screens/Home/Sections/Customer/CreateInvoice';
 import CreateInvoicePreview from '@screens/Home/Sections/Customer/CreateInvoicePreview';
+import InvoicesListScreen from '../screens/Accounting/InvoicesListScreen';
+import JournalEntriesListScreen from '../screens/Accounting/JournalEntriesListScreen';
+import PartnerLedgerScreen from '../screens/Accounting/PartnerLedgerScreen';
 import { InventoryDetails, InventoryForm, InventoryScreen } from "@screens/Home/Options/Inventory";
 import { ProductDetail } from "@components/common/Detail";
 import {
@@ -180,6 +183,21 @@ const StackNavigator = () => {
       <Stack.Screen
         name="CreateInvoicePreview"
         component={CreateInvoicePreview}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="InvoicesListScreen"
+        component={InvoicesListScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="JournalEntriesListScreen"
+        component={JournalEntriesListScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="PartnerLedgerScreen"
+        component={PartnerLedgerScreen}
         options={{ headerShown: false }}
       />
       {/* Splash Screen */}

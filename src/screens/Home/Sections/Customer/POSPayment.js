@@ -96,7 +96,11 @@ const POSPayment = ({ navigation, route }) => {
       .catch(() => {});
   }, []);
 
-  const [invoiceChecked, setInvoiceChecked] = useState(false);
+  // Invoice defaults to ON — accounting wants an invoice on every sale.
+  // Tapping the button to uncheck triggers a confirmation modal that
+  // explains the tax-reconciliation risk before flipping it off.
+  const [invoiceChecked, setInvoiceChecked] = useState(true);
+  const [invoiceUncheckModalVisible, setInvoiceUncheckModalVisible] = useState(false);
   // "With Tax" toggle — defaults to ON so existing tax-bearing products
   // continue to display their server-computed tax. Flipping it OFF tells
   // submitPosOrderToOdoo to override product.taxes_id with an empty set
@@ -138,6 +142,11 @@ const POSPayment = ({ navigation, route }) => {
   };
   const [journals, setJournals] = useState([]);
   const [paymentMode, setPaymentMode] = useState('cash');
+  // Inline "pay now via" selector inside Credit mode. When set to 'cash'
+  // or 'card' the cashier is doing a partial split — the typed amount
+  // goes to that method NOW, the remainder posts to Credit. Null means
+  // full Credit (charge everything to the customer's account).
+  const [creditNowMethod, setCreditNowMethod] = useState(null);
   useEffect(() => {
     if (paymentMode === 'account') {
       console.log('Journals available for account payment:', journals);
@@ -645,10 +654,55 @@ const POSPayment = ({ navigation, route }) => {
               payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
               console.log(`💳 Card payment: Total=${total}`);
             } else if (paymentMode === 'credit') {
-              payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
-              console.log(`💳 Credit payment: Total=${total}`);
+              // Inline credit-partial path — when a "Pay Now via" method is
+              // picked and the now amount is between 0 and total, split the
+              // payment into two pos.payment records: Cash/Card for now,
+              // Credit for the due remainder. Otherwise fall through to
+              // full Credit single payment (existing behaviour).
+              const doPartial = !!creditNowMethod
+                && creditNowAmount > 0
+                && creditDueAmount > 0
+                && !creditDueOverdrawn;
+              console.log('[Payment] credit submit', {
+                creditNowMethod,
+                creditNowAmount,
+                creditDueAmount,
+                doPartial,
+                customer: customer?.id || customer?._id,
+              });
+              if (doPartial) {
+                const nowMethod = creditNowMethod === 'cash' ? cashMethod : cardMethod;
+                if (!nowMethod) {
+                  Toast.show({
+                    type: 'error',
+                    text1: 'Payment Error',
+                    text2: `${creditNowMethod === 'cash' ? 'Cash' : 'Card'} payment method is not configured on this register.`,
+                    position: 'bottom',
+                  });
+                  return;
+                }
+                const nowJournalId = Array.isArray(nowMethod.journal_id) ? nowMethod.journal_id[0] : nowMethod.journal_id;
+                payments.length = 0; // reset to ensure clean 2-row split
+                payments.push({
+                  amount: creditNowAmount,
+                  paymentMethodId: nowMethod.id,
+                  journalId: nowJournalId,
+                  paymentMode: creditNowMethod,
+                });
+                payments.push({
+                  amount: creditDueAmount,
+                  paymentMethodId,
+                  journalId,
+                  paymentMode: 'credit',
+                });
+                paymentMethodLabel = `${nowMethod.name} + ${method.name || 'Credit'}`;
+                console.log('[Payment] credit partial split, payments=', payments);
+              } else {
+                payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
+                console.log(`💳 Credit payment: Total=${total}`);
+              }
             }
-            paymentMethodLabel = method.name || (
+            paymentMethodLabel = paymentMethodLabel || method.name || (
               paymentMode === 'card'   ? 'Card'   :
               paymentMode === 'credit' ? 'Credit' :
                                          'Cash'
@@ -795,7 +849,34 @@ const POSPayment = ({ navigation, route }) => {
             }
 
             const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
-              if (shouldCreateInvoice) {
+              // Check whether sync_from_ui already created an account.move
+              // for this order (it does when we ship `to_invoice: true` in
+              // the payload — see submitPosOrderToOdoo). If yes, the order
+              // is already in Accounting → Customers → Invoices and the
+              // legacy manual createInvoiceOdoo path would just duplicate
+              // it. Skip the manual call in that case.
+              let existingAccountMoveId = null;
+              try {
+                const moveCheck = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+                  jsonrpc: '2.0',
+                  method: 'call',
+                  params: {
+                    model: 'pos.order',
+                    method: 'read',
+                    args: [[createdOrderId], ['account_move']],
+                    kwargs: {},
+                  },
+                }, { headers: odooHeaders() });
+                const am = moveCheck.data?.result?.[0]?.account_move;
+                existingAccountMoveId = Array.isArray(am) ? am[0] : (am || null);
+                if (existingAccountMoveId) {
+                  invoiceInfo = { id: existingAccountMoveId, number: Array.isArray(am) ? am[1] : null };
+                  console.log('[INVOICE] sync_from_ui already created account.move', existingAccountMoveId, '— skipping manual createInvoiceOdoo');
+                }
+              } catch (chkErr) {
+                console.warn('[INVOICE] account_move check failed:', chkErr?.message || chkErr);
+              }
+              if (shouldCreateInvoice && !existingAccountMoveId) {
                 try {
                   const actualTotal = Math.round(Number(totalAmount) * 1000) / 1000 || 0;
                   console.log('[INVOICE] Creating invoice for POS order', createdOrderId, 'totalAmount:', actualTotal);
@@ -983,6 +1064,15 @@ const POSPayment = ({ navigation, route }) => {
     || (paymentMode === 'split'
         && (splitSlot1.methodKey === 'credit' || splitSlot2.methodKey === 'credit'));
   const creditNeedsCustomer = creditSelected && !customer;
+  // Credit-partial derivations — when a "pay now via" method is picked
+  // inside Credit mode, the keypad-driven paidAmount is the now portion
+  // and the remainder becomes Credit. When no method is picked we treat
+  // the whole total as Credit (now = 0, due = total).
+  const creditNowAmount = (paymentMode === 'credit' && creditNowMethod) ? paidAmount : 0;
+  const creditDueAmount = paymentMode === 'credit'
+    ? Math.max(0, total - creditNowAmount)
+    : 0;
+  const creditDueOverdrawn = !!creditNowMethod && creditNowAmount > total + 0.001;
 
   // Split-payment validity — both amounts > 0, sum matches the total within
   // 0.01 tolerance, and the two slots reference different chip keys (same
@@ -1018,6 +1108,15 @@ const POSPayment = ({ navigation, route }) => {
     // the customer-required popup before anything else.
     if (creditNeedsCustomer) {
       setCustomerModalVisible(true);
+      return;
+    }
+    if (creditDueOverdrawn) {
+      Toast.show({
+        type: 'error',
+        text1: 'Amount too high',
+        text2: 'The "pay now" amount is greater than the order total.',
+        position: 'bottom',
+      });
       return;
     }
     if (paymentMode === 'split') {
@@ -1066,9 +1165,14 @@ const POSPayment = ({ navigation, route }) => {
         <Text style={styles.totalValue}>{displayNum(total)}</Text>
         {(computedDiscountAmount > 0 || (withTaxMode && taxAmount > 0)) ? (
           <View style={styles.totalBreakdown}>
+            {/* Every row reserves an 18px chevron slot at its right edge so
+                the price texts form a single straight column regardless of
+                whether the row is tappable. The Tax row fills the slot with
+                a chevron icon; other rows leave it empty. */}
             <View style={styles.totalBreakdownRow}>
               <Text style={styles.totalBreakdownLabel}>Subtotal</Text>
               <Text style={styles.totalBreakdownValue}>{displayNum(subtotal)}</Text>
+              <View style={styles.totalBreakdownChevronSlot} />
             </View>
             {computedDiscountAmount > 0 ? (
               <View style={styles.totalBreakdownRow}>
@@ -1076,6 +1180,7 @@ const POSPayment = ({ navigation, route }) => {
                   Discount {discountFormat === 'amount' ? '(amount)' : `(${discountPercent}%)`}
                 </Text>
                 <Text style={[styles.totalBreakdownValue, styles.totalBreakdownDiscount]}>−{displayNum(computedDiscountAmount)}</Text>
+                <View style={styles.totalBreakdownChevronSlot} />
               </View>
             ) : null}
             {withTaxMode && taxAmount > 0 ? (
@@ -1087,9 +1192,9 @@ const POSPayment = ({ navigation, route }) => {
                 <Text style={styles.totalBreakdownLabel}>
                   {commonTaxRate ? `Tax (${commonTaxRate}%)` : 'Tax'}
                 </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={styles.totalBreakdownValue}>{displayNum(taxAmount)}</Text>
-                  <MaterialIcons name="chevron-right" size={18} color="rgba(255,255,255,0.85)" />
+                <Text style={styles.totalBreakdownValue}>{displayNum(taxAmount)}</Text>
+                <View style={styles.totalBreakdownChevronSlot}>
+                  <MaterialIcons name="chevron-right" size={16} color="rgba(255,255,255,0.85)" />
                 </View>
               </TouchableOpacity>
             ) : null}
@@ -1107,6 +1212,8 @@ const POSPayment = ({ navigation, route }) => {
           <View style={styles.modeRow}>
             {renderModeCard('cash', 'Cash', 'payments', async () => {
               setPaymentMode('cash');
+              setCreditNowMethod(null);
+              setInputAmount('');
               const cashJournal = journals.find((j) => j.id === 16) || journals.find((j) => j.type === 'cash') || { id: 16, name: 'Cash', type: 'cash' };
               setSelectedJournal(cashJournal);
               setTimeout(async () => {
@@ -1130,6 +1237,8 @@ const POSPayment = ({ navigation, route }) => {
             })}
             {renderModeCard('card', 'Card', 'credit-card', async () => {
               setPaymentMode('card');
+              setCreditNowMethod(null);
+              setInputAmount('');
               const cardJournal = journals.find((j) => j.id === 6) || journals.find((j) => j.type === 'bank');
               setSelectedJournal(cardJournal);
               setTimeout(async () => {
@@ -1146,9 +1255,15 @@ const POSPayment = ({ navigation, route }) => {
               // looks it up by name from the cached posPaymentMethods list,
               // so no journal lookup is needed here.
               setPaymentMode('credit');
+              // Entering Credit fresh starts with no "now" method picked —
+              // full credit by default. Clear any stale typed amount.
+              setCreditNowMethod(null);
+              setInputAmount('');
             })}
             {renderModeCard('split', 'Split\nPayment', 'call-split', () => {
               setPaymentMode('split');
+              setCreditNowMethod(null);
+              setInputAmount('');
               // Default slot 2 amount to (total - slot1) on first open so the
               // common 50/50 case takes one less tap.
               setSplitSlot1((s) => ({ ...s, amount: s.amount || '' }));
@@ -1185,17 +1300,46 @@ const POSPayment = ({ navigation, route }) => {
             </View>
           ) : null}
 
-          {/* Amount input panel — hidden in split mode because the amounts
-              live inside the partial-payment popup instead. */}
-          {paymentMode !== 'split' ? (
+          {/* Credit mode — inline "Pay Now via" Cash/Card chips so the
+              cashier can split the now-vs-due portions in one view without
+              opening the Split popup. The keypad below feeds the now
+              amount; the remainder posts to Credit on the customer's
+              receivable account. */}
+          {paymentMode === 'credit' ? (
             <View style={styles.inputCard}>
-              <Text style={styles.inputModeLabel}>
-                {paymentMode === 'account' ? 'CHARGED TO ACCOUNT' : (paymentMode === 'card' ? 'CARD' : 'CASH')}
-              </Text>
+              <Text style={styles.inputModeLabel}>CREDIT (CUSTOMER ACCOUNT)</Text>
 
-              {paymentMode === 'account' ? (
-                <Text style={styles.inputAmount}>{displayNum(total)}</Text>
-              ) : (
+              <View style={styles.creditNowRow}>
+                <Text style={styles.creditNowLabel}>Pay now via:</Text>
+                <TouchableOpacity
+                  style={[styles.creditNowChip, creditNowMethod === 'cash' && styles.creditNowChipActive]}
+                  onPress={() => {
+                    const next = creditNowMethod === 'cash' ? null : 'cash';
+                    console.log('[Payment] credit now method →', next);
+                    setCreditNowMethod(next);
+                    setInputAmount('');
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="payments" size={14} color={creditNowMethod === 'cash' ? '#fff' : NAVY} />
+                  <Text style={[styles.creditNowChipText, creditNowMethod === 'cash' && styles.creditNowChipTextActive]}>Cash</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.creditNowChip, creditNowMethod === 'card' && styles.creditNowChipActive]}
+                  onPress={() => {
+                    const next = creditNowMethod === 'card' ? null : 'card';
+                    console.log('[Payment] credit now method →', next);
+                    setCreditNowMethod(next);
+                    setInputAmount('');
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="credit-card" size={14} color={creditNowMethod === 'card' ? '#fff' : NAVY} />
+                  <Text style={[styles.creditNowChipText, creditNowMethod === 'card' && styles.creditNowChipTextActive]}>Card</Text>
+                </TouchableOpacity>
+              </View>
+
+              {creditNowMethod ? (
                 <View style={styles.inputRow}>
                   <Text style={styles.inputAmount}>
                     {inputAmount ? displayNum(paidAmount) : '0'}
@@ -1206,32 +1350,54 @@ const POSPayment = ({ navigation, route }) => {
                     </TouchableOpacity>
                   ) : null}
                 </View>
+              ) : (
+                <Text style={styles.inputAmount}>{displayNum(total)}</Text>
               )}
 
-              {paymentMode !== 'account' ? (
-                <View style={styles.statusPillRow}>
-                  {(isRefund ? remaining < 0 : remaining > 0) ? (
-                    <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
-                      <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
-                      <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
-                        Remaining {displayNum(remaining)}
-                      </Text>
-                    </View>
-                  ) : (isRefund ? remaining > 0 : remaining < 0) ? (
-                    <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
-                      <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
-                      <Text style={[styles.statusPillText, { color: '#15803d' }]}>
-                        Change {displayNum(Math.abs(remaining))}
-                      </Text>
-                    </View>
-                  ) : (
-                    <View style={[styles.statusPill, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
-                      <MaterialIcons name="check-circle" size={14} color="#1d4ed8" />
-                      <Text style={[styles.statusPillText, { color: '#1d4ed8' }]}>Exact amount</Text>
-                    </View>
-                  )}
-                </View>
-              ) : null}
+              <Text style={[styles.creditDueLine, creditDueOverdrawn && { color: '#b91c1c' }]}>
+                {`Credit (due): ${displayNum(creditDueAmount)}`}
+                {customer ? `  → ${customer.name || customer.display_name || 'customer'}` : ''}
+              </Text>
+            </View>
+          ) : paymentMode !== 'split' ? (
+            <View style={styles.inputCard}>
+              <Text style={styles.inputModeLabel}>
+                {paymentMode === 'card' ? 'CARD' : 'CASH'}
+              </Text>
+
+              <View style={styles.inputRow}>
+                <Text style={styles.inputAmount}>
+                  {inputAmount ? displayNum(paidAmount) : '0'}
+                </Text>
+                {inputAmount ? (
+                  <TouchableOpacity onPress={() => setInputAmount('')} style={styles.clearBtn}>
+                    <MaterialIcons name="close" size={20} color="#dc2626" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <View style={styles.statusPillRow}>
+                {(isRefund ? remaining < 0 : remaining > 0) ? (
+                  <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
+                    <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
+                    <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
+                      Remaining {displayNum(remaining)}
+                    </Text>
+                  </View>
+                ) : (isRefund ? remaining > 0 : remaining < 0) ? (
+                  <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
+                    <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
+                    <Text style={[styles.statusPillText, { color: '#15803d' }]}>
+                      Change {displayNum(Math.abs(remaining))}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={[styles.statusPill, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+                    <MaterialIcons name="check-circle" size={14} color="#1d4ed8" />
+                    <Text style={[styles.statusPillText, { color: '#1d4ed8' }]}>Exact amount</Text>
+                  </View>
+                )}
+              </View>
             </View>
           ) : null}
 
@@ -1259,7 +1425,15 @@ const POSPayment = ({ navigation, route }) => {
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => setInvoiceChecked((v) => !v)}
+                onPress={() => {
+                  if (invoiceChecked) {
+                    console.log('[Payment] invoice uncheck attempted — opening warning');
+                    setInvoiceUncheckModalVisible(true);
+                  } else {
+                    console.log('[Payment] invoice re-checked');
+                    setInvoiceChecked(true);
+                  }
+                }}
                 activeOpacity={0.85}
                 style={[styles.calcInvoiceBtn, invoiceChecked && styles.calcInvoiceBtnActive]}
               >
@@ -1272,6 +1446,26 @@ const POSPayment = ({ navigation, route }) => {
                   ]}
                 >
                   {invoiceChecked ? <MaterialIcons name="check" size={12} color="#fff" /> : null}
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[Payment] withTax toggled →', !withTaxMode);
+                  setWithTaxMode((v) => !v);
+                }}
+                activeOpacity={0.85}
+                style={[styles.calcInvoiceBtn, withTaxMode && styles.calcInvoiceBtnActive]}
+              >
+                <MaterialIcons name="receipt-long" size={18} color={NAVY} />
+                <Text style={styles.calcInvoiceLabel}>With Tax</Text>
+                <View
+                  style={[
+                    styles.calcInvoiceCheckbox,
+                    withTaxMode && styles.calcInvoiceCheckboxChecked,
+                  ]}
+                >
+                  {withTaxMode ? <MaterialIcons name="check" size={12} color="#fff" /> : null}
                 </View>
               </TouchableOpacity>
             </View>
@@ -1335,31 +1529,10 @@ const POSPayment = ({ navigation, route }) => {
           ) : null}
         </ScrollView>
 
-        {/* Validate footer — solid orange, always tappable; popup if cash short */}
+        {/* Validate footer — solid orange, always tappable; popup if cash short.
+            With Tax toggle moved up into the calc row alongside Customer +
+            Invoice; only the Discount chip stays here. */}
         <View style={styles.footer}>
-          <TouchableOpacity
-            style={[styles.discountChip, withTaxMode && styles.discountChipActive]}
-            onPress={() => {
-              console.log('[WithTax] toggle pressed, current=', withTaxMode);
-              setWithTaxMode((v) => !v);
-            }}
-            activeOpacity={0.85}
-          >
-            <MaterialIcons
-              name={withTaxMode ? 'check-box' : 'check-box-outline-blank'}
-              size={16}
-              color={withTaxMode ? '#fff' : NAVY}
-            />
-            <Text
-              style={[
-                styles.discountChipText,
-                withTaxMode && styles.discountChipTextActive,
-              ]}
-              numberOfLines={1}
-            >
-              {withTaxMode ? 'With Tax' : 'Without Tax'}
-            </Text>
-          </TouchableOpacity>
           {!totalIsExternal ? (
             <TouchableOpacity
               style={[styles.discountChip, computedDiscountAmount > 0 && styles.discountChipActive]}
@@ -1401,7 +1574,7 @@ const POSPayment = ({ navigation, route }) => {
           <TouchableOpacity
             onPress={onValidateTap}
             activeOpacity={0.85}
-            style={[styles.validateBtn, creditNeedsCustomer && styles.validateBtnDisabled]}
+            style={[styles.validateBtn, (creditNeedsCustomer || creditDueOverdrawn) && styles.validateBtnDisabled]}
           >
             <View style={styles.validateInner}>
               {paying ? (
@@ -1409,12 +1582,16 @@ const POSPayment = ({ navigation, route }) => {
               ) : (
                 <>
                   <MaterialIcons
-                    name={creditNeedsCustomer ? 'lock-outline' : 'check-circle'}
+                    name={creditNeedsCustomer ? 'lock-outline' : (creditDueOverdrawn ? 'error-outline' : 'check-circle')}
                     size={20}
                     color="#fff"
                   />
                   <Text style={styles.validateText}>
-                    {creditNeedsCustomer ? 'Pick Customer' : 'Validate Payment'}
+                    {creditNeedsCustomer
+                      ? 'Pick Customer'
+                      : creditDueOverdrawn
+                        ? 'Amount too high'
+                        : 'Validate Payment'}
                   </Text>
                 </>
               )}
@@ -1670,6 +1847,54 @@ const POSPayment = ({ navigation, route }) => {
                 }}
               >
                 <Text style={styles.customerSkipText}>Skip & Validate</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Invoice uncheck warning — fires when the cashier taps the Invoice
+          button while it's currently checked. Skipping the invoice is a
+          tax-reconciliation risk, so confirmation is mandatory. Re-checking
+          (false → true) skips this and flips instantly in the handler. */}
+      <Modal
+        visible={invoiceUncheckModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setInvoiceUncheckModalVisible(false)}
+      >
+        <View style={styles.alertBg}>
+          <View style={styles.alertCard}>
+            <View style={[styles.alertIconDisk, { backgroundColor: '#FEE2E2' }]}>
+              <MaterialCommunityIcons name="alert-decagram" size={28} color="#b91c1c" />
+            </View>
+            <Text style={styles.alertTitle}>Skip invoice?</Text>
+            <Text style={styles.alertText}>
+              Unchecking removes the invoice from this sale. Without it,
+              accounting can't reconcile this transaction for tax filing and
+              the order won't appear in monthly VAT reports. Are you sure?
+            </Text>
+            <View style={styles.customerActionsRow}>
+              <TouchableOpacity
+                style={styles.customerEnterBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  console.log('[Payment] invoice keep — warning dismissed');
+                  setInvoiceUncheckModalVisible(false);
+                }}
+              >
+                <Text style={styles.customerEnterText}>Keep Invoice</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.customerSkipBtn, { backgroundColor: '#DC2626' }]}
+                activeOpacity={0.85}
+                onPress={() => {
+                  console.log('[Payment] invoice skipped via warning');
+                  setInvoiceChecked(false);
+                  setInvoiceUncheckModalVisible(false);
+                }}
+              >
+                <Text style={styles.customerSkipText}>Skip Invoice</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2574,11 +2799,11 @@ letterSpacing: 0.4,
   },
   totalBreakdownRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 2,
   },
   totalBreakdownLabel: {
+    flex: 1,
     color: 'rgba(255,255,255,0.85)',
     fontSize: 12,
     fontFamily: FONT_FAMILY.urbanistMedium,
@@ -2587,6 +2812,16 @@ letterSpacing: 0.4,
     color: '#fff',
     fontSize: 12,
     fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'right',
+    minWidth: 80,
+  },
+  // Fixed 18px slot to the right of every value so prices vertically
+  // align across rows. The Tax row fills it with a chevron icon; other
+  // rows leave it empty.
+  totalBreakdownChevronSlot: {
+    width: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   totalBreakdownDiscount: {
     color: '#fde68a',
@@ -3008,6 +3243,53 @@ letterSpacing: 0.4,
   calcInvoiceCheckboxChecked: {
     backgroundColor: NAVY,
   },
+  // Credit-partial inline UI — Pay-Now-via chip row + Credit-due line
+  // shown inside the Credit input card when paymentMode === 'credit'.
+  creditNowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+    flexWrap: 'wrap',
+  },
+  creditNowLabel: {
+    color: '#6b7280',
+    fontSize: 11,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    marginRight: 4,
+  },
+  creditNowChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1.2,
+    borderColor: NAVY,
+    backgroundColor: '#fff',
+  },
+  creditNowChipActive: {
+    backgroundColor: NAVY,
+  },
+  creditNowChipText: {
+    color: NAVY,
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  creditNowChipTextActive: {
+    color: '#fff',
+  },
+  creditDueLine: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#15803d',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    textAlign: 'center',
+  },
+
   // Inline red hint when Credit is selected but no customer chosen yet.
   creditCustomerHint: {
     color: '#b91c1c',

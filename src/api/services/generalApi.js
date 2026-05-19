@@ -691,6 +691,12 @@ export const submitPosOrderToOdoo = async ({
     state: 'paid',
     lines: lineTuples,
     payment_ids: paymentTuples,
+    // to_invoice tells Odoo's POS pipeline to create + post an account.move
+    // for this order. Without it, the order is just a pos.order with no
+    // entry in Accounting → Customers → Invoices, which is what the user
+    // is seeing now. Native Odoo POS UI sets this whenever the cashier
+    // toggles the green Invoice button.
+    to_invoice: !!toInvoice,
   });
 
   const callSyncFromUi = async () => {
@@ -870,6 +876,173 @@ export const submitPosOrderToOdoo = async ({
 // Back-compat alias — keep the old export name pointing at the new function
 // so any straggling imports don't break.
 export const submitPosOrderViaCreateFromUi = submitPosOrderToOdoo;
+
+// Customer invoices list — feeds the new Accounting → Invoices screen on
+// the Home dashboard. Returns posted + draft customer-facing invoices and
+// credit notes (i.e. account.move records with move_type in ('out_invoice',
+// 'out_refund')) so the cashier can scan/audit invoicing activity without
+// opening the Odoo backend. Scoped to the active company.
+// Journal Entries list — feeds the new Accounting → Journal Entries
+// screen. Returns `account.move` records of every type (sales invoices,
+// bills, cash entries, POS journal entries, refunds, etc.) so the screen
+// matches Odoo's Accounting → Accounting → Journal Entries view. Defaults
+// to state = 'posted' like the Odoo screenshot the user shared, but the
+// caller can override via `states`.
+export const fetchJournalEntriesOdoo = async ({
+  offset = 0,
+  limit = 50,
+  searchText = '',
+  states = ['posted'],
+} = {}) => {
+  try {
+    const domain = [];
+    if (Array.isArray(states) && states.length > 0) {
+      domain.push(['state', 'in', states]);
+    }
+    if (searchText && String(searchText).trim()) {
+      const term = String(searchText).trim();
+      domain.push('|', '|',
+        ['name', 'ilike', term],
+        ['ref', 'ilike', term],
+        ['partner_id.name', 'ilike', term],
+      );
+    }
+    const companyId = getActiveCompanyId();
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: [
+            'id', 'name', 'date', 'partner_id', 'ref',
+            'journal_id', 'company_id', 'amount_total', 'state', 'move_type',
+          ],
+          offset,
+          limit,
+          order: 'date desc, id desc',
+          context: { allowed_company_ids: [companyId] },
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      console.warn('[fetchJournalEntriesOdoo] Odoo error:', resp.data.error);
+      return [];
+    }
+    return resp.data?.result || [];
+  } catch (e) {
+    console.error('fetchJournalEntriesOdoo exception:', e?.message || e);
+    return [];
+  }
+};
+
+// Partner Ledger — `account.move.line` records that have a partner, scoped
+// to posted moves. Mirrors Odoo's Accounting → Reporting → Partner Ledger
+// view: every debit/credit movement against a partner with the running
+// balance the cashier can audit. Returns lines ordered by partner then
+// date so the screen can group them client-side.
+export const fetchPartnerLedgerOdoo = async ({
+  offset = 0,
+  limit = 80,
+  searchText = '',
+  partnerId = null,
+} = {}) => {
+  try {
+    const domain = [
+      ['partner_id', '!=', false],
+      ['parent_state', '=', 'posted'],
+    ];
+    if (partnerId) {
+      domain.push(['partner_id', '=', Number(partnerId)]);
+    }
+    if (searchText && String(searchText).trim()) {
+      const term = String(searchText).trim();
+      domain.push('|', '|',
+        ['partner_id.name', 'ilike', term],
+        ['move_id.name', 'ilike', term],
+        ['account_id.name', 'ilike', term],
+      );
+    }
+    const companyId = getActiveCompanyId();
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: [
+            'id', 'date', 'move_id', 'account_id', 'name',
+            'debit', 'credit', 'balance', 'partner_id', 'date_maturity',
+            'matching_number',
+          ],
+          offset,
+          limit,
+          order: 'partner_id, date desc, id desc',
+          context: { allowed_company_ids: [companyId] },
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      console.warn('[fetchPartnerLedgerOdoo] Odoo error:', resp.data.error);
+      return [];
+    }
+    return resp.data?.result || [];
+  } catch (e) {
+    console.error('fetchPartnerLedgerOdoo exception:', e?.message || e);
+    return [];
+  }
+};
+
+export const fetchCustomerInvoicesOdoo = async ({
+  offset = 0,
+  limit = 50,
+  searchText = '',
+  states = [],
+} = {}) => {
+  try {
+    const domain = [['move_type', 'in', ['out_invoice', 'out_refund']]];
+    if (searchText && String(searchText).trim()) {
+      const term = String(searchText).trim();
+      domain.push('|', ['name', 'ilike', term], ['partner_id.name', 'ilike', term]);
+    }
+    if (Array.isArray(states) && states.length > 0) {
+      domain.push(['state', 'in', states]);
+    }
+    const companyId = getActiveCompanyId();
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: [
+            'id', 'name', 'partner_id', 'invoice_date', 'invoice_date_due',
+            'amount_untaxed', 'amount_tax', 'amount_total', 'amount_residual',
+            'state', 'payment_state', 'move_type', 'currency_id',
+          ],
+          offset,
+          limit,
+          order: 'invoice_date desc, id desc',
+          context: { allowed_company_ids: [companyId] },
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      console.warn('[fetchCustomerInvoicesOdoo] Odoo error:', resp.data.error);
+      return [];
+    }
+    return resp.data?.result || [];
+  } catch (e) {
+    console.error('fetchCustomerInvoicesOdoo exception:', e?.message || e);
+    return [];
+  }
+};
 
 // Fetch per-product sale-tax rate for the products currently in the POS cart.
 // Used by the Payment screen's "With Tax" toggle so it can display a real
