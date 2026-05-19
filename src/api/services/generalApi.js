@@ -691,12 +691,12 @@ export const submitPosOrderToOdoo = async ({
     state: 'paid',
     lines: lineTuples,
     payment_ids: paymentTuples,
-    // to_invoice tells Odoo's POS pipeline to create + post an account.move
-    // for this order. Without it, the order is just a pos.order with no
-    // entry in Accounting → Customers → Invoices, which is what the user
-    // is seeing now. Native Odoo POS UI sets this whenever the cashier
-    // toggles the green Invoice button.
-    to_invoice: !!toInvoice,
+    // Intentionally disabled — Odoo's sync_from_ui-driven invoice creation
+    // is unreliable on this install (the linked account.move sometimes
+    // doesn't appear in Accounting → Customers → Invoices). The client
+    // calls createInvoiceOdoo + linkInvoiceToPosOrderOdoo manually right
+    // after the order is created, which guarantees a posted out_invoice.
+    to_invoice: false,
   });
 
   const callSyncFromUi = async () => {

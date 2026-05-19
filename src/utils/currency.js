@@ -95,12 +95,6 @@ export const formatCurrency = (amount, currencyConfig) => {
   const symbol = cfg.symbol || cfg.name || '';
   const position = cfg.position || 'before';
 
-  // Surface when Odoo's dynamic digits override the default — keeps the
-  // log signal-only by skipping the common 2-decimal case.
-  if (digits !== 2) {
-    console.log('[CURRENCY:UTIL] formatCurrency using non-default digits=', digits, 'amount=', amount);
-  }
-
   // Surface the fallback path so we can spot screens that render before
   // currency hydration / Odoo fetch completes.
   if (!symbol) {

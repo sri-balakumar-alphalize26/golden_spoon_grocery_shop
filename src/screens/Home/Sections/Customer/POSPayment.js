@@ -378,13 +378,6 @@ const POSPayment = ({ navigation, route }) => {
     }
     return r;
   })();
-  console.log('[WithTax] totals', {
-    subtotal,
-    computedDiscountAmount,
-    taxAmount,
-    withTaxMode,
-    productTaxMap,
-  });
   const computeTotal = () => {
     // For price-inclusive taxes the tax is already inside `price`, so adding
     // `taxAmount` would double-count. Treat any cart containing one or more
@@ -438,6 +431,14 @@ const POSPayment = ({ navigation, route }) => {
   const handlePay = async () => {
     console.log('Customer before payment:', customer);
     console.log('Journal before payment:', selectedJournal);
+    // Flow trace — captures every key checkpoint inside handlePay so we
+    // can see exactly where the chain breaks. The finally below always
+    // fires one Alert with trace.join('\n'), regardless of success,
+    // exception, or early return. Beats per-step Alerts that get bypassed
+    // when something earlier in the chain throws.
+    const trace = [];
+    const push = (s) => { trace.push(s); console.log('[handlePay]', s); };
+    push('start');
     setPaying(true);
     try {
       // Strict location gate. The receipt must always carry a real fix
@@ -479,7 +480,8 @@ const POSPayment = ({ navigation, route }) => {
             { cancelable: false },
           );
         });
-        if (!proceedWithoutLocation) { setPaying(false); return; }
+        if (!proceedWithoutLocation) { push('location: cancel return'); setPaying(false); return; }
+        push('location: no_fix proceeding (skipped)');
         // Mark fix so downstream knows to skip the writeOrderLocationOdoo call.
         fix = { error: 'no_fix', skipped: true };
       } else if (fix?.error) {
@@ -505,9 +507,11 @@ const POSPayment = ({ navigation, route }) => {
             text2: 'Location service error. Try again.',
           });
         }
+        push(`location: blocked (${fix?.error || 'unknown'}) return`);
         setPaying(false);
         return;
       }
+      if (!fix?.skipped && !fix?.error) push('location: ok fix-acquired');
 
       const lines = products.map((p) => ({
         // remoteId is the raw Odoo product id; `p.id` can be a prefixed cart
@@ -559,7 +563,7 @@ const POSPayment = ({ navigation, route }) => {
       // front and then try to mark it paid — that path bypassed picking
       // creation on several Odoo versions and silently failed to move stock.
 
-      if (paymentMode === 'cash' || paymentMode === 'card' || paymentMode === 'split') {
+      if (paymentMode === 'cash' || paymentMode === 'card' || paymentMode === 'credit' || paymentMode === 'split') {
         try {
           // Resolve the payment method via the active pos.config rather than
           // the previously hard-coded journal id. The cashier-side Odoo POS
@@ -734,12 +738,16 @@ const POSPayment = ({ navigation, route }) => {
           // always creates the picking, so route every paid order
           // through it whether or not a draft existed.
           if (createdOrderId) {
+            push(`delete pre-existing: ${createdOrderId}`);
             console.log('[POSFinalize] discarding pre-existing draft id=', createdOrderId, 'before sync_from_ui');
             const delResp = await deletePosOrderOdoo(createdOrderId);
             if (delResp?.error) {
+              push(`delete pre-existing: err ${delResp.error?.message || ''}`);
               console.warn('[POSFinalize] discard draft warning:', delResp.error?.message || delResp.error);
               // Soft-warn only — even if the draft survives in 'cancel' state,
               // sync_from_ui will still create a fresh paid order with picking.
+            } else {
+              push('delete pre-existing: ok');
             }
             createdOrderId = null;
           }
@@ -808,6 +816,7 @@ const POSPayment = ({ navigation, route }) => {
               withTax: withTaxMode,
             });
             if (submitResp?.error) {
+              push(`submit: err ${submitResp.error?.data?.message || submitResp.error?.message || 'unknown'}`);
               console.error('POS submit error:', submitResp.error);
               Toast.show({
                 type: 'error',
@@ -818,6 +827,7 @@ const POSPayment = ({ navigation, route }) => {
               return;
             }
             createdOrderId = submitResp.result;
+            push(`submit: ok id=${createdOrderId}`);
             console.log('✅ POS Order submitted, id:', createdOrderId);
           }
 
@@ -828,13 +838,19 @@ const POSPayment = ({ navigation, route }) => {
             // Skip the write if the cashier opted to "Save without
             // location" — the order legitimately has no fix to record.
             if (!fix?.skipped && !fix?.error) {
-              await writeOrderLocationOdoo(createdOrderId, fix);
+              try {
+                await writeOrderLocationOdoo(createdOrderId, fix);
+                push('writeLocation: ok');
+              } catch (locErr) {
+                push(`writeLocation: err ${locErr?.message || locErr}`);
+              }
               capturedLocation = {
                 latitude: fix.latitude,
                 longitude: fix.longitude,
                 locationName: fix.locationName,
               };
             } else {
+              push('writeLocation: skipped');
               capturedLocation = null;
             }
 
@@ -844,39 +860,26 @@ const POSPayment = ({ navigation, route }) => {
             try {
               const refInfo = await fetchPosOrderRefOdoo(createdOrderId);
               if (refInfo?.posReference) posReference = refInfo.posReference;
+              push(`fetchRef: ${refInfo?.posReference || 'none'}`);
             } catch (refErr) {
+              push(`fetchRef: err ${refErr?.message || refErr}`);
               console.warn('[POS] ref refetch failed:', refErr?.message || refErr);
             }
 
             const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
-              // Check whether sync_from_ui already created an account.move
-              // for this order (it does when we ship `to_invoice: true` in
-              // the payload — see submitPosOrderToOdoo). If yes, the order
-              // is already in Accounting → Customers → Invoices and the
-              // legacy manual createInvoiceOdoo path would just duplicate
-              // it. Skip the manual call in that case.
-              let existingAccountMoveId = null;
-              try {
-                const moveCheck = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-                  jsonrpc: '2.0',
-                  method: 'call',
-                  params: {
-                    model: 'pos.order',
-                    method: 'read',
-                    args: [[createdOrderId], ['account_move']],
-                    kwargs: {},
-                  },
-                }, { headers: odooHeaders() });
-                const am = moveCheck.data?.result?.[0]?.account_move;
-                existingAccountMoveId = Array.isArray(am) ? am[0] : (am || null);
-                if (existingAccountMoveId) {
-                  invoiceInfo = { id: existingAccountMoveId, number: Array.isArray(am) ? am[1] : null };
-                  console.log('[INVOICE] sync_from_ui already created account.move', existingAccountMoveId, '— skipping manual createInvoiceOdoo');
-                }
-              } catch (chkErr) {
-                console.warn('[INVOICE] account_move check failed:', chkErr?.message || chkErr);
-              }
-              if (shouldCreateInvoice && !existingAccountMoveId) {
+              push(`shouldCreateInvoice: ${shouldCreateInvoice} (invoiceChecked=${invoiceChecked}, customer=${customer?.id || customer?._id || 'none'})`);
+              console.log('[INVOICE FLOW] shouldCreateInvoice=', shouldCreateInvoice,
+                'invoiceChecked=', invoiceChecked,
+                'customer=', customer?.id || customer?._id || null);
+              // Always create the invoice manually when the cashier wants
+              // one. We used to skip this when pos.order.account_move
+              // looked truthy after sync_from_ui, but that path proved
+              // unreliable — sometimes the linked move never lands in
+              // Accounting → Customers → Invoices. createInvoiceOdoo
+              // creates an account.move (move_type='out_invoice') and
+              // posts it via action_post, which guarantees the row shows
+              // up everywhere Odoo's accounting engine surfaces it.
+              if (shouldCreateInvoice) {
                 try {
                   const actualTotal = Math.round(Number(totalAmount) * 1000) / 1000 || 0;
                   console.log('[INVOICE] Creating invoice for POS order', createdOrderId, 'totalAmount:', actualTotal);
@@ -908,15 +911,28 @@ const POSPayment = ({ navigation, route }) => {
                   const invoiceDate = new Date().toISOString().slice(0, 10);
                   const invResp = await createInvoiceOdoo({ partnerId, products: invoiceProducts, invoiceDate, journalId: selectedJournal?.id || null });
                   console.log('[INVOICE] createInvoiceOdoo response:', invResp);
+                  const invoiceResult = {
+                    id: invResp?.id,
+                    number: invResp?.invoiceStatus?.name || invResp?.name,
+                    state: invResp?.invoiceStatus?.state,
+                    payment_state: invResp?.invoiceStatus?.payment_state,
+                    amount_total: invResp?.invoiceStatus?.amount_total,
+                    posted: invResp?.invoiceStatus?.state === 'posted',
+                  };
+                  push(`createInvoice: ${invResp?.id ? `ok id=${invResp.id} state=${invoiceResult.state || 'unknown'}` : 'failed (no id)'}`);
+                  console.log('[INVOICE RESULT]', invoiceResult);
                   if (invResp && invResp.id) {
                     const invoiceId = invResp.id;
                     const invoiceNumber = invResp.invoiceStatus?.name || invResp.name || null;
                     invoiceInfo = { id: invoiceId, number: invoiceNumber };
 
                     try {
-                      await linkInvoiceToPosOrderOdoo({ orderId: createdOrderId, invoiceId, setState: true, state: 'invoiced' });
+                      const linkResp = await linkInvoiceToPosOrderOdoo({ orderId: createdOrderId, invoiceId, setState: true, state: 'invoiced' });
+                      push('linkInvoice: ok');
                       console.log('[INVOICE] Linked invoice', invoiceId, 'to POS order', createdOrderId);
+                      console.log('[INVOICE FLOW] linkInvoiceToPosOrderOdoo →', linkResp);
                     } catch (linkErr) {
+                      push(`linkInvoice: err ${linkErr?.message || linkErr}`);
                       console.warn('[INVOICE] Failed to link invoice to POS order:', linkErr);
                     }
 
@@ -942,17 +958,16 @@ const POSPayment = ({ navigation, route }) => {
                       console.warn('[INVOICE PAYMENT] Error checking/creating payment:', outerPayErr);
                     }
 
-                    Toast.show({ type: 'success', text1: 'Invoice created', text2: invoiceNumber || `#${invoiceId}`, position: 'bottom' });
-                  } else {
-                    Toast.show({ type: 'error', text1: 'Invoice Error', text2: 'Invoice creation failed', position: 'bottom' });
                   }
                 } catch (invErr) {
+                  push(`createInvoice: exception ${invErr?.message || invErr}`);
                   console.error('[INVOICE] Exception creating invoice:', invErr);
-                  Toast.show({ type: 'error', text1: 'Invoice Error', text2: invErr?.message || 'Failed to create invoice', position: 'bottom' });
+                  console.log('[INVOICE RESULT]', { error: invErr?.message || String(invErr) });
                 }
               }
           }
         } catch (e) {
+          push(`INNER CATCH (post-submit): ${e?.message || e}`);
           console.error('Payment API exception:', e);
           Toast.show({ type: 'error', text1: 'Payment Error', text2: e?.message || 'Failed to create payment', position: 'bottom' });
         }
@@ -970,6 +985,7 @@ const POSPayment = ({ navigation, route }) => {
       // (computed from productTaxMap × cart). When unchecked, `taxAmount`
       // is already zero, which is also what Odoo will book because the
       // submit ships tax_ids=[] per line.
+      push(`navigate: receipt orderId=${createdOrderId}`);
       navigation.navigate('POSReceiptScreen', {
         orderId: createdOrderId,
         products,
@@ -1000,9 +1016,14 @@ const POSPayment = ({ navigation, route }) => {
         paymentMethodLabel,
       });
     } catch (e) {
+      push(`OUTER CATCH: ${e?.message || e}`);
       Toast.show({ type: 'error', text1: 'POS Error', text2: e?.message || 'Failed to create POS order', position: 'bottom' });
     } finally {
       setPaying(false);
+      // Single unmissable flow-trace popup — fires on every Validate Payment
+      // exit, regardless of success / exception / early return. Lets us see
+      // exactly which checkpoints were reached without trawling Metro logs.
+      Alert.alert('Flow trace', trace.join('\n'), [{ text: 'OK' }], { cancelable: false });
     }
   };
 
@@ -1135,8 +1156,6 @@ const POSPayment = ({ navigation, route }) => {
     }
     handlePay();
   };
-
-  console.log('[WithTax] render', { withTaxMode, taxAmount, totalIsExternal });
 
   return (
     <SafeAreaView backgroundColor={NAVY}>
