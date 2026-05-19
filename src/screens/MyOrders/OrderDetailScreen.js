@@ -28,6 +28,7 @@ import Toast from 'react-native-toast-message';
 import { FeatureGate } from '@components/FeatureGate';
 import LocationModal from '@components/Modal/LocationModal';
 import PaperSizeModal from '@components/Modal/PaperSizeModal';
+import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -79,6 +80,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const [loading, setLoading] = useState(true);
   const [order, setOrder] = useState(null);
   const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [taxModalVisible, setTaxModalVisible] = useState(false);
   // Each `pos.payment` attached to this order — drives the Payments card so
   // split-paid orders surface every method + amount instead of just the
   // aggregate `amount_paid`.
@@ -592,6 +594,22 @@ const OrderDetailScreen = ({ navigation, route }) => {
             <Text style={s.invoiceChipText}>Print</Text>
           </TouchableOpacity>
 
+          {/* Tax Breakdown — per-line tax detail popup. Only rendered when
+              the order actually carries tax; for non-taxed orders this
+              chip stays hidden to avoid empty UI. */}
+          {Number(order?.amount_tax) > 0 ? (
+            <TouchableOpacity
+              onPress={() => setTaxModalVisible(true)}
+              activeOpacity={0.85}
+              style={[s.invoiceChip, { borderColor: '#BFDBFE' }]}
+            >
+              <View style={s.invoiceChipIcon}>
+                <MaterialIcons name="receipt-long" size={20} color="#1E88E5" />
+              </View>
+              <Text style={s.invoiceChipText}>Tax Breakdown</Text>
+            </TouchableOpacity>
+          ) : null}
+
           {/* Return Products — Odoo-style refund. Rendered ONLY when the
               order is eligible: already-refunded / refund-of / non-paid
               orders hide the chip entirely so the cashier never sees an
@@ -687,6 +705,15 @@ const OrderDetailScreen = ({ navigation, route }) => {
         latitude={order?.order_latitude}
         longitude={order?.order_longitude}
         onClose={() => setLocationModalVisible(false)}
+      />
+
+      {/* Shared Tax-breakdown modal — same component used on the Orders list.
+          Lines are already hydrated on this screen so no lazy fetch needed. */}
+      <TaxBreakdownModal
+        isVisible={taxModalVisible}
+        order={order}
+        currency={currency}
+        onClose={() => setTaxModalVisible(false)}
       />
 
       {/* Paper-size picker — fires before Preview / Download / Print so the

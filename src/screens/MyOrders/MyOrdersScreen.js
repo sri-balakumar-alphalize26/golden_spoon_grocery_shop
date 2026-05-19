@@ -16,6 +16,7 @@ import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
 import { COLORS } from '@constants/theme';
+import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
 
 // Chip filters surfaced at the top of the list. Mirrors Odoo's POS Orders
 // filter dropdown — two chips combine multiple states via OR (Odoo's
@@ -67,6 +68,28 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const { addProduct, clearProducts } = useProductStore();
   const [tapBusy, setTapBusy] = useState(false);
   const resumeDraftHidden = useFeatureHidden('orders.resume_draft');
+  // Tax-breakdown popup state. Triggered by the blue Tax chip on each
+  // taxed row. We lazy-fetch the order's lines via the existing
+  // fetchPosOrderDetailOdoo on open since the list payload only has totals.
+  const [taxModalVisible, setTaxModalVisible] = useState(false);
+  const [taxModalOrder, setTaxModalOrder] = useState(null);
+  const [taxModalLoading, setTaxModalLoading] = useState(false);
+
+  const openTaxModal = useCallback(async (orderSummary) => {
+    setTaxModalOrder({ ...orderSummary, lines: [] });
+    setTaxModalVisible(true);
+    setTaxModalLoading(true);
+    try {
+      const detail = await fetchPosOrderDetailOdoo(orderSummary.id);
+      if (detail && !detail.error) {
+        setTaxModalOrder({ ...orderSummary, ...detail });
+      }
+    } catch (e) {
+      console.warn('[OrdersList] tax modal fetch failed', e?.message || e);
+    } finally {
+      setTaxModalLoading(false);
+    }
+  }, []);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => fetchData({ searchText: text, configId, sessionId, states: activeStates }),
@@ -239,6 +262,22 @@ const MyOrdersScreen = ({ navigation, route }) => {
               <Text style={styles.receiptChipText}>Receipt {receiptNo}</Text>
             </View>
           ) : null}
+          {Number(item.amount_tax) > 0 ? (
+            <TouchableOpacity
+              style={styles.taxChip}
+              activeOpacity={0.85}
+              onPress={(e) => {
+                e.stopPropagation();
+                openTaxModal(item);
+              }}
+            >
+              <Icon name="receipt-long" size={14} color="#1E88E5" />
+              <Text style={styles.taxChipText}>
+                {`Tax ${formatCurrency(item.amount_tax, currency || { symbol: '', name: '', position: 'before' })}`}
+              </Text>
+              <Icon name="chevron-right" size={14} color="#1E88E5" />
+            </TouchableOpacity>
+          ) : null}
           <View style={styles.detailRow}>
             <Icon name="person-outline" size={16} color="#666" />
             <Text style={styles.detailText}>Salesperson: {userName}</Text>
@@ -250,7 +289,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
         </View>
       </TouchableOpacity>
     );
-  }, [currency, handleOrderTap]);
+  }, [currency, handleOrderTap, openTaxModal]);
 
   const keyExtractor = useCallback((item, index) => `order-${item.id || index}`, []);
 
@@ -331,6 +370,14 @@ const MyOrdersScreen = ({ navigation, route }) => {
       </RoundedContainer>
 
       <OverlayLoader visible={loading || tapBusy} />
+
+      <TaxBreakdownModal
+        isVisible={taxModalVisible}
+        order={taxModalOrder}
+        loading={taxModalLoading}
+        currency={currency}
+        onClose={() => setTaxModalVisible(false)}
+      />
     </SafeAreaView>
   );
 };
@@ -414,6 +461,24 @@ const styles = StyleSheet.create({
   receiptChipText: {
     fontSize: 12,
     color: '#461c8aff',
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  taxChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E7F1FD',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  taxChipText: {
+    fontSize: 12,
+    color: '#1E88E5',
     fontWeight: '700',
     letterSpacing: 0.3,
   },

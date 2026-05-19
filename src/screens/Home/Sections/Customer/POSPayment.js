@@ -709,15 +709,35 @@ const POSPayment = ({ navigation, route }) => {
                 const lineSubtotal = (typeof l.price_subtotal !== 'undefined' && l.price_subtotal !== null)
                   ? Number(l.price_subtotal)
                   : Number(l.price) * Number(l.qty) * (1 - (Number(l.discount) || 0) / 100);
+                // Resolve the per-line Odoo tax_ids from the cart's product
+                // → tax-id map. When the cashier flipped "With Tax" off we
+                // ship an empty list so Odoo books zero tax regardless of
+                // product.taxes_id; when on, we always pass the explicit ids
+                // so we don't rely on Odoo's auto-fill (which doesn't fire
+                // reliably on sync_from_ui).
+                const pid = Number(l.product_id);
+                const taxInfo = productTaxMap[pid];
+                const taxIdsForLine = withTaxMode
+                  ? (taxInfo?.taxIds || [])
+                  : [];
+                // Recompute line subtotal incl when tax is on so the totals
+                // shipped match what we display: tax-exclusive lines pick up
+                // the tax on top, price_include lines stay equal to gross.
+                const priceSubtotalIncl = (withTaxMode && taxInfo?.rate)
+                  ? (taxInfo.priceInclude
+                      ? lineSubtotal
+                      : lineSubtotal * (1 + taxInfo.rate / 100))
+                  : lineSubtotal;
                 return {
                   product_id: l.product_id,
                   qty: l.qty,
                   price_unit: l.price,
                   price_subtotal: lineSubtotal,
-                  price_subtotal_incl: lineSubtotal,
+                  price_subtotal_incl: priceSubtotalIncl,
                   discount: l.discount || 0,
                   name: l.name,
                   customer_note: l.customer_note || '',
+                  taxIds: taxIdsForLine,
                 };
               }),
               payments: payments.map((p) => ({
@@ -726,6 +746,7 @@ const POSPayment = ({ navigation, route }) => {
                 name: p.paymentMode || 'payment',
               })),
               amountTotal: total,
+              amountTax: taxAmount,
               amountPaid: totalPaymentAmount,
               amountReturn: Math.max(0, paidAmount - total),
               toInvoice: invoiceChecked || Boolean(customer && (customer.id || customer._id)),

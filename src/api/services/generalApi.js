@@ -612,15 +612,16 @@ export const validatePosOrderOdoo = async (orderId) => {
 export const submitPosOrderToOdoo = async ({
   orderUid, sessionId, posConfigId, userId, partnerId,
   lines, payments,
-  amountTotal, amountPaid, amountReturn = 0,
+  amountTotal, amountTax = 0, amountPaid, amountReturn = 0,
   pricelistId = false, toInvoice = false,
   creationDate = new Date().toISOString(),
   companyId = 1,
   // When false, override product.taxes_id with an empty set on every line
   // so Odoo books the order with zero tax (receipt / invoice / accounting
-  // all align on "no tax"). When true (default), leave tax_ids alone and
-  // Odoo's POS pipeline auto-fills it from product.taxes_id — current
-  // behaviour for every existing caller.
+  // all align on "no tax"). When true (default), each line's `taxIds`
+  // is shipped verbatim (we always set `tax_ids` rather than relying on
+  // Odoo's auto-fill, which doesn't fire reliably on sync_from_ui in
+  // Odoo 18+).
   withTax = true,
 } = {}) => {
   if (!sessionId) return { error: { message: 'sessionId is required' } };
@@ -643,11 +644,14 @@ export const submitPosOrderToOdoo = async ({
     if (l.customer_note && String(l.customer_note).trim()) {
       vals.customer_note = String(l.customer_note).trim();
     }
-    // [[6, 0, []]] = many2many "replace with empty set" — forces this line
-    // to have no taxes regardless of what product.taxes_id says.
-    if (withTax === false) {
-      vals.tax_ids = [[6, 0, []]];
-    }
+    // Always write tax_ids explicitly. The caller passes the resolved
+    // Odoo tax ids per line (empty when "Without Tax" was selected). We
+    // never rely on Odoo's auto-fill from product.taxes_id because
+    // sync_from_ui in 18+ leaves it empty otherwise.
+    const ids = withTax === false
+      ? []
+      : (Array.isArray(l.taxIds) ? l.taxIds : []);
+    vals.tax_ids = [[6, 0, ids]];
     return [0, 0, vals];
   });
 
@@ -682,7 +686,7 @@ export const submitPosOrderToOdoo = async ({
     company_id: companyId,
     amount_paid: Number(amountPaid) || 0,
     amount_total: Number(amountTotal) || 0,
-    amount_tax: 0,
+    amount_tax: Number(amountTax) || 0,
     amount_return: Number(amountReturn) || 0,
     state: 'paid',
     lines: lineTuples,
@@ -713,7 +717,7 @@ export const submitPosOrderToOdoo = async ({
     name: `Order ${orderUid}`,
     amount_paid: Number(amountPaid) || 0,
     amount_total: Number(amountTotal) || 0,
-    amount_tax: 0,
+    amount_tax: Number(amountTax) || 0,
     amount_return: Number(amountReturn) || 0,
     lines: lineTuples,
     [paymentsKey]: paymentTuples,
@@ -795,6 +799,71 @@ export const submitPosOrderToOdoo = async ({
     return { error: { message: 'POS submit returned no order id' } };
   }
 
+  // Odoo 18+'s sync_from_ui sometimes leaves `pos.order.name` as the bare
+  // "/" placeholder — the Orders list then shows a "/" Order Ref while
+  // pos_reference (Receipt Number) renders correctly. Backfill by reading
+  // the freshly-created order's name, and if it's still "/", allocate the
+  // next value from the POS config's sequence (`pos.config.sequence_id`)
+  // and write it on the order. Best-effort: a failure here is logged but
+  // doesn't fail the whole submit because the order itself is valid.
+  try {
+    const nameResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'read',
+        args: [[createdId], ['name']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const currentName = nameResp.data?.result?.[0]?.name;
+    if (currentName === '/' || !currentName) {
+      // Read the POS config's sequence id, then next_by_id, then write
+      // the new name onto the order.
+      const cfgResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.config',
+          method: 'read',
+          args: [[Number(posConfigId)], ['sequence_id']],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const seqIdRaw = cfgResp.data?.result?.[0]?.sequence_id;
+      const seqId = Array.isArray(seqIdRaw) ? seqIdRaw[0] : seqIdRaw;
+      if (seqId) {
+        const seqResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.sequence',
+            method: 'next_by_id',
+            args: [seqId],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        const newName = seqResp.data?.result;
+        if (newName && typeof newName === 'string') {
+          await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'pos.order',
+              method: 'write',
+              args: [[createdId], { name: newName }],
+              kwargs: {},
+            },
+          }, { headers: { 'Content-Type': 'application/json' } });
+          console.log('[POS submit] allocated pos.order.name=', newName, 'for id=', createdId);
+        }
+      }
+    }
+  } catch (nameErr) {
+    console.warn('[POS submit] name backfill failed:', nameErr?.message || nameErr);
+  }
+
   return { result: createdId, raw: result };
 };
 
@@ -848,7 +917,7 @@ export const fetchProductTaxMap = async (productIds = []) => {
     console.log('[TAX MAP] referenced account.tax ids:', allTaxIds);
     if (allTaxIds.length === 0) {
       console.warn('[TAX MAP] no taxes_id on any product — products in cart have no sale tax in Odoo');
-      return Object.fromEntries(prodRows.map((r) => [r.id, { rate: 0, priceInclude: false }]));
+      return Object.fromEntries(prodRows.map((r) => [r.id, { rate: 0, priceInclude: false, taxIds: [] }]));
     }
 
     // 2) Read the matching account.tax records. `amount` is the percentage
@@ -891,7 +960,7 @@ export const fetchProductTaxMap = async (productIds = []) => {
         if (t.isPercent) rate += t.amount;
         if (t.priceInclude) priceInclude = true;
       }
-      out[r.id] = { rate, priceInclude };
+      out[r.id] = { rate, priceInclude, taxIds };
     }
     console.log('[TAX MAP] assembled map:', JSON.stringify(out));
     return out;
@@ -6132,7 +6201,7 @@ export const fetchOrdersOdoo = async ({
           fields: [
             'id', 'name', 'pos_reference',
             'partner_id', 'user_id', 'date_order',
-            'amount_total', 'amount_paid', 'state',
+            'amount_total', 'amount_paid', 'amount_tax', 'state',
             'session_id', 'config_id',
           ],
           offset,
