@@ -1170,10 +1170,16 @@ export const closePOSSesionOdoo = async ({
       }
     }
 
-    // Belt-and-braces: even if step 4 errored, the earlier steps may have
-    // moved the session to 'closed' already. Re-read state and treat as
-    // success if so — this prevents the misleading "Odoo Error" alert when
-    // the close actually succeeded.
+    // Re-read state to verify the close actually took. Track via a flag so
+    // the function doesn't lie about success when the chain stalled.
+    let confirmedClosed = false;
+    let lastErrName = null;
+    let lastErrMessage = null;
+    const isoUtcNow = () => {
+      const n = new Date();
+      const p = (x) => String(x).padStart(2, '0');
+      return `${n.getUTCFullYear()}-${p(n.getUTCMonth() + 1)}-${p(n.getUTCDate())} ${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())}`;
+    };
     try {
       const sessionRows = await _closeCallKw('pos.session', 'read', [[sid], ['state', 'stop_at']]);
       const state = sessionRows?.[0]?.state;
@@ -1183,19 +1189,67 @@ export const closePOSSesionOdoo = async ({
         // If stop_at didn't get set (older Odoo edge case), patch it ourselves
         // so _compute_last_session doesn't crash on the next config read.
         if (!stopAt) {
-          const now = new Date();
-          const iso = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')} ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
-          try { await _closeCallKw('pos.session', 'write', [[sid], { stop_at: iso }]); } catch (_) {}
+          try { await _closeCallKw('pos.session', 'write', [[sid], { stop_at: isoUtcNow() }]); } catch (_) {}
         }
         console.log('[CLOSE POS SESSION] success (state confirmed closed)');
-        return { success: true, result };
+        confirmedClosed = true;
       }
     } catch (e) {
       console.warn('[CLOSE POS SESSION] post-close state read failed:', e?.message);
     }
 
-    console.log('[CLOSE POS SESSION] success', result);
-    return { success: true, result };
+    // FORCE-CLOSE FALLBACK — only fires if the standard 4-step chain did not
+    // flip the row to state='closed'. We hard-write state and stop_at on the
+    // pos.session row directly, bypassing the workflow methods. Some Odoo
+    // installs have custom validations on close_session_from_ui (e.g. unpaid
+    // orders, bank statement mismatches) that block it; the user has
+    // explicitly asked for a force-close path so the register can always
+    // exit 'opened' from the mobile app.
+    if (!confirmedClosed) {
+      console.warn('[CLOSE POS SESSION] standard close did not confirm closed — forcing direct state write');
+      try {
+        await _closeCallKw('pos.session', 'write', [[sid], { state: 'closed', stop_at: isoUtcNow() }]);
+        // Read BOTH fields back — verifying state alone misses the case where
+        // a row-level constraint silently drops stop_at while state lands fine.
+        const verifyRows = await _closeCallKw('pos.session', 'read', [[sid], ['state', 'stop_at']]);
+        const verifiedState = verifyRows?.[0]?.state;
+        let verifiedStopAt = verifyRows?.[0]?.stop_at;
+        // If the row is now closed but stop_at didn't take, retry the timestamp
+        // on its own. Split write dodges any whole-row trigger that may have
+        // rejected the combined write. We still treat the close as successful
+        // either way — the user's primary goal is exiting state='opened'.
+        if (verifiedState === 'closed' && !verifiedStopAt) {
+          console.warn('[CLOSE POS SESSION] state=closed but stop_at empty — retrying stop_at-only write');
+          try {
+            await _closeCallKw('pos.session', 'write', [[sid], { stop_at: isoUtcNow() }]);
+            const retryRows = await _closeCallKw('pos.session', 'read', [[sid], ['stop_at']]);
+            verifiedStopAt = retryRows?.[0]?.stop_at;
+          } catch (e2) {
+            console.warn('[CLOSE POS SESSION] stop_at retry failed:', e2?.message);
+          }
+        }
+        if (verifiedState === 'closed') {
+          console.log('[CLOSE POS SESSION] force-close succeeded', { stop_at: verifiedStopAt });
+          confirmedClosed = true;
+        } else {
+          console.warn('[CLOSE POS SESSION] force-close write returned but state still', verifiedState);
+        }
+      } catch (e) {
+        lastErrName = e?.odoo?.data?.name || e?.name;
+        lastErrMessage = e?.odoo?.data?.message || e?.message;
+        console.warn('[CLOSE POS SESSION] force-close write failed:', lastErrMessage);
+      }
+    }
+
+    if (confirmedClosed) {
+      return { success: true, result };
+    }
+    return {
+      error: {
+        message: lastErrMessage || 'Session could not be closed — state did not transition to closed even after force-write.',
+        name: lastErrName,
+      },
+    };
   } catch (error) {
     const detail = error?.odoo?.data?.message || error?.message || 'Failed to close session';
     console.error('[CLOSE POS SESSION] error:', detail, error);
@@ -1258,7 +1312,7 @@ export const fetchSessionsForConfig = async ({ configId, limit = 50, offset = 0 
       fields: [
         'id', 'name', 'state', 'start_at', 'stop_at',
         'cash_register_balance_start', 'cash_register_balance_end_real',
-        'config_id', 'user_id',
+        'config_id', 'user_id', 'write_date',
       ],
       order: 'id desc',
       limit,

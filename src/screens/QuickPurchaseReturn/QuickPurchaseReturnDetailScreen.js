@@ -195,7 +195,7 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
 
       <ScrollView
         style={styles.container}
-        contentContainerStyle={{ padding: 14, paddingBottom: 30 }}
+        contentContainerStyle={{ padding: 14, paddingBottom: record.state === 'draft' ? 90 : 30 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />}
       >
         {/* Hero */}
@@ -299,42 +299,9 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           </FeatureGate>
         ) : null}
-        {record.state === 'draft' ? (
-          <View style={{ gap: 8 }}>
-            <FeatureGate featureKey="quick_purchase_return.confirm">
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.actionBtnPrimary]}
-                onPress={handleConfirmReturn}
-                activeOpacity={0.85}
-              >
-                <MaterialIcons name="check-circle" size={18} color="#fff" />
-                <Text style={styles.actionBtnPrimaryText}>Confirm Return</Text>
-              </TouchableOpacity>
-            </FeatureGate>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <FeatureGate featureKey="quick_purchase_return.edit">
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionBtnGhost, { flex: 1 }]}
-                  onPress={handleEdit}
-                  activeOpacity={0.85}
-                >
-                  <MaterialIcons name="edit" size={18} color={NAVY} />
-                  <Text style={styles.actionBtnGhostText}>Edit</Text>
-                </TouchableOpacity>
-              </FeatureGate>
-              <FeatureGate featureKey="quick_purchase_return.cancel">
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionBtnDanger, { flex: 1 }]}
-                  onPress={handleCancel}
-                  activeOpacity={0.85}
-                >
-                  <MaterialIcons name="close" size={18} color="#fff" />
-                  <Text style={styles.actionBtnDangerText}>Cancel Return</Text>
-                </TouchableOpacity>
-              </FeatureGate>
-            </View>
-          </View>
-        ) : null}
+        {/* Draft actions moved to a sticky bottom action bar below the
+            ScrollView so they stay visible while the user reviews the
+            return lines. */}
         {record.state === 'done' ? (
           <FeatureGate featureKey="quick_purchase_return.export_invoice">
             <TouchableOpacity
@@ -355,6 +322,45 @@ const QuickPurchaseReturnDetailScreen = ({ navigation, route }) => {
           </FeatureGate>
         ) : null}
       </ScrollView>
+
+      {/* Sticky bottom action bar — draft only. Confirm gets 2x the width
+          of Edit / Cancel so the primary action stands out. The whole
+          strip is absolute-positioned so it stays in place while the
+          ScrollView scrolls underneath. */}
+      {record.state === 'draft' ? (
+        <View style={styles.stickyActionBar}>
+          <FeatureGate featureKey="quick_purchase_return.confirm">
+            <TouchableOpacity
+              style={[styles.barBtn, styles.barBtnPrimary, { flex: 2 }]}
+              activeOpacity={0.85}
+              onPress={handleConfirmReturn}
+            >
+              <MaterialIcons name="check-circle" size={18} color="#fff" />
+              <Text style={styles.barBtnPrimaryText}>Confirm</Text>
+            </TouchableOpacity>
+          </FeatureGate>
+          <FeatureGate featureKey="quick_purchase_return.edit">
+            <TouchableOpacity
+              style={[styles.barBtn, styles.barBtnGhost, { flex: 1 }]}
+              activeOpacity={0.85}
+              onPress={handleEdit}
+            >
+              <MaterialIcons name="edit" size={18} color={NAVY} />
+              <Text style={styles.barBtnGhostText}>Edit</Text>
+            </TouchableOpacity>
+          </FeatureGate>
+          <FeatureGate featureKey="quick_purchase_return.cancel">
+            <TouchableOpacity
+              style={[styles.barBtn, styles.barBtnDangerGhost, { flex: 1 }]}
+              activeOpacity={0.85}
+              onPress={handleCancel}
+            >
+              <MaterialIcons name="close" size={18} color="#B91C1C" />
+              <Text style={styles.barBtnDangerGhostText}>Cancel</Text>
+            </TouchableOpacity>
+          </FeatureGate>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 };
@@ -472,6 +478,39 @@ const styles = StyleSheet.create({
   actionBtnDangerText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
   actionBtnPrimary: { backgroundColor: NAVY },
   actionBtnPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.3 },
+
+  // Sticky bottom action bar (draft state only).
+  stickyActionBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#eef0f5',
+    ...Platform.select({
+      ios: { shadowColor: '#1a1a2e', shadowOpacity: 0.08, shadowRadius: 10, shadowOffset: { width: 0, height: -2 } },
+      android: { elevation: 8 },
+    }),
+  },
+  barBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 44,
+    borderRadius: 10,
+  },
+  barBtnPrimary: { backgroundColor: NAVY },
+  barBtnGhost: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: NAVY },
+  barBtnDangerGhost: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#FCA5A5' },
+  barBtnPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 14, letterSpacing: 0.3 },
+  barBtnGhostText: { color: NAVY, fontWeight: '800', fontSize: 14, letterSpacing: 0.3 },
+  barBtnDangerGhostText: { color: '#B91C1C', fontWeight: '800', fontSize: 14, letterSpacing: 0.3 },
 });
 
 export default QuickPurchaseReturnDetailScreen;

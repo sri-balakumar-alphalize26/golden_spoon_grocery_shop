@@ -36,6 +36,8 @@ import { FeatureGate } from '@components/FeatureGate';
 import * as Print from 'expo-print';
 import { generateDailySaleHtml } from '@utils/invoiceHtml';
 import Toast from 'react-native-toast-message';
+import SessionClosedModal from '@components/Modal/SessionClosedModal';
+import InfoModal from '@components/Modal/InfoModal';
 
 // 3D Animated card wrapper — matches the Restaurantnexgenn reference
 const Card3D = ({ children, style, delay = 0 }) => {
@@ -73,6 +75,20 @@ const POSRegister = ({ navigation }) => {
   useEffect(() => { console.log('[CURRENCY:RENDER] POSRegister decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
   const [registers, setRegisters] = useState([]);
   const [openSessions, setOpenSessions] = useState([]);
+  const [sessionClosedVisible, setSessionClosedVisible] = useState(false);
+  const [sessionClosedMessage, setSessionClosedMessage] = useState('');
+
+  // Shared single-button popup used in place of native Alert.alert for any
+  // one-shot info message (e.g. "Invalid amount"). Mirrors LogoutModal /
+  // SessionClosedModal visually so the popup style stays consistent.
+  const [infoVisible, setInfoVisible] = useState(false);
+  const [infoTitle, setInfoTitle] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
+  const showInfo = (title, message) => {
+    setInfoTitle(title);
+    setInfoMessage(message);
+    setInfoVisible(true);
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -134,7 +150,14 @@ const POSRegister = ({ navigation }) => {
         ms: Date.now() - t0,
       });
       setRegisters(Array.isArray(regs) ? regs : []);
-      setOpenSessions(Array.isArray(sessions) ? sessions : []);
+      // Belt-and-suspenders: even though we asked Odoo for state='opened',
+      // closed/closing-control sessions can slip through during the race
+      // between close_session_from_ui's commit and our refetch. Drop any
+      // row whose state isn't actually 'opened' so the UI never offers
+      // Continue Selling on a non-sellable session.
+      setOpenSessions(
+        Array.isArray(sessions) ? sessions.filter((s) => s?.state === 'opened') : []
+      );
 
       // Fan out one fetchSessionOngoing per open session in parallel — small
       // payload each, so total wall time is roughly one network round-trip.
@@ -181,7 +204,7 @@ const POSRegister = ({ navigation }) => {
     if (!openingTarget) return;
     const cashAmount = parseFloat(openingCash);
     if (isNaN(cashAmount) || cashAmount < 0) {
-      Alert.alert('Invalid amount', 'Please enter a valid opening cash amount (0 or more).');
+      showInfo('Invalid amount', 'Please enter a valid opening cash amount (0 or more).');
       return;
     }
     setOpeningSubmitting(true);
@@ -207,13 +230,13 @@ const POSRegister = ({ navigation }) => {
 
       setOpeningModalVisible(false);
       const sessionLabel = resp.sessionId ? `Session ID: ${resp.sessionId}` : 'Session opened';
-      Alert.alert('Register Opened', sessionLabel);
+      showInfo('Register Opened', sessionLabel);
       // Full screen refresh: pulls fresh fetchPOSRegisters + fetchPOSSessions
       // so the closed-registers list updates as well as the open-sessions list.
       await loadRegistersAndSessions();
     } catch (err) {
       console.error('[POSRegister] open register exception:', err);
-      Alert.alert('Error', err?.message || 'Failed to open register');
+      showInfo('Error', err?.message || 'Failed to open register');
     } finally {
       setOpeningSubmitting(false);
     }
@@ -397,9 +420,11 @@ const POSRegister = ({ navigation }) => {
                           Alert.alert('Odoo Error', retryResp.error.message || 'Failed to close register');
                           return;
                         }
-                        Alert.alert('Register Closed', 'Drafts discarded and session closed.');
                         handleDiscardClose();
+                        await new Promise((r) => setTimeout(r, 600));
                         await loadRegistersAndSessions();
+                        setSessionClosedMessage('Drafts discarded and session closed.');
+                        setSessionClosedVisible(true);
                       } catch (e) {
                         Alert.alert('Error', e?.message || 'Failed to discard drafts');
                       } finally {
@@ -415,9 +440,15 @@ const POSRegister = ({ navigation }) => {
         }
         return;
       }
-      Alert.alert('Register Closed', 'Session closed successfully');
       handleDiscardClose();
+      // Brief wait so Odoo's commit on `close_session_from_ui` lands before
+      // we re-read the session list — otherwise the row can briefly come
+      // back as state='opening_control' / 'closing_control' and we'd
+      // render Continue Selling on what's effectively a closed session.
+      await new Promise((r) => setTimeout(r, 600));
       await loadRegistersAndSessions();
+      setSessionClosedMessage('Session closed successfully.');
+      setSessionClosedVisible(true);
     } catch (err) {
       Alert.alert('Error', err?.message || 'Failed to close register');
     } finally {
@@ -557,24 +588,34 @@ const POSRegister = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Action buttons */}
+        {/* Action buttons — only render Continue Selling when the session
+            is truly opened; closed/closing-control rows show a static badge
+            instead so the cashier can't keep selling against a dead session. */}
         <View style={s.actionRow}>
-          <TouchableOpacity
-            style={s.btnContinue}
-            activeOpacity={0.8}
-            onPress={() => handleContinueSelling(item)}
-          >
-            <Text style={s.btnContinueText}>Continue Selling</Text>
-          </TouchableOpacity>
-          <FeatureGate featureKey="pos.close_register">
+          {item.state === 'opened' ? (
             <TouchableOpacity
-              style={s.btnClose}
+              style={s.btnContinue}
               activeOpacity={0.8}
-              onPress={() => handleCloseRegisterSession(item.id)}
+              onPress={() => handleContinueSelling(item)}
             >
-              <Text style={s.btnCloseText}>Close</Text>
+              <Text style={s.btnContinueText}>Continue Selling</Text>
             </TouchableOpacity>
-          </FeatureGate>
+          ) : (
+            <View style={s.btnSessionClosed}>
+              <Text style={s.btnSessionClosedText}>Session Closed</Text>
+            </View>
+          )}
+          {item.state === 'opened' ? (
+            <FeatureGate featureKey="pos.close_register">
+              <TouchableOpacity
+                style={s.btnClose}
+                activeOpacity={0.8}
+                onPress={() => handleCloseRegisterSession(item.id)}
+              >
+                <Text style={s.btnCloseText}>Close</Text>
+              </TouchableOpacity>
+            </FeatureGate>
+          ) : null}
         </View>
       </View>
     </Card3D>
@@ -669,7 +710,14 @@ const POSRegister = ({ navigation }) => {
             ...availableRegisters.map((r) => ({ ...r, _type: 'register' })),
           ]}
           keyExtractor={(item, idx) =>
-            item._type === 'sectionHeader' ? `header-${idx}` : `item-${item.id}`
+            item._type === 'sectionHeader'
+              ? `header-${idx}`
+              // Sessions (pos.session) and registers (pos.config) live in
+              // different Odoo tables but share the same integer-id namespace,
+              // so a plain `item-${id}` was producing duplicate keys
+              // (e.g. session id=3 + register id=3 → both `item-3`). Prefix
+              // with the item's _type to make every key unique across both.
+              : `${item._type}-${item.id}`
           }
           renderItem={({ item, index }) => {
             if (item._type === 'sectionHeader') {
@@ -1171,6 +1219,19 @@ const POSRegister = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      <SessionClosedModal
+        isVisible={sessionClosedVisible}
+        message={sessionClosedMessage}
+        onDismiss={() => setSessionClosedVisible(false)}
+      />
+
+      <InfoModal
+        isVisible={infoVisible}
+        title={infoTitle}
+        message={infoMessage}
+        onDismiss={() => setInfoVisible(false)}
+      />
     </SafeAreaView>
   );
 };
@@ -1325,6 +1386,20 @@ const s = StyleSheet.create({
     borderColor: '#e74c3c',
   },
   btnCloseText: { color: '#e74c3c', fontSize: 16, fontWeight: '800' },
+  btnSessionClosed: {
+    flex: 2,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnSessionClosedText: {
+    color: '#6B7280',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
   btnOpen: {
     backgroundColor: '#F47B20',
     borderRadius: 14,

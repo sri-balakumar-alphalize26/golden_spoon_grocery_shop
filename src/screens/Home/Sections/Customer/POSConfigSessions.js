@@ -6,7 +6,7 @@
 // Closing Date, Starting Balance, Ending Balance — same column set Odoo Web
 // shows in the Sessions list view.
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,7 +20,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
-import { fetchSessionsForConfig } from '@api/services/generalApi';
+import { fetchSessionsForConfig, healStaleClosedSessions } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 
 const PAGE_SIZE = 30;
@@ -28,7 +28,16 @@ const PAGE_SIZE = 30;
 const fmtDate = (raw) => {
   if (!raw) return '—';
   try {
-    const d = new Date(raw);
+    // Odoo returns Datetime values as naive UTC strings like
+    // '2026-05-19 09:31:07' — no 'T' separator, no 'Z' suffix. RN/Hermes
+    // parses those as LOCAL time, so the displayed clock numbers end up
+    // matching Odoo's raw UTC instead of converting to the device's
+    // timezone. Force UTC parsing by replacing the space with 'T' and
+    // appending 'Z', then toLocaleString() handles the local conversion.
+    const iso = (typeof raw === 'string' && raw.includes(' ') && !raw.endsWith('Z'))
+      ? `${raw.replace(' ', 'T')}Z`
+      : raw;
+    const d = new Date(iso);
     if (isNaN(d.getTime())) return String(raw);
     return d.toLocaleString();
   } catch (_) {
@@ -106,11 +115,29 @@ const POSConfigSessions = ({ navigation, route }) => {
 
   useFocusEffect(useCallback(() => { loadFirstPage(); }, [loadFirstPage]));
 
+  // Backfill stop_at on any legacy closed sessions whose timestamp is still
+  // null (old buggy close-flow). Fire-and-forget; subsequent reloads see the
+  // patched values directly. Until then, the row-level write_date fallback
+  // gives the cashier a usable closing time.
+  useEffect(() => {
+    healStaleClosedSessions?.().catch(() => {});
+  }, []);
+
   const renderItem = ({ item }) => {
     const pal = statusPalette(item.state);
     const openedBy = Array.isArray(item.user_id) ? item.user_id[1] : '—';
     const start = Number(item.cash_register_balance_start) || 0;
     const end = Number(item.cash_register_balance_end_real) || 0;
+    // Closing time fallback: legacy sessions closed before the force-close
+    // logic landed have stop_at = false. write_date is the row's last update
+    // time which, for a closed session, is effectively when it was closed.
+    // Show that instead of '—', with a small `(updated)` hint so the cashier
+    // knows it isn't the authoritative stop_at.
+    const closingTimestamp = item.stop_at
+      || (item.state === 'closed' ? item.write_date : null);
+    const closingSuffix = !item.stop_at && item.state === 'closed' && item.write_date
+      ? ' (updated)'
+      : '';
     return (
       <TouchableOpacity
         onPress={() => navigation.navigate('MyOrdersScreen', { sessionId: item.id, configName: `${configName} • ${item.name}` })}
@@ -140,7 +167,7 @@ const POSConfigSessions = ({ navigation, route }) => {
             <View style={s.metaDivider} />
             <View style={s.metaCol}>
               <Text style={s.metaLabel}>Closing</Text>
-              <Text style={s.metaValue}>{fmtDate(item.stop_at)}</Text>
+              <Text style={s.metaValue}>{fmtDate(closingTimestamp)}{closingSuffix}</Text>
             </View>
           </View>
           <View style={s.balancePill}>

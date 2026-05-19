@@ -88,6 +88,7 @@ const QuickPurchaseReturnFormScreen = ({ navigation, route }) => {
       try {
         const detail = await fetchQuickReturnDetail(editingId);
         if (!detail) return;
+        console.log('[QR:FORM] edit-mode detail.lines.length =', detail.lines?.length);
         setDraftId(detail.id);
         if (Array.isArray(detail.source_invoice_id)) {
           setBill({
@@ -330,26 +331,52 @@ const QuickPurchaseReturnFormScreen = ({ navigation, route }) => {
           <Text style={styles.sectionTitle}>Return Header</Text>
 
           <Text style={styles.label}>Vendor Bill *</Text>
-          <TouchableOpacity
-            activeOpacity={editingId ? 1 : 0.85}
-            style={[styles.picker, editingId && { opacity: 0.7 }]}
-            onPress={() => { if (!editingId) setBillPickerVisible(true); }}
-          >
-            <View style={{ flex: 1 }}>
-              {bill ? (
-                <>
-                  <Text style={styles.pickerValue} numberOfLines={1}>{bill.name}</Text>
-                  <Text style={styles.metaText} numberOfLines={1}>
-                    {(Array.isArray(bill.partner_id) ? bill.partner_id[1] : '—')}
-                    {bill.invoice_date ? `  ·  ${bill.invoice_date}` : ''}
-                  </Text>
-                </>
-              ) : (
-                <Text style={{ color: '#9ca3af', fontSize: 14 }}>Tap to pick a posted vendor bill</Text>
-              )}
+          {editingId ? (
+            // Edit mode — render a plain View (no TouchableOpacity, no onPress).
+            // The source bill is locked once a return is created because changing
+            // it would invalidate the existing line items. Lock icon + tinted bg
+            // make this unmistakable to the user.
+            <View
+              style={[styles.picker, styles.pickerLocked]}
+              pointerEvents="none"
+            >
+              <View style={{ flex: 1 }}>
+                {bill ? (
+                  <>
+                    <Text style={styles.pickerValue} numberOfLines={1}>{bill.name}</Text>
+                    <Text style={styles.metaText} numberOfLines={1}>
+                      {(Array.isArray(bill.partner_id) ? bill.partner_id[1] : '—')}
+                      {bill.invoice_date ? `  ·  ${bill.invoice_date}` : ''}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={{ color: '#9ca3af', fontSize: 14 }}>—</Text>
+                )}
+              </View>
+              <MaterialIcons name="lock" size={20} color="#9ca3af" />
             </View>
-            <MaterialIcons name="chevron-right" size={22} color="#9ca3af" />
-          </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.picker}
+              onPress={() => setBillPickerVisible(true)}
+            >
+              <View style={{ flex: 1 }}>
+                {bill ? (
+                  <>
+                    <Text style={styles.pickerValue} numberOfLines={1}>{bill.name}</Text>
+                    <Text style={styles.metaText} numberOfLines={1}>
+                      {(Array.isArray(bill.partner_id) ? bill.partner_id[1] : '—')}
+                      {bill.invoice_date ? `  ·  ${bill.invoice_date}` : ''}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={{ color: '#9ca3af', fontSize: 14 }}>Tap to pick a posted vendor bill</Text>
+                )}
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#9ca3af" />
+            </TouchableOpacity>
+          )}
 
           {bill?.invoice_date ? (
             <>
@@ -661,6 +688,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12,
     backgroundColor: '#fff',
+  },
+  // Read-only variant used for fields that can't change after creation
+  // (e.g. vendor bill in edit mode).
+  pickerLocked: {
+    backgroundColor: '#f5f6fa',
+    borderColor: '#e5e7eb',
   },
   metaText: { fontSize: 12, color: '#9ca3af', fontFamily: FONT_FAMILY.urbanistMedium, marginTop: 6 },
 

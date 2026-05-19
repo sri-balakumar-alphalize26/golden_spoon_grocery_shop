@@ -78,17 +78,31 @@ export const fetchQuickReturnDetail = async (id) => {
       'auto_validate_picking', 'warehouse_id', 'notes',
     ],
   });
+  // Diagnostic: tells us whether Odoo even has line_ids on this row. If
+  // length === 0 the upstream bill-pick step didn't materialize the lines.
+  console.log('[QR:DETAIL] record.line_ids =', record?.line_ids);
   let lines = [];
   if (record?.line_ids?.length) {
-    lines = await callKw('quick.purchase.return.line.app', 'read', [record.line_ids], {
-      fields: [
-        'id', 'sequence', 'source_invoice_line_id', 'product_id', 'description',
-        'purchased_qty', 'already_returned_qty', 'returnable_qty', 'return_qty',
-        'uom_id', 'price_unit', 'discount', 'tax_ids',
-        'subtotal', 'tax_amount', 'total',
-      ],
-    });
+    try {
+      lines = await callKw('quick.purchase.return.line.app', 'read', [record.line_ids], {
+        fields: [
+          'id', 'sequence', 'source_invoice_line_id', 'product_id', 'description',
+          'purchased_qty', 'already_returned_qty', 'returnable_qty', 'return_qty',
+          'uom_id', 'price_unit', 'discount', 'tax_ids',
+          'subtotal', 'tax_amount', 'total',
+        ],
+      });
+    } catch (e) {
+      // Was silently swallowed before — without this we never knew whether
+      // the line-read RPC was rejected by Odoo (e.g. invalid field names
+      // on a stripped install).
+      console.warn('[QR:DETAIL] line read failed:', e?.payload?.data?.message || e?.message);
+    }
   }
+  console.log(
+    '[QR:DETAIL] fetched lines.length =', lines?.length,
+    ' first line keys =', lines?.[0] ? Object.keys(lines[0]).join(',') : '<none>'
+  );
   return { ...record, lines };
 };
 
@@ -150,14 +164,37 @@ export const returnFullQuantity = async (id) =>
 // might want — let the model's onchange surface "nothing to return" if a
 // bill has nothing left.
 export const fetchReturnableVendorBills = async ({ searchText = '', limit = 25 } = {}) => {
+  const companyId = getCurrentCompanyId();
+
+  // Bills that are already used by an active (non-cancelled) return are
+  // locked — picking the same bill twice would duplicate the return or
+  // fail validation. Cancelled returns release the bill so the user can
+  // re-do it. Small RPC ('id' + the Many2one only).
+  let usedBillIds = [];
+  try {
+    const usedReturns = await callKw('quick.purchase.return.app', 'search_read', [
+      [['state', '!=', 'cancelled']],
+    ], { fields: ['source_invoice_id'], limit: 1000 });
+    usedBillIds = (usedReturns || [])
+      .map((r) => (Array.isArray(r.source_invoice_id) ? r.source_invoice_id[0] : null))
+      .filter(Boolean);
+  } catch (e) {
+    // If the lookup fails, degrade gracefully — show all bills rather than
+    // erroring the picker. Worst case the user re-picks an in-use bill
+    // and gets the existing validation error.
+    console.warn('[QR:BILLS] used-bill lookup failed:', e?.message);
+  }
+
   const domain = [
     ['move_type', '=', 'in_invoice'],
     ['state', '=', 'posted'],
   ];
+  if (usedBillIds.length) {
+    domain.push(['id', 'not in', usedBillIds]);
+  }
   if (searchText && searchText.trim()) {
     domain.push(['name', 'ilike', searchText.trim()]);
   }
-  const companyId = getCurrentCompanyId();
   return callKw('account.move', 'search_read', [domain], {
     fields: [
       'id', 'name', 'partner_id', 'invoice_date', 'amount_total',
