@@ -42,7 +42,11 @@ const stateLabel = (state) => {
   }
 };
 
-const JournalEntriesListScreen = ({ navigation }) => {
+const JournalEntriesListScreen = ({ navigation, route }) => {
+  // Sub-tile from the Home → Journals popup passes a journal-type filter
+  // and a label suffix ("Sales" / "Purchases" / etc.) used in the header.
+  const journalTypes = route?.params?.journalTypes || null;
+  const titleSuffix = route?.params?.titleSuffix || '';
   const currency = useAuthStore((s) => s.currency);
   const [stateFilter, setStateFilter] = useState('posted');
   const [rows, setRows] = useState([]);
@@ -65,6 +69,7 @@ const JournalEntriesListScreen = ({ navigation }) => {
         limit: PAGE,
         searchText: q,
         states: activeStates,
+        journalTypes,
       });
       if (resetOffset) setRows(list || []);
       else setRows((prev) => [...prev, ...(list || [])]);
@@ -99,37 +104,45 @@ const JournalEntriesListScreen = ({ navigation }) => {
     const company = Array.isArray(item.company_id) ? item.company_id[1] : '';
     const color = stateColor(item.state);
     return (
-      <View style={styles.card}>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate('InvoiceDetailScreen', { invoiceId: item.id })}
+      >
+        {/* Header — 48x48 disk + name/badge stack + amount right (Orders look) */}
         <View style={styles.headerRow}>
           <View style={styles.iconDisk}>
-            <Icon name="account-balance" size={20} color="#7B2D8E" />
+            <Icon name="account-balance" size={24} color="#461c8aff" />
           </View>
           <View style={{ flex: 1, marginLeft: 10 }}>
             <Text style={styles.number}>{item.name || '—'}</Text>
-            <Text style={styles.date}>{formatDate(item.date)}</Text>
+            <View style={[styles.badge, { backgroundColor: color + '20' }]}>
+              <Text style={[styles.badgeText, { color }]}>{stateLabel(item.state)}</Text>
+            </View>
           </View>
           <Text style={styles.total}>{formatCurrency(item.amount_total, currency)}</Text>
         </View>
-        {partner !== '—' ? (
-          <View style={styles.detailRow}><Icon name="person" size={14} color="#6b7280" /><Text style={styles.detailText}>{partner}</Text></View>
-        ) : null}
-        {item.ref ? (
-          <View style={styles.detailRow}><Icon name="link" size={14} color="#6b7280" /><Text style={styles.detailText}>{item.ref}</Text></View>
-        ) : null}
-        <View style={styles.detailRow}><Icon name="book" size={14} color="#6b7280" /><Text style={styles.detailText}>{journal}</Text></View>
-        {company ? (
-          <View style={styles.detailRow}><Icon name="business" size={14} color="#6b7280" /><Text style={styles.detailText}>{company}</Text></View>
-        ) : null}
-        <View style={[styles.badge, { backgroundColor: color + '20' }]}>
-          <Text style={[styles.badgeText, { color }]}>{stateLabel(item.state)}</Text>
+        {/* Bordered detail section below header */}
+        <View style={styles.detailSection}>
+          {partner !== '—' ? (
+            <View style={styles.detailRow}><Icon name="person" size={14} color="#6b7280" /><Text style={styles.detailText}>{partner}</Text></View>
+          ) : null}
+          <View style={styles.detailRow}><Icon name="event" size={14} color="#6b7280" /><Text style={styles.detailText}>{formatDate(item.date)}</Text></View>
+          <View style={styles.detailRow}><Icon name="book" size={14} color="#6b7280" /><Text style={styles.detailText}>{journal}</Text></View>
+          {item.ref ? (
+            <View style={styles.detailRow}><Icon name="link" size={14} color="#6b7280" /><Text style={styles.detailText}>{item.ref}</Text></View>
+          ) : null}
+          {company ? (
+            <View style={styles.detailRow}><Icon name="business" size={14} color="#6b7280" /><Text style={styles.detailText}>{company}</Text></View>
+          ) : null}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
   return (
     <SafeAreaView>
-      <NavigationHeader title="Journal Entries" onBackPress={() => navigation.goBack()} />
+      <NavigationHeader title={titleSuffix ? `Journal Entries — ${titleSuffix}` : 'Journal Entries'} onBackPress={() => navigation.goBack()} />
       <SearchContainer
         searchText={searchText}
         onChangeText={handleSearchTextChange}
@@ -184,16 +197,30 @@ const styles = StyleSheet.create({
   filterText: { color: '#374151', fontWeight: '700', fontSize: 12 },
   filterTextActive: { color: '#fff' },
   loadingBox: { paddingVertical: 32, alignItems: 'center' },
-  card: { backgroundColor: '#fff', marginHorizontal: 12, marginVertical: 6, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#e5e7eb' },
-  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  iconDisk: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3E5F5' },
-  number: { fontSize: 14, fontWeight: '800', color: '#111827' },
-  date: { fontSize: 11, color: '#6b7280', marginTop: 2 },
-  total: { fontSize: 14, fontWeight: '900', color: '#111827' },
-  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
+  // Card matches MyOrdersScreen.renderOrderItem look: 48x48 disk on left,
+  // name + status pill stacked in the middle, amount right; bordered
+  // detail section below for partner / date / journal / ref / company.
+  card: {
+    backgroundColor: '#fff',
+    marginHorizontal: 12,
+    marginBottom: 12,
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  headerRow: { flexDirection: 'row', alignItems: 'center' },
+  iconDisk: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f0ff' },
+  number: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  total: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  detailSection: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f1f2f6' },
+  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3 },
   detailText: { color: '#4b5563', fontSize: 12, flex: 1 },
-  badge: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, marginTop: 6 },
-  badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  badge: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, marginTop: 4 },
+  badgeText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
 });
 
 export default JournalEntriesListScreen;

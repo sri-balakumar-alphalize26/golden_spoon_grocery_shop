@@ -80,20 +80,31 @@ const PartnerLedgerScreen = ({ navigation }) => {
       sec.credit += Number(r.credit) || 0;
       sec.balance += Number(r.balance) || 0;
     }
+    // Default: each partner section is COLLAPSED. User taps the section
+    // header to expand. `collapsed[key]` semantics:
+    //   undefined / true → collapsed (data hidden)
+    //   false            → expanded (data visible)
     return Array.from(map.values()).map((sec) => ({
       ...sec,
-      data: collapsed[sec.key] ? [] : sec.data,
+      data: collapsed[sec.key] === false ? sec.data : [],
     }));
   }, [rows, collapsed]);
 
   const renderItem = ({ item }) => {
     const move = Array.isArray(item.move_id) ? item.move_id[1] : '';
+    const moveId = Array.isArray(item.move_id) ? item.move_id[0] : item.move_id;
     const account = Array.isArray(item.account_id) ? item.account_id[1] : '';
     const debit = Number(item.debit) || 0;
     const credit = Number(item.credit) || 0;
     const balance = Number(item.balance) || 0;
     return (
-      <View style={styles.row}>
+      <TouchableOpacity
+        style={styles.row}
+        activeOpacity={0.85}
+        onPress={() => {
+          if (moveId) navigation.navigate('InvoiceDetailScreen', { invoiceId: moveId });
+        }}
+      >
         <View style={styles.rowTop}>
           <Text style={styles.rowDate}>{formatDate(item.date)}</Text>
           <Text style={styles.rowMove} numberOfLines={1}>{move}</Text>
@@ -115,17 +126,18 @@ const PartnerLedgerScreen = ({ navigation }) => {
         {item.name ? (
           <Text style={styles.rowLabel} numberOfLines={1}>{item.name}</Text>
         ) : null}
-      </View>
+      </TouchableOpacity>
     );
   };
 
   const renderSectionHeader = ({ section }) => {
-    const isCollapsed = !!collapsed[section.key];
+    // Collapsed unless explicitly expanded (collapsed[key] === false).
+    const isCollapsed = collapsed[section.key] !== false;
     return (
       <TouchableOpacity
         style={styles.sectionHeader}
         activeOpacity={0.85}
-        onPress={() => setCollapsed((c) => ({ ...c, [section.key]: !c[section.key] }))}
+        onPress={() => setCollapsed((c) => ({ ...c, [section.key]: c[section.key] === false }))}
       >
         <Icon name={isCollapsed ? 'chevron-right' : 'expand-more'} size={18} color="#1f2937" />
         <Text style={styles.sectionTitle} numberOfLines={1}>{section.title}</Text>

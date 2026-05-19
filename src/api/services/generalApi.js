@@ -946,11 +946,18 @@ export const fetchJournalEntriesOdoo = async ({
   limit = 50,
   searchText = '',
   states = ['posted'],
+  journalTypes = null,
 } = {}) => {
   try {
     const domain = [];
     if (Array.isArray(states) && states.length > 0) {
       domain.push(['state', 'in', states]);
+    }
+    // Filter by journal type — drives the 4-sub-tile popup from Home:
+    // Sales=['sale'], Purchases=['purchase'], Bank&Cash=['bank','cash'],
+    // Miscellaneous=['general']. Null/empty = no filter (all journals).
+    if (Array.isArray(journalTypes) && journalTypes.length > 0) {
+      domain.push(['journal_id.type', 'in', journalTypes]);
     }
     if (searchText && String(searchText).trim()) {
       const term = String(searchText).trim();
@@ -1055,15 +1062,32 @@ export const fetchCustomerInvoicesOdoo = async ({
   limit = 50,
   searchText = '',
   states = [],
+  moveTypes = null,
+  paymentStates = null,
+  overdueOnly = false,
 } = {}) => {
   try {
-    const domain = [['move_type', 'in', ['out_invoice', 'out_refund']]];
+    // Move types — default covers both out_invoice and out_refund. Caller
+    // can narrow to ['out_invoice'] (Invoices) or ['out_refund']
+    // (Credit Notes) via the filter modal.
+    const types = Array.isArray(moveTypes) && moveTypes.length > 0
+      ? moveTypes
+      : ['out_invoice', 'out_refund'];
+    const domain = [['move_type', 'in', types]];
     if (searchText && String(searchText).trim()) {
       const term = String(searchText).trim();
       domain.push('|', ['name', 'ilike', term], ['partner_id.name', 'ilike', term]);
     }
     if (Array.isArray(states) && states.length > 0) {
       domain.push(['state', 'in', states]);
+    }
+    if (Array.isArray(paymentStates) && paymentStates.length > 0) {
+      domain.push(['payment_state', 'in', paymentStates]);
+    }
+    if (overdueOnly) {
+      const today = new Date().toISOString().slice(0, 10);
+      domain.push(['invoice_date_due', '<', today]);
+      domain.push(['payment_state', 'not in', ['paid', 'reversed']]);
     }
     const companyId = getActiveCompanyId();
     const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -1094,6 +1118,148 @@ export const fetchCustomerInvoicesOdoo = async ({
   } catch (e) {
     console.error('fetchCustomerInvoicesOdoo exception:', e?.message || e);
     return [];
+  }
+};
+
+// Read one account.move (Invoice or Journal Entry) with the fields needed
+// for the detail screen plus its line items. Used by InvoiceDetailScreen
+// and JournalEntryDetailScreen.
+export const fetchInvoiceDetailOdoo = async (moveId) => {
+  if (!moveId) return { error: { message: 'moveId required' } };
+  try {
+    const baseUrl = getOdooUrl();
+    const moveResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move',
+        method: 'read',
+        args: [[Number(moveId)], [
+          'id', 'name', 'ref', 'move_type', 'state', 'payment_state',
+          'partner_id', 'invoice_date', 'invoice_date_due', 'date',
+          'invoice_origin', 'invoice_payment_term_id', 'invoice_user_id',
+          'journal_id', 'company_id', 'currency_id',
+          'amount_untaxed', 'amount_tax', 'amount_total', 'amount_residual',
+          'narration', 'invoice_line_ids', 'line_ids',
+        ]],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (moveResp.data?.error) return { error: moveResp.data.error };
+    const move = (moveResp.data?.result || [])[0] || null;
+    if (!move) return { error: { message: 'Invoice not found' } };
+
+    // Read invoice line items (product / qty / price / subtotal / taxes).
+    const lineIds = Array.isArray(move.invoice_line_ids) && move.invoice_line_ids.length > 0
+      ? move.invoice_line_ids
+      : [];
+    let lines = [];
+    if (lineIds.length > 0) {
+      const linesResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move.line',
+          method: 'read',
+          args: [lineIds, [
+            'id', 'name', 'product_id', 'quantity',
+            'price_unit', 'discount', 'tax_ids',
+            'price_subtotal', 'price_total',
+          ]],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      lines = linesResp.data?.result || [];
+    }
+    return { result: { ...move, lines } };
+  } catch (e) {
+    return { error: { message: e?.message || String(e) } };
+  }
+};
+
+// Reset a posted/cancelled account.move back to draft via Odoo's button_draft.
+export const resetInvoiceToDraftOdoo = async (moveId) => {
+  if (!moveId) return { error: { message: 'moveId required' } };
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'account.move', method: 'button_draft', args: [[Number(moveId)]], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return { error: resp.data.error };
+    return { result: true };
+  } catch (e) {
+    return { error: { message: e?.message || String(e) } };
+  }
+};
+
+// Post a draft account.move via Odoo's action_post.
+export const postInvoiceOdoo = async (moveId) => {
+  if (!moveId) return { error: { message: 'moveId required' } };
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'account.move', method: 'action_post', args: [[Number(moveId)]], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return { error: resp.data.error };
+    return { result: true };
+  } catch (e) {
+    return { error: { message: e?.message || String(e) } };
+  }
+};
+
+// Cancel an account.move via Odoo's button_cancel.
+export const cancelInvoiceOdoo = async (moveId) => {
+  if (!moveId) return { error: { message: 'moveId required' } };
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'account.move', method: 'button_cancel', args: [[Number(moveId)]], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return { error: resp.data.error };
+    return { result: true };
+  } catch (e) {
+    return { error: { message: e?.message || String(e) } };
+  }
+};
+
+// Create a Credit Note (reversal invoice) for an existing posted invoice
+// via Odoo's account.move.reversal wizard. Returns the new credit-note id.
+export const createCreditNoteOdoo = async ({ moveId, reason = '' } = {}) => {
+  if (!moveId) return { error: { message: 'moveId required' } };
+  try {
+    const baseUrl = getOdooUrl();
+    const ctx = { active_model: 'account.move', active_ids: [Number(moveId)], active_id: Number(moveId) };
+    const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move.reversal',
+        method: 'create',
+        args: [{ reason: reason || 'Credit Note', journal_id: false }],
+        kwargs: { context: ctx },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (createResp.data?.error) return { error: createResp.data.error };
+    const wizardId = createResp.data?.result;
+    const refundResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move.reversal',
+        method: 'refund_moves',
+        args: [[wizardId]],
+        kwargs: { context: ctx },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (refundResp.data?.error) return { error: refundResp.data.error };
+    // refund_moves returns an action dict with res_id = new credit note id.
+    const newMoveId = refundResp.data?.result?.res_id || null;
+    return { result: { wizardId, newMoveId } };
+  } catch (e) {
+    return { error: { message: e?.message || String(e) } };
   }
 };
 
@@ -6020,6 +6186,33 @@ const _callUsersWithGroupsField = async (payloadBuilder) => {
   return { response: null, field };
 };
 
+// Cached id of base.group_user — the "Internal User" group. We add it
+// to every res.users.create payload so new users land as Internal Users.
+// Without this, Odoo computes share=True for the new user (no Internal
+// group) and the record only appears under the backend's "Portal Users"
+// filter, not "Internal Users" — which is exactly what the user saw.
+let _cachedInternalGroupId = null;
+const _resolveInternalGroupId = async () => {
+  if (_cachedInternalGroupId) return _cachedInternalGroupId;
+  try {
+    const res = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'ir.model.data',
+        method: 'search_read',
+        args: [[['module', '=', 'base'], ['name', '=', 'group_user']]],
+        kwargs: { fields: ['res_id'], limit: 1 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const rid = res.data?.result?.[0]?.res_id;
+    if (rid) _cachedInternalGroupId = Number(rid);
+    return _cachedInternalGroupId;
+  } catch (_) {
+    return null;
+  }
+};
+
 // Create a new user in Odoo
 export const createUserOdoo = async ({
   name, login, password, email = '', phone = '',
@@ -6044,10 +6237,18 @@ export const createUserOdoo = async ({
       baseVals.company_id = Number(defaultCompanyId);
     }
 
+    // Resolve base.group_user (the Internal User group) once and merge it
+    // with the admin-selected groups so the new user always lands under
+    // "Internal Users", never under "Portal Users" by default.
+    const internalGroupId = await _resolveInternalGroupId();
+    console.log('[CREATE USER] base.group_user id =', internalGroupId);
+
     const { response } = await _callUsersWithGroupsField((field) => {
       const userVals = { ...baseVals };
-      if (Array.isArray(groups) && groups.length > 0) {
-        userVals[field] = [[6, 0, groups]];
+      const groupSet = new Set(Array.isArray(groups) ? groups.map(Number).filter(Number.isFinite) : []);
+      if (internalGroupId) groupSet.add(internalGroupId);
+      if (groupSet.size > 0) {
+        userVals[field] = [[6, 0, Array.from(groupSet)]];
       }
       console.log('[CREATE USER] Creating user with payload:', userVals);
       return {

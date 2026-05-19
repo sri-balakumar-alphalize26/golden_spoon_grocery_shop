@@ -8,10 +8,12 @@ import { NavigationHeader } from '@components/Header';
 import { SafeAreaView, RoundedContainer, SearchContainer } from '@components/containers';
 import { EmptyState } from '@components/common/empty';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { fetchCustomerInvoicesOdoo } from '@api/services/generalApi';
+import { fetchCustomerInvoicesOdoo, fetchInvoiceDetailOdoo } from '@api/services/generalApi';
 import useAuthStore from '@stores/auth/useAuthStore';
 import { formatCurrency } from '@utils/currency';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
+import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
+import InvoiceFiltersModal from '@components/Modal/InvoiceFiltersModal';
 
 const STATE_FILTERS = [
   { key: 'all',    states: [],                       label: 'All' },
@@ -55,6 +57,32 @@ const InvoicesListScreen = ({ navigation }) => {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const PAGE = 50;
+  // Filter modal — selected keys persist across opens; resolved filter
+  // payload is applied to fetchCustomerInvoicesOdoo via `filterPayload`.
+  const [filtersModalVisible, setFiltersModalVisible] = useState(false);
+  const [filterKeys, setFilterKeys] = useState([]);
+  const [filterPayload, setFilterPayload] = useState({
+    states: [], paymentStates: [], moveTypes: [], overdueOnly: false,
+  });
+  // Tax breakdown modal (mirror MyOrdersScreen) — taps on the Tax chip
+  // open this modal with the per-line subtotal/tax detail.
+  const [taxModalVisible, setTaxModalVisible] = useState(false);
+  const [taxModalInvoice, setTaxModalInvoice] = useState(null);
+  const [taxModalLoading, setTaxModalLoading] = useState(false);
+
+  const openTaxModal = useCallback(async (inv) => {
+    setTaxModalInvoice({ ...inv, lines: [] });
+    setTaxModalVisible(true);
+    setTaxModalLoading(true);
+    try {
+      const resp = await fetchInvoiceDetailOdoo(inv.id);
+      if (resp && !resp.error && resp.result) {
+        setTaxModalInvoice({ ...inv, ...resp.result });
+      }
+    } finally {
+      setTaxModalLoading(false);
+    }
+  }, []);
 
   const activeStates = (STATE_FILTERS.find((f) => f.key === stateFilter)?.states) || [];
 
@@ -64,11 +92,20 @@ const InvoicesListScreen = ({ navigation }) => {
       setOffset(0);
     }
     try {
+      // Merge legacy pill-row state filter (activeStates) with the
+      // multi-select filter modal payload. The modal can override states
+      // entirely; if it didn't pick any, fall back to the legacy pill.
+      const states = filterPayload.states.length > 0
+        ? filterPayload.states
+        : activeStates;
       const list = await fetchCustomerInvoicesOdoo({
         offset: resetOffset ? 0 : offset,
         limit: PAGE,
         searchText: q,
-        states: activeStates,
+        states,
+        paymentStates: filterPayload.paymentStates,
+        moveTypes: filterPayload.moveTypes,
+        overdueOnly: filterPayload.overdueOnly,
       });
       if (resetOffset) {
         setRows(list || []);
@@ -82,7 +119,7 @@ const InvoicesListScreen = ({ navigation }) => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [activeStates, offset]);
+  }, [activeStates, offset, filterPayload]);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     (text) => load({ searchText: text, resetOffset: true }),
@@ -92,7 +129,7 @@ const InvoicesListScreen = ({ navigation }) => {
   useEffect(() => {
     load({ searchText, resetOffset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stateFilter]);
+  }, [stateFilter, filterPayload]);
 
   const handleLoadMore = () => {
     if (loadingMore || !hasMore || loading) return;
@@ -109,7 +146,11 @@ const InvoicesListScreen = ({ navigation }) => {
     const color = stateColor(item.state, item.payment_state);
     const label = stateLabel(item.state, item.payment_state, item.move_type);
     return (
-      <View style={styles.card}>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate('InvoiceDetailScreen', { invoiceId: item.id })}
+      >
         <View style={styles.headerRow}>
           <View style={[styles.iconDisk, { backgroundColor: isRefund ? '#FEE2E2' : '#E7F1FD' }]}>
             <Icon name={isRefund ? 'undo' : 'description'} size={22} color={isRefund ? '#b91c1c' : '#1E88E5'} />
@@ -124,31 +165,46 @@ const InvoicesListScreen = ({ navigation }) => {
             {formatCurrency(total, currency)}
           </Text>
         </View>
-        <View style={styles.detailRow}>
-          <Icon name="person" size={14} color="#6b7280" />
-          <Text style={styles.detailText}>{partner}</Text>
-        </View>
-        <View style={styles.detailRow}>
-          <Icon name="event" size={14} color="#6b7280" />
-          <Text style={styles.detailText}>{formatDate(item.invoice_date)}</Text>
-        </View>
-        {tax > 0 ? (
-          <View style={styles.taxChip}>
-            <Icon name="receipt-long" size={12} color="#1E88E5" />
-            <Text style={styles.taxChipText}>
-              {`Tax ${formatCurrency(tax, currency)}`}
-            </Text>
+        <View style={styles.detailSection}>
+          <View style={styles.detailRow}>
+            <Icon name="person" size={14} color="#6b7280" />
+            <Text style={styles.detailText}>{partner}</Text>
           </View>
-        ) : null}
-        {residual > 0 ? (
-          <View style={styles.dueChip}>
-            <Icon name="schedule" size={12} color="#d97706" />
-            <Text style={styles.dueChipText}>
-              {`Due ${formatCurrency(residual, currency)}`}
-            </Text>
+          <View style={styles.detailRow}>
+            <Icon name="event" size={14} color="#6b7280" />
+            <Text style={styles.detailText}>{formatDate(item.invoice_date)}</Text>
           </View>
-        ) : null}
-      </View>
+          {item.invoice_date_due ? (
+            <View style={styles.detailRow}>
+              <Icon name="schedule" size={14} color="#6b7280" />
+              <Text style={styles.detailText}>{`Due: ${formatDate(item.invoice_date_due)}`}</Text>
+            </View>
+          ) : null}
+          {tax > 0 ? (
+            <TouchableOpacity
+              style={styles.taxChip}
+              activeOpacity={0.7}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                openTaxModal(item);
+              }}
+            >
+              <Icon name="receipt-long" size={12} color="#1E88E5" />
+              <Text style={styles.taxChipText}>
+                {`Tax ${formatCurrency(tax, currency)}`}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          {residual > 0 ? (
+            <View style={styles.dueChip}>
+              <Icon name="schedule" size={12} color="#d97706" />
+              <Text style={styles.dueChipText}>
+                {`Due ${formatCurrency(residual, currency)}`}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -160,20 +216,32 @@ const InvoicesListScreen = ({ navigation }) => {
         onChangeText={handleSearchTextChange}
         placeholder="Search by invoice # or customer"
       />
-      <View style={styles.filterRow}>
-        {STATE_FILTERS.map((f) => {
-          const active = stateFilter === f.key;
-          return (
-            <TouchableOpacity
-              key={f.key}
-              onPress={() => setStateFilter(f.key)}
-              activeOpacity={0.85}
-              style={[styles.filterChip, active && styles.filterChipActive]}
-            >
-              <Text style={[styles.filterText, active && styles.filterTextActive]}>{f.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
+      <View style={styles.filterBar}>
+        <View style={styles.filterRow}>
+          {STATE_FILTERS.map((f) => {
+            const active = stateFilter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                onPress={() => setStateFilter(f.key)}
+                activeOpacity={0.85}
+                style={[styles.filterChip, active && styles.filterChipActive]}
+              >
+                <Text style={[styles.filterText, active && styles.filterTextActive]}>{f.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <TouchableOpacity
+          style={styles.filtersBtn}
+          activeOpacity={0.85}
+          onPress={() => setFiltersModalVisible(true)}
+        >
+          <Icon name="filter-list" size={18} color="#1E88E5" />
+          <Text style={styles.filtersBtnText}>
+            {filterKeys.length > 0 ? `Filters (${filterKeys.length})` : 'Filters'}
+          </Text>
+        </TouchableOpacity>
       </View>
       <RoundedContainer>
         {loading ? (
@@ -209,16 +277,63 @@ const InvoicesListScreen = ({ navigation }) => {
           />
         )}
       </RoundedContainer>
+      <TaxBreakdownModal
+        isVisible={taxModalVisible}
+        order={taxModalInvoice}
+        loading={taxModalLoading}
+        currency={currency}
+        onClose={() => setTaxModalVisible(false)}
+      />
+      <InvoiceFiltersModal
+        isVisible={filtersModalVisible}
+        initialSelected={filterKeys}
+        onClose={() => setFiltersModalVisible(false)}
+        onApply={(payload) => {
+          setFilterKeys(payload.keys || []);
+          setFilterPayload({
+            states: payload.states || [],
+            paymentStates: payload.paymentStates || [],
+            moveTypes: payload.moveTypes || [],
+            overdueOnly: !!payload.overdueOnly,
+          });
+          setFiltersModalVisible(false);
+        }}
+      />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  // filterBar: pill row + Filters button laid out horizontally so the
+  // legacy quick-state pills (All/Posted/Draft/Cancelled) remain usable
+  // alongside the new multi-axis dropdown modal.
+  filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+  },
+  filtersBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#E7F1FD',
+  },
+  filtersBtnText: {
+    fontSize: 12,
+    color: '#1E88E5',
+    fontWeight: '700',
+  },
   filterRow: {
     flexDirection: 'row',
     gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 4,
   },
   filterChip: {
     paddingHorizontal: 12,
@@ -234,25 +349,32 @@ const styles = StyleSheet.create({
 
   loadingBox: { paddingVertical: 32, alignItems: 'center' },
 
+  // Card matches MyOrdersScreen.renderOrderItem look: 48x48 disk on left,
+  // number + status pill stacked in the middle, amount right; bordered
+  // detail section below for partner / invoice date / due date / chips.
   card: {
     backgroundColor: '#fff',
     marginHorizontal: 12,
-    marginVertical: 6,
+    marginBottom: 12,
     borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  headerRow: { flexDirection: 'row', alignItems: 'center' },
   iconDisk: {
-    width: 38, height: 38, borderRadius: 10,
+    width: 48, height: 48, borderRadius: 24,
     alignItems: 'center', justifyContent: 'center',
   },
-  number: { fontSize: 14, fontWeight: '800', color: '#111827' },
+  number: { fontSize: 15, fontWeight: '700', color: '#111827' },
   badge: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, marginTop: 4 },
-  badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
-  total: { fontSize: 14, fontWeight: '900', color: '#111827' },
-  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
+  badgeText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
+  total: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  detailSection: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f1f2f6' },
+  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3 },
   detailText: { color: '#4b5563', fontSize: 12 },
   taxChip: {
     alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4,

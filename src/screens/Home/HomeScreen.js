@@ -17,6 +17,7 @@ import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
 import { OverlayLoader } from '@components/Loader';
 import { useLoader } from '@hooks';
+import JournalsTilePopup from '@components/Modal/JournalsTilePopup';
 import { version as appVersion } from '../../../package.json';
 
 // Each item carries an optional `featureKey` that, when present, matches a
@@ -114,6 +115,7 @@ const HomeScreen = ({ navigation }) => {
   const hiddenFeatures = useAuthStore((s) => s.hiddenFeatures);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [backPressCount, setBackPressCount] = useState(0);
+  const [journalsPopupVisible, setJournalsPopupVisible] = useState(false);
   const [detailLoading] = useLoader(false);
 
   useEffect(() => {
@@ -167,6 +169,13 @@ const HomeScreen = ({ navigation }) => {
         showToastMessage('Only administrators can access this feature');
         return;
       }
+    }
+    // Accounting → Journal Entries opens a 2x2 sub-tile popup (Sales /
+    // Purchases / Bank & Cash / Miscellaneous) instead of navigating
+    // straight to the unfiltered list — mirrors Odoo's backend grouping.
+    if (item.id === 'journal_entries') {
+      setJournalsPopupVisible(true);
+      return;
     }
     navigation.navigate(item.screen, item.params || {});
   };
@@ -298,6 +307,14 @@ return (
         </ScrollView>
         <OverlayLoader visible={detailLoading} />
       </RoundedContainer>
+      <JournalsTilePopup
+        isVisible={journalsPopupVisible}
+        onClose={() => setJournalsPopupVisible(false)}
+        onPick={({ journalTypes, titleSuffix }) => {
+          setJournalsPopupVisible(false);
+          navigation.navigate('JournalEntriesListScreen', { journalTypes, titleSuffix });
+        }}
+      />
     </SafeAreaView>
   );
 };
