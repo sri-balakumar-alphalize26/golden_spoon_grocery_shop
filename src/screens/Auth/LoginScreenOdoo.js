@@ -29,6 +29,7 @@ import { fetchCompanyCurrency, fetchUserCompanyId, fetchDecimalAccuracy } from "
 import { fetchCompanyProfileOdoo } from "@api/services/generalApi";
 import { saveCurrencyConfig } from "@utils/currency";
 import { useCurrencyStore } from "@stores/currency";
+import { invalidateAuthContextCache } from "@api/utils/authInterceptor";
 
 LogBox.ignoreLogs(["new NativeEventEmitter"]);
 LogBox.ignoreAllLogs();
@@ -255,6 +256,13 @@ const LoginScreenOdoo = () => {
             const sessionId = String(setCookieHeader).split("session_id=")[1]?.split(";")[0];
             if (sessionId) await AsyncStorage.setItem("odoo_session_id", sessionId);
           }
+
+          // Clear the cached auth context so the next call_kw re-reads the
+          // freshly-authenticated user's allowed_company_ids / company_id
+          // instead of reusing the previous user's. Without this, switching
+          // users in the same session would keep the prior user's record-
+          // rule scope.
+          try { invalidateAuthContextCache(); } catch (_) {}
 
           await AsyncStorage.setItem(
             "savedCredentials",
