@@ -21,6 +21,7 @@ import {
   // create the stock.picking, so on-hand never decremented. sync_from_ui
   // does, so we route every paid order through that single path.
   deletePosOrderOdoo,
+  fetchProductTaxMap,
 } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
 // react-native-modal — used here for the ID-proof popup so it animates
@@ -96,6 +97,16 @@ const POSPayment = ({ navigation, route }) => {
   }, []);
 
   const [invoiceChecked, setInvoiceChecked] = useState(false);
+  // "With Tax" toggle — defaults to ON so existing tax-bearing products
+  // continue to display their server-computed tax. Flipping it OFF tells
+  // submitPosOrderToOdoo to override product.taxes_id with an empty set
+  // per line, so Odoo books a zero-tax order (receipt/invoice/accounting
+  // all stay aligned with what the cashier sees on screen).
+  const [withTaxMode, setWithTaxMode] = useState(true);
+  // Map of product.product id → { rate, priceInclude } for the cart's
+  // products. Hydrated lazily on mount via fetchProductTaxMap so we can
+  // render a real tax row in the totals breakdown.
+  const [productTaxMap, setProductTaxMap] = useState({});
   const [amountModalVisible, setAmountModalVisible] = useState(false);
   const [customerModalVisible, setCustomerModalVisible] = useState(false);
   const {
@@ -276,6 +287,24 @@ const POSPayment = ({ navigation, route }) => {
     console.log('POSPayment params:', route?.params);
   }, []);
 
+  // Hydrate the product → tax-rate map for the products currently in the
+  // cart. The Tax row in the totals breakdown reads from this, so until
+  // the fetch settles the row simply doesn't appear (no flash, no NaN).
+  useEffect(() => {
+    let mounted = true;
+    const ids = (products || [])
+      .map((p) => Number(p.remoteId || p.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (ids.length === 0) return undefined;
+    fetchProductTaxMap(ids)
+      .then((map) => {
+        console.log('[WithTax] tax map fetched', { ids, map });
+        if (mounted) setProductTaxMap(map || {});
+      })
+      .catch((e) => { console.warn('[WithTax] tax map fetch failed', e?.message || e); });
+    return () => { mounted = false; };
+  }, []);
+
   // Subtotal = naive sum of price × qty across cart. The `total`
   // (after discount) is what every downstream calculation reads.
   const subtotal = (products || []).reduce((s, p) => s + ((p.price || 0) * (p.quantity || p.qty || 0)), 0);
@@ -297,9 +326,49 @@ const POSPayment = ({ navigation, route }) => {
   const effectiveDiscountPercent = subtotal > 0
     ? Math.round((computedDiscountAmount / subtotal) * 1000000) / 10000  // 4-decimal precision
     : 0;
+  // Tax amount — sum (post-discount line value × rate) for each cart
+  // product whose taxes_id resolved a non-zero rate. Toggle off → 0, so
+  // it disappears from the breakdown AND we ship tax_ids=[] to Odoo.
+  const taxAmount = (() => {
+    if (!withTaxMode) return 0;
+    let sum = 0;
+    for (const p of products || []) {
+      const pid = Number(p.remoteId || p.id);
+      const info = productTaxMap[pid];
+      if (!info || !info.rate) continue;
+      const price = Number(p.price) || 0;
+      const qty = Number(p.quantity || p.qty || 0);
+      const gross = price * qty * (1 - (effectiveDiscountPercent || 0) / 100);
+      // price_include products already carry the tax inside `price`, so
+      // the visible tax = gross - gross / (1 + rate/100). Tax-exclusive
+      // products: tax = gross * rate / 100.
+      sum += info.priceInclude
+        ? gross - gross / (1 + info.rate / 100)
+        : gross * info.rate / 100;
+    }
+    return Math.round(sum * 1000) / 1000;
+  })();
+  console.log('[WithTax] totals', {
+    subtotal,
+    computedDiscountAmount,
+    taxAmount,
+    withTaxMode,
+    productTaxMap,
+  });
   const computeTotal = () => {
-    if (totalIsExternal) return totalAmount;
-    return subtotal - computedDiscountAmount;
+    // For price-inclusive taxes the tax is already inside `price`, so adding
+    // `taxAmount` would double-count. Treat any cart containing one or more
+    // price-inclusive lines as "tax already in the base" and skip the
+    // addition — the Tax row in the breakdown is then informational, not
+    // additive. Applies in both the external-total and locally-computed paths.
+    const hasInclusive = withTaxMode && (products || []).some((p) => {
+      const info = productTaxMap[Number(p.remoteId || p.id)];
+      return info && info.priceInclude && info.rate > 0;
+    });
+    const base = totalIsExternal
+      ? Number(totalAmount) || 0
+      : subtotal - computedDiscountAmount;
+    return hasInclusive ? base : base + (taxAmount || 0);
   };
   const total = computeTotal();
   // Refund flow: when the order total is negative, treat the entered amount
@@ -640,6 +709,7 @@ const POSPayment = ({ navigation, route }) => {
               amountReturn: Math.max(0, paidAmount - total),
               toInvoice: invoiceChecked || Boolean(customer && (customer.id || customer._id)),
               companyId,
+              withTax: withTaxMode,
             });
             if (submitResp?.error) {
               console.error('POS submit error:', submitResp.error);
@@ -772,12 +842,11 @@ const POSPayment = ({ navigation, route }) => {
       try { clearProducts(); } catch (_) {}
       try { useProductStore.getState().clearDraftOrder(); } catch (_) {}
 
-      // Tax is computed server-side by Odoo (account.move.line auto-fills
-      // tax_ids from product.taxes_id). The receipt no longer renders a Tax
-      // row, so we ship 0 here and the receipt's grand total stays equal to
-      // `subtotal + service - discount`.
-      const taxAmount = 0;
-
+      // Tax for the receipt — when the cashier left "With Tax" checked we
+      // pass through the same `taxAmount` the totals breakdown above used
+      // (computed from productTaxMap × cart). When unchecked, `taxAmount`
+      // is already zero, which is also what Odoo will book because the
+      // submit ships tax_ids=[] per line.
       navigation.navigate('POSReceiptScreen', {
         orderId: createdOrderId,
         products,
@@ -910,6 +979,8 @@ const POSPayment = ({ navigation, route }) => {
     handlePay();
   };
 
+  console.log('[WithTax] render', { withTaxMode, taxAmount, totalIsExternal });
+
   return (
     <SafeAreaView backgroundColor={NAVY}>
       <StatusBar barStyle="light-content" backgroundColor={NAVY} />
@@ -935,18 +1006,26 @@ const POSPayment = ({ navigation, route }) => {
 
         <Text style={styles.totalLabel}>TOTAL</Text>
         <Text style={styles.totalValue}>{displayNum(total)}</Text>
-        {computedDiscountAmount > 0 && !totalIsExternal ? (
+        {(computedDiscountAmount > 0 || (withTaxMode && taxAmount > 0)) ? (
           <View style={styles.totalBreakdown}>
             <View style={styles.totalBreakdownRow}>
               <Text style={styles.totalBreakdownLabel}>Subtotal</Text>
               <Text style={styles.totalBreakdownValue}>{displayNum(subtotal)}</Text>
             </View>
-            <View style={styles.totalBreakdownRow}>
-              <Text style={[styles.totalBreakdownLabel, styles.totalBreakdownDiscount]}>
-                Discount {discountFormat === 'amount' ? '(amount)' : `(${discountPercent}%)`}
-              </Text>
-              <Text style={[styles.totalBreakdownValue, styles.totalBreakdownDiscount]}>−{displayNum(computedDiscountAmount)}</Text>
-            </View>
+            {computedDiscountAmount > 0 ? (
+              <View style={styles.totalBreakdownRow}>
+                <Text style={[styles.totalBreakdownLabel, styles.totalBreakdownDiscount]}>
+                  Discount {discountFormat === 'amount' ? '(amount)' : `(${discountPercent}%)`}
+                </Text>
+                <Text style={[styles.totalBreakdownValue, styles.totalBreakdownDiscount]}>−{displayNum(computedDiscountAmount)}</Text>
+              </View>
+            ) : null}
+            {withTaxMode && taxAmount > 0 ? (
+              <View style={styles.totalBreakdownRow}>
+                <Text style={styles.totalBreakdownLabel}>Tax</Text>
+                <Text style={styles.totalBreakdownValue}>{displayNum(taxAmount)}</Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -1189,6 +1268,31 @@ const POSPayment = ({ navigation, route }) => {
 
         {/* Validate footer — solid orange, always tappable; popup if cash short */}
         <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.discountChip, withTaxMode && styles.discountChipActive]}
+            onPress={() => {
+              console.log('[WithTax] toggle pressed, current=', withTaxMode);
+              setWithTaxMode((v) => !v);
+            }}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons
+              name={withTaxMode ? 'check-box' : 'check-box-outline-blank'}
+              size={16}
+              color={withTaxMode ? '#fff' : NAVY}
+            />
+            <Text
+              style={[
+                styles.discountChipText,
+                withTaxMode && styles.discountChipTextActive,
+              ]}
+              numberOfLines={1}
+            >
+              {withTaxMode
+                ? (taxAmount > 0 ? `With Tax  +${displayNum(taxAmount)}` : 'With Tax')
+                : 'Without Tax'}
+            </Text>
+          </TouchableOpacity>
           {!totalIsExternal ? (
             <TouchableOpacity
               style={[styles.discountChip, computedDiscountAmount > 0 && styles.discountChipActive]}

@@ -41,6 +41,10 @@ export const generateInvoiceHtml = ({
   service = 0,
   total = 0,
   discount = 0,
+  // Tax amount to render between Subtotal and Grand Total. Zero or
+  // negative → no Tax row (covers both the "Without Tax" toggle and the
+  // historic zero-tax orders Odoo stored before this feature shipped).
+  tax = 0,
   orderId = '',
   orderName = '',
   paidAmount = 0,
@@ -202,6 +206,7 @@ export const generateInvoiceHtml = ({
       <div class="totals">
         <div class="line"><div class="label">Subtotal / المجموع الفرعي</div><div class="value">${formatCurrencyHtml(Number(subtotal || total))}</div></div>
         ${discount > 0 ? `<div class="line"><div class="label">Discount / الخصم</div><div class="value" style="color:#c00;">-${formatCurrencyHtml(discount)}</div></div>` : ''}
+        ${Number(tax) > 0 ? `<div class="line"><div class="label">Tax / الضريبة</div><div class="value">${formatCurrencyHtml(Number(tax))}</div></div>` : ''}
         <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
         <div class="line" style="font-size:13px; font-weight:700;"><div class="label">Grand Total / الإجمالي</div><div class="value">${formatCurrencyHtml(Number(total || subtotal))}</div></div>
       </div>

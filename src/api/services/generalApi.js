@@ -616,6 +616,12 @@ export const submitPosOrderToOdoo = async ({
   pricelistId = false, toInvoice = false,
   creationDate = new Date().toISOString(),
   companyId = 1,
+  // When false, override product.taxes_id with an empty set on every line
+  // so Odoo books the order with zero tax (receipt / invoice / accounting
+  // all align on "no tax"). When true (default), leave tax_ids alone and
+  // Odoo's POS pipeline auto-fills it from product.taxes_id — current
+  // behaviour for every existing caller.
+  withTax = true,
 } = {}) => {
   if (!sessionId) return { error: { message: 'sessionId is required' } };
   if (!Array.isArray(lines) || lines.length === 0) return { error: { message: 'lines required' } };
@@ -636,6 +642,11 @@ export const submitPosOrderToOdoo = async ({
     };
     if (l.customer_note && String(l.customer_note).trim()) {
       vals.customer_note = String(l.customer_note).trim();
+    }
+    // [[6, 0, []]] = many2many "replace with empty set" — forces this line
+    // to have no taxes regardless of what product.taxes_id says.
+    if (withTax === false) {
+      vals.tax_ids = [[6, 0, []]];
     }
     return [0, 0, vals];
   });
@@ -790,6 +801,105 @@ export const submitPosOrderToOdoo = async ({
 // Back-compat alias — keep the old export name pointing at the new function
 // so any straggling imports don't break.
 export const submitPosOrderViaCreateFromUi = submitPosOrderToOdoo;
+
+// Fetch per-product sale-tax rate for the products currently in the POS cart.
+// Used by the Payment screen's "With Tax" toggle so it can display a real
+// tax breakdown above the payment methods. Returns a map keyed by the
+// product.product id:
+//   { [productId]: { rate, priceInclude } }
+// where `rate` is the summed percentage across the product's taxes_id (a
+// product can have more than one tax applied) and `priceInclude` is true
+// when any of those taxes is price-inclusive (so the caller can decide
+// whether to back-out the embedded tax from the displayed price).
+// Empty/invalid input → {} so callers can treat it as a safe fallback.
+export const fetchProductTaxMap = async (productIds = []) => {
+  try {
+    const ids = (productIds || [])
+      .map((v) => Number(v))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    console.log('[TAX MAP] input productIds:', ids);
+    if (ids.length === 0) return {};
+
+    // 1) Read taxes_id off each product.product. taxes_id is a many2many
+    //    of account.tax records (the sales taxes Odoo auto-applies on POS
+    //    order lines / invoice lines).
+    const prodResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'product.product',
+        method: 'read',
+        args: [ids, ['id', 'name', 'taxes_id']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    if (prodResp.data?.error) {
+      console.warn('[TAX MAP] product.product read error:', prodResp.data.error);
+      return {};
+    }
+    const prodRows = prodResp.data?.result || [];
+    console.log('[TAX MAP] product.product rows:', JSON.stringify(prodRows));
+
+    // Flatten every referenced tax id so we only read account.tax once.
+    const allTaxIds = Array.from(new Set(
+      prodRows.flatMap((r) => Array.isArray(r.taxes_id) ? r.taxes_id : [])
+    ));
+    console.log('[TAX MAP] referenced account.tax ids:', allTaxIds);
+    if (allTaxIds.length === 0) {
+      console.warn('[TAX MAP] no taxes_id on any product — products in cart have no sale tax in Odoo');
+      return Object.fromEntries(prodRows.map((r) => [r.id, { rate: 0, priceInclude: false }]));
+    }
+
+    // 2) Read the matching account.tax records. `amount` is the percentage
+    //    for amount_type='percent'; for fixed/grouped taxes it's a flat
+    //    figure that doesn't translate cleanly to a percent — skip those.
+    const taxResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.tax',
+        method: 'read',
+        args: [allTaxIds, ['id', 'name', 'amount', 'amount_type', 'price_include']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+
+    if (taxResp.data?.error) {
+      console.warn('[TAX MAP] account.tax read error:', taxResp.data.error);
+      return {};
+    }
+    const taxRows = taxResp.data?.result || [];
+    console.log('[TAX MAP] account.tax rows:', JSON.stringify(taxRows));
+    const taxById = {};
+    for (const t of taxRows) {
+      taxById[t.id] = {
+        amount: Number(t.amount) || 0,
+        priceInclude: !!t.price_include,
+        isPercent: t.amount_type === 'percent' || t.amount_type === 'division',
+      };
+    }
+
+    const out = {};
+    for (const r of prodRows) {
+      const taxIds = Array.isArray(r.taxes_id) ? r.taxes_id : [];
+      let rate = 0;
+      let priceInclude = false;
+      for (const tid of taxIds) {
+        const t = taxById[tid];
+        if (!t) continue;
+        if (t.isPercent) rate += t.amount;
+        if (t.priceInclude) priceInclude = true;
+      }
+      out[r.id] = { rate, priceInclude };
+    }
+    console.log('[TAX MAP] assembled map:', JSON.stringify(out));
+    return out;
+  } catch (e) {
+    console.warn('[TAX MAP] exception:', e?.message || e);
+    return {};
+  }
+};
 // Read all pos.payment records attached to a single pos.order. Used by the
 // order detail screen so a split-paid order can show "Cash 500 · Card 500"
 // instead of just the aggregate "amount_paid". Returns an array shaped like

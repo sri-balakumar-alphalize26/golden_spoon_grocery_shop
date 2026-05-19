@@ -502,6 +502,12 @@ const OrderDetailScreen = ({ navigation, route }) => {
               <Text style={s.totalValue}>{formatCurrency(order.amount_return, currency)}</Text>
             </View>
           ) : null}
+          {Number(order.amount_tax) > 0 ? (
+            <View style={s.totalRow}>
+              <Text style={s.totalLabel}>Tax</Text>
+              <Text style={s.totalValue}>{formatCurrency(order.amount_tax, currency)}</Text>
+            </View>
+          ) : null}
           <View style={s.divider} />
           <View style={s.totalRow}>
             <Text style={s.grandLabel}>Total</Text>

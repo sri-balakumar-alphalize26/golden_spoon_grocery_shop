@@ -122,7 +122,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const subtotal = typeof params.subtotal !== 'undefined' ? Number(params.subtotal) : (typeof params.totalAmount !== 'undefined' ? Number(params.totalAmount) : items.reduce((s, it) => s + (it.subtotal || 0), 0));
   const service = typeof params.service !== 'undefined' ? Number(params.service) : 0;
   const discount = typeof params.discount !== 'undefined' ? Number(params.discount) : 0;
-  const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + service - discount;
+  // Tax row — only shown when the upstream payment screen had "With Tax"
+  // checked (or, for re-export from MyOrders, when the saved order has a
+  // non-zero amount_tax). Zero hides the row entirely on the printed
+  // receipt and in the on-screen preview below.
+  const tax = typeof params.tax !== 'undefined' ? Number(params.tax) : 0;
+  const total = typeof params.total !== 'undefined' ? Number(params.total) : subtotal + service - discount + tax;
   const orderId = params.orderId || params.id || params.invoiceId || null;
   // Payment method label, seeded from POSPayment so the receipt renders
   // the right method on first paint instead of flashing "Cash" while the
@@ -177,7 +182,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const runPreview = (paperWidthMm) => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -195,7 +200,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -247,7 +252,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -439,6 +444,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
                 <View style={s.paperTotalsRow}>
                   <Text style={s.paperPlain}>Discount / الخصم</Text>
                   <Text style={s.paperPlainBold}>-{displayNum(discount)}</Text>
+                </View>
+              ) : null}
+              {tax > 0 ? (
+                <View style={s.paperTotalsRow}>
+                  <Text style={s.paperPlain}>Tax / الضريبة</Text>
+                  <Text style={s.paperPlainBold}>{displayNum(tax)}</Text>
                 </View>
               ) : null}
 
