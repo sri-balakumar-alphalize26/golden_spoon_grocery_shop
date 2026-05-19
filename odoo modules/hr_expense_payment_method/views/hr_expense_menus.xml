@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_hr_expense_payment_methods"
+              name="Payment Methods"
+              parent="hr_expense.menu_hr_expense_configuration"
+              action="hr_expense_payment_method_action"
+              sequence="10"/>
+</odoo>

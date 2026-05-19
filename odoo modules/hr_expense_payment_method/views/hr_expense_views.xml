@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_hr_expense_form_inherit_payment_method" model="ir.ui.view">
+        <field name="name">hr.expense.form.inherit.payment.method</field>
+        <field name="model">hr.expense</field>
+        <field name="inherit_id" ref="hr_expense.hr_expense_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='employee_id']" position="after">
+                <field name="payment_method_id" options="{'no_create': True}"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_hr_expense_tree_inherit_payment_method" model="ir.ui.view">
+        <field name="name">hr.expense.tree.inherit.payment.method</field>
+        <field name="model">hr.expense</field>
+        <field name="inherit_id" ref="hr_expense.view_expenses_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='employee_id']" position="after">
+                <field name="payment_method_id" optional="hide"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

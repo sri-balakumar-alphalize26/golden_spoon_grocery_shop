@@ -122,6 +122,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
         reloadAttachments(),
       ]);
       const row = (all || []).find((e) => e.id === expenseId);
+      console.log('[EXPENSE:SCREEN] expense.payment_method_id =', row?.payment_method_id);
       setExpense(row || null);
     } catch (e) {
       Toast.show({ type: 'error', text1: 'Failed to load expense', position: 'bottom' });
@@ -167,6 +168,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
     if (!expense?.id) return;
     try {
       const fresh = await fetchExpenseByIdOdoo(expense.id);
+      console.log('[EXPENSE:SCREEN] refreshed payment_method_id =', fresh?.payment_method_id);
       if (fresh) setExpense(fresh);
       reloadAttachments();
     } catch (_) {
@@ -433,6 +435,13 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
           <Row icon="event" label="Date" value={formatDate(expense.date)} />
           <Row icon="category" label="Category" value={expense.category?.name || '—'} />
           <Row icon="account-balance-wallet" label="Paid By" value={paidByLabel} />
+          <Row
+            icon="payment"
+            label="Payment Method"
+            value={Array.isArray(expense.payment_method_id)
+              ? expense.payment_method_id[1]
+              : 'Not set — tap Edit to assign'}
+          />
           <Row icon="person" label="Employee" value={expense.employee?.name || '—'} last={!expense.description} />
           {expense.description ? (
             <Row icon="notes" label="Notes" value={expense.description} last />

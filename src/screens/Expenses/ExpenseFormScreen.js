@@ -29,6 +29,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
 import {
   fetchExpenseCategoriesOdoo,
+  fetchExpensePaymentMethodsOdoo,
   createExpenseOdoo,
   updateExpenseOdoo,
   fetchExpensesOdoo,
@@ -80,11 +81,16 @@ const ExpenseFormScreen = ({ navigation, route }) => {
   const [category, setCategory] = useState(null);
   const [totalAmount, setTotalAmount] = useState('');
   const [paymentMode, setPaymentMode] = useState('own_account');
+  const [paymentMethod, setPaymentMethod] = useState(null);
   const [description, setDescription] = useState('');
 
   const [categories, setCategories] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState('');
+
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [pmPickerOpen, setPmPickerOpen] = useState(false);
+  const [pmPickerSearch, setPmPickerSearch] = useState('');
 
   // Receipts staged locally — uploaded after the hr.expense row exists,
   // because ir.attachment requires res_id.
@@ -106,6 +112,19 @@ const ExpenseFormScreen = ({ navigation, route }) => {
     fetchExpenseCategoriesOdoo().then((cats) => setCategories(cats || []));
   }, []);
 
+  // Load payment methods (hr.expense.payment.method from hr_expense_payment_method
+  // module). Auto-select the row flagged is_default for new expenses; the
+  // edit-mode prefill below overrides this if the row already carries one.
+  useEffect(() => {
+    fetchExpensePaymentMethodsOdoo().then((rows) => {
+      setPaymentMethods(rows || []);
+      if (!isEdit) {
+        const def = (rows || []).find((m) => m.is_default);
+        if (def) setPaymentMethod({ id: def.id, name: def.name });
+      }
+    });
+  }, [isEdit]);
+
   // Edit-mode prefill (re-fetch the row to be safe).
   useEffect(() => {
     if (!isEdit) return;
@@ -125,6 +144,10 @@ const ExpenseFormScreen = ({ navigation, route }) => {
         setPaymentMode(row.payment_mode || 'own_account');
         setDescription(row.description || '');
         if (row.category?.id) setCategory({ id: row.category.id, name: row.category.name });
+        // Odoo returns Many2one fields as [id, display_name] or false.
+        if (Array.isArray(row.payment_method_id) && row.payment_method_id[0]) {
+          setPaymentMethod({ id: row.payment_method_id[0], name: row.payment_method_id[1] });
+        }
       } finally {
         if (alive) setPrefilling(false);
       }
@@ -134,6 +157,10 @@ const ExpenseFormScreen = ({ navigation, route }) => {
 
   const filteredCats = categories.filter((c) =>
     !pickerSearch || (c.name || '').toLowerCase().includes(pickerSearch.toLowerCase())
+  );
+
+  const filteredPMs = paymentMethods.filter((m) =>
+    !pmPickerSearch || (m.name || '').toLowerCase().includes(pmPickerSearch.toLowerCase())
   );
 
   // Stage a new attachment OR swap an existing row when `replaceTargetId`
@@ -238,6 +265,10 @@ const ExpenseFormScreen = ({ navigation, route }) => {
       Toast.show({ type: 'error', text1: 'Description is required', position: 'bottom' });
       return;
     }
+    if (!category?.id) {
+      Toast.show({ type: 'error', text1: 'Category is required', position: 'bottom' });
+      return;
+    }
     if (!isEdit && !employeeId) {
       Toast.show({ type: 'error', text1: 'No employee linked to your user', position: 'bottom' });
       return;
@@ -252,6 +283,7 @@ const ExpenseFormScreen = ({ navigation, route }) => {
         paymentMode,
         description,
         employeeId,
+        paymentMethodId: paymentMethod?.id,
       };
       const resp = isEdit
         ? await updateExpenseOdoo(editId, payload)
@@ -349,7 +381,7 @@ const ExpenseFormScreen = ({ navigation, route }) => {
             </View>
 
             <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Category</Text>
+              <Text style={styles.fieldLabel}>Category *</Text>
               <TouchableOpacity
                 style={styles.pickerBtn}
                 activeOpacity={0.75}
@@ -363,7 +395,7 @@ const ExpenseFormScreen = ({ navigation, route }) => {
             </View>
 
             <Field
-              label="Total Amount *"
+              label="Total Amount"
               value={totalAmount}
               onChangeText={setTotalAmount}
               placeholder="0.00"
@@ -392,6 +424,20 @@ const ExpenseFormScreen = ({ navigation, route }) => {
                   </Text>
                 </TouchableOpacity>
               </View>
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Payment Method</Text>
+              <TouchableOpacity
+                style={styles.pickerBtn}
+                activeOpacity={0.75}
+                onPress={() => setPmPickerOpen(true)}
+              >
+                <Text style={[styles.pickerBtnText, !paymentMethod && { color: '#aaa' }]} numberOfLines={1}>
+                  {paymentMethod?.name || 'Select payment method'}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color={MUTED} />
+              </TouchableOpacity>
             </View>
 
             <Field
@@ -527,6 +573,59 @@ const ExpenseFormScreen = ({ navigation, route }) => {
                   ListEmptyComponent={(
                     <View style={{ padding: 24, alignItems: 'center' }}>
                       <Text style={{ color: MUTED }}>No expense categories</Text>
+                    </View>
+                  )}
+                />
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* Centered payment method picker */}
+      <Modal visible={pmPickerOpen} animationType="fade" transparent onRequestClose={() => setPmPickerOpen(false)}>
+        <TouchableWithoutFeedback onPress={() => setPmPickerOpen(false)}>
+          <View style={styles.pickerBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.pickerCard}>
+                <View style={styles.pickerCardHeader}>
+                  <Text style={styles.pickerHeaderTitle}>Select Payment Method</Text>
+                  <TouchableOpacity
+                    onPress={() => setPmPickerOpen(false)}
+                    style={styles.pickerCloseBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <MaterialIcons name="close" size={20} color="#1a1a2e" />
+                  </TouchableOpacity>
+                </View>
+                <View style={{ paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6 }}>
+                  <TextInput
+                    style={styles.pickerSearch}
+                    placeholder="Search…"
+                    placeholderTextColor={MUTED}
+                    value={pmPickerSearch}
+                    onChangeText={setPmPickerSearch}
+                  />
+                </View>
+                <FlatList
+                  data={filteredPMs}
+                  keyExtractor={(item, idx) => `pm-${item.id}-${idx}`}
+                  keyboardShouldPersistTaps="handled"
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.pickerRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        setPaymentMethod({ id: item.id, name: item.name });
+                        setPmPickerOpen(false);
+                      }}
+                    >
+                      <Text style={styles.pickerRowText}>{item.name}</Text>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={(
+                    <View style={{ padding: 24, alignItems: 'center' }}>
+                      <Text style={{ color: MUTED }}>No payment methods configured</Text>
                     </View>
                   )}
                 />

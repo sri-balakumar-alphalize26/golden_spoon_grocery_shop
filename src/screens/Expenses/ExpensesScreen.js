@@ -27,6 +27,11 @@ import {
   fetchCurrentEmployeeIdOdoo,
 } from '@api/services/generalApi';
 import { refreshCurrencyFromStorage } from '@api/services/currencyApi';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
+import Toast from 'react-native-toast-message';
+import { buildExpenseReportHtml, buildExpenseReportCsv } from '@utils/expenseExportHtml';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -88,6 +93,8 @@ const ExpensesScreen = ({ navigation }) => {
   const [totals, setTotals] = useState({ to_submit: 0, waiting_approval: 0, waiting_reimbursement: 0 });
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [xlsBusy, setXlsBusy] = useState(false);
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
     () => loadList(employee?.id),
@@ -140,6 +147,107 @@ const ExpensesScreen = ({ navigation }) => {
     ? data
     : data.filter((row) => (FILTER_GROUPS[filter] || [filter]).includes(row.state));
 
+  // Footer total updates as the filter chip / search changes, since it
+  // sums whatever's currently in visibleData.
+  const visibleTotal = visibleData.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+  const filterLabel = (FILTERS.find((f) => f.key === filter) || {}).label || 'All';
+  const filterSlug = String(filter || 'all').replace(/_/g, '-');
+
+  const tsForFile = () => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  };
+
+  // Persist a file the user picked a save destination for. On Android we use
+  // the StorageAccessFramework so the user gets a real "pick a folder" dialog.
+  // On iOS (no SAF) we fall back to Sharing.shareAsync, whose share sheet
+  // already exposes "Save to Files". Mirrors StockScreen's saveFile().
+  const saveFile = async ({ srcUri, content, fileName, mimeType, isBase64 = false }) => {
+    if (Platform.OS === 'android') {
+      try {
+        const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (perm?.granted) {
+          const newUri = await FileSystem.StorageAccessFramework.createFileAsync(
+            perm.directoryUri,
+            fileName,
+            mimeType
+          );
+          let payload = content;
+          let encoding = FileSystem.EncodingType.UTF8;
+          if (isBase64) {
+            payload = await FileSystem.readAsStringAsync(srcUri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            encoding = FileSystem.EncodingType.Base64;
+          }
+          await FileSystem.writeAsStringAsync(newUri, payload, { encoding });
+          Toast.show({ type: 'success', text1: 'Saved', text2: fileName, position: 'bottom' });
+          return true;
+        }
+      } catch (e) {
+        console.warn('SAF save failed, falling back to share:', e?.message || e);
+      }
+    }
+    let uriToShare = srcUri;
+    if (!uriToShare) {
+      uriToShare = `${FileSystem.cacheDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(uriToShare, content, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+    }
+    const can = await Sharing.isAvailableAsync();
+    if (!can) {
+      Toast.show({ type: 'error', text1: 'Sharing not available on this device', position: 'bottom' });
+      return false;
+    }
+    await Sharing.shareAsync(uriToShare, {
+      mimeType,
+      dialogTitle: `Save ${fileName}`,
+      UTI: mimeType === 'application/pdf' ? 'com.adobe.pdf' : 'public.comma-separated-values-text',
+    });
+    return true;
+  };
+
+  const handleExportPdf = async () => {
+    if (pdfBusy || xlsBusy) return;
+    setPdfBusy(true);
+    try {
+      const formatAmount = (n) => formatCurrency(n, currency);
+      const html = buildExpenseReportHtml(visibleData, formatAmount, {
+        filterLabel,
+        totalFormatted: formatAmount(visibleTotal),
+        searchText,
+      });
+      const { uri } = await Print.printToFileAsync({ html });
+      const fileName = `expenses-${filterSlug}-${tsForFile()}.pdf`;
+      await saveFile({ srcUri: uri, fileName, mimeType: 'application/pdf', isBase64: true });
+    } catch (e) {
+      console.warn('PDF export failed:', e?.message || e);
+      Toast.show({ type: 'error', text1: 'Could not export PDF', text2: e?.message || '', position: 'bottom' });
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (pdfBusy || xlsBusy) return;
+    setXlsBusy(true);
+    try {
+      const formatAmount = (n) => formatCurrency(n, currency);
+      const csv = buildExpenseReportCsv(visibleData, formatAmount, {
+        totalFormatted: formatAmount(visibleTotal),
+      });
+      const fileName = `expenses-${filterSlug}-${tsForFile()}.csv`;
+      await saveFile({ content: csv, fileName, mimeType: 'text/csv', isBase64: false });
+    } catch (e) {
+      console.warn('Excel export failed:', e?.message || e);
+      Toast.show({ type: 'error', text1: 'Could not export Excel', text2: e?.message || '', position: 'bottom' });
+    } finally {
+      setXlsBusy(false);
+    }
+  };
+
   const renderTotalsCard = () => (
     // Each stat card is tappable — mirrors Odoo's web UI where clicking
     // "Waiting Approval" filters the list to that bucket. Tapping the same
@@ -191,6 +299,7 @@ const ExpensesScreen = ({ navigation }) => {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filterRow}
+        style={{ flex: 1 }}
       >
         {FILTERS.map((f) => {
           const active = filter === f.key;
@@ -216,6 +325,40 @@ const ExpensesScreen = ({ navigation }) => {
           );
         })}
       </ScrollView>
+      <View style={styles.exportGroup}>
+        <TouchableOpacity
+          style={[styles.exportBtn, styles.exportBtnPdf, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
+          activeOpacity={0.85}
+          disabled={pdfBusy || xlsBusy}
+          onPress={handleExportPdf}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          {pdfBusy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <MaterialIcons name="picture-as-pdf" size={14} color="#fff" />
+              <Text style={styles.exportBtnText}>PDF</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.exportBtn, styles.exportBtnXls, (pdfBusy || xlsBusy) && { opacity: 0.6 }]}
+          activeOpacity={0.85}
+          disabled={pdfBusy || xlsBusy}
+          onPress={handleExportExcel}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          {xlsBusy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <MaterialIcons name="grid-on" size={14} color="#fff" />
+              <Text style={styles.exportBtnText}>Excel</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -225,6 +368,7 @@ const ExpensesScreen = ({ navigation }) => {
     const paidByLabel = item.payment_mode === 'company_account'
       ? 'Company'
       : 'Employee (to reimburse)';
+    const pmName = Array.isArray(item.payment_method_id) ? item.payment_method_id[1] : null;
     return (
       <TouchableOpacity
         activeOpacity={0.85}
@@ -239,7 +383,9 @@ const ExpensesScreen = ({ navigation }) => {
           <Text style={styles.rowMeta} numberOfLines={1}>
             {formatDate(item.date)} · {item.category?.name || 'No category'}
           </Text>
-          <Text style={styles.rowSub} numberOfLines={1}>{paidByLabel}</Text>
+          <Text style={styles.rowSub} numberOfLines={1}>
+            {paidByLabel}{pmName ? ` · ${pmName}` : ''}
+          </Text>
         </View>
         <View style={styles.rightCol}>
           {/* Paperclip + count when this expense has receipts attached.
@@ -304,6 +450,12 @@ const ExpensesScreen = ({ navigation }) => {
         {renderTotalsCard()}
         {renderFilters()}
         <View style={{ flex: 1 }}>{renderList()}</View>
+        {visibleData.length > 0 ? (
+          <View style={styles.footerBar}>
+            <Text style={styles.footerLabel}>Total ({filterLabel})</Text>
+            <Text style={styles.footerAmount}>{formatCurrency(visibleTotal, currency)}</Text>
+          </View>
+        ) : null}
         {!employee && !loading ? (
           <View style={styles.noEmployeeBanner}>
             <MaterialIcons name="info-outline" size={16} color="#92400E" />
@@ -314,7 +466,10 @@ const ExpensesScreen = ({ navigation }) => {
         ) : null}
         {employee ? (
           <FeatureGate featureKey="expenses.create">
-            <FABButton onPress={() => navigation.navigate('ExpenseForm')} />
+            <FABButton
+              onPress={() => navigation.navigate('ExpenseForm')}
+              style={{ bottom: 56 }}
+            />
           </FeatureGate>
         ) : null}
       </RoundedContainer>
@@ -359,9 +514,41 @@ const styles = StyleSheet.create({
   totalDivider: { width: 16, alignItems: 'center', justifyContent: 'center' },
 
   filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
     height: 48,
     paddingTop: 6,
     paddingBottom: 6,
+  },
+  exportGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    borderLeftWidth: 1,
+    borderLeftColor: '#eef0f5',
+    marginLeft: 6,
+  },
+  exportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    height: 32,
+    borderRadius: 999,
+    gap: 4,
+  },
+  exportBtnPdf: {
+    backgroundColor: '#DC2626',
+  },
+  exportBtnXls: {
+    backgroundColor: '#16A34A',
+  },
+  exportBtnText: {
+    fontSize: 11,
+    color: '#fff',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
   },
   filterRow: {
     flexDirection: 'row',
@@ -457,6 +644,28 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
+  footerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#eef0f5',
+  },
+  footerLabel: {
+    fontSize: 12,
+    color: MUTED,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    letterSpacing: 0.2,
+  },
+  footerAmount: {
+    fontSize: 16,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
   noEmployeeBanner: {
     position: 'absolute',
     bottom: 16,

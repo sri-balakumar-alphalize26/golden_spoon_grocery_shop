@@ -3,10 +3,10 @@ import { FAB } from 'react-native-paper';
 import { COLORS } from '@constants/theme';
 import { MaterialIcons } from "@expo/vector-icons";
 
-const FABButton = ({ onPress }) => {
+const FABButton = ({ onPress, style }) => {
     return (
         <FAB
-            style={styles.fab}
+            style={[styles.fab, style]}
             icon={() => <MaterialIcons name="add" size={24} color="white" />}
             onPress={onPress}
             animated={true}

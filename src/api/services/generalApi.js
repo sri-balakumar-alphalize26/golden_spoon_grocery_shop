@@ -7034,6 +7034,36 @@ export const fetchExpenseCategoriesOdoo = async () => {
   }
 };
 
+// hr.expense.payment.method rows for the company-scoped dropdown on the
+// New Expense form. Mirrors the configurable payment methods exposed in
+// Odoo under Expenses > Configuration > Payment Methods (hr_expense_payment_method module).
+export const fetchExpensePaymentMethodsOdoo = async () => {
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'hr.expense.payment.method',
+        method: 'search_read',
+        args: [[['active', '=', true]]],
+        kwargs: { fields: ['id', 'name', 'is_default'], order: 'sequence asc, id asc', limit: 200 },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      console.warn('fetchExpensePaymentMethodsOdoo error:', resp.data.error?.data?.message);
+      return [];
+    }
+    return (resp.data.result || []).map((m) => ({
+      id: m.id,
+      name: m.name,
+      is_default: !!m.is_default,
+    }));
+  } catch (e) {
+    console.warn('fetchExpensePaymentMethodsOdoo failed:', e?.message);
+    return [];
+  }
+};
+
 // Odoo's hr.expense.state values shifted in newer versions: legacy DBs use
 // 'reported' for submitted-but-not-approved expenses and 'done' for the
 // reimbursed/paid state, while Odoo 17+ uses 'submitted' and 'paid'. Map
@@ -7090,11 +7120,13 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
     'sheet_id',
     'duplicate_expense_ids',
     'message_attachment_count',
+    'payment_method_id',
   ];
   const midFields = [
     ...baseFields,
     'duplicate_expense_ids',
     'message_attachment_count',
+    'payment_method_id',
   ];
   const safeFields = baseFields;
 
@@ -7147,6 +7179,11 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
     }
   }
 
+  // Diagnostic: tells us whether `payment_method_id` is even a key in the
+  // server response (vs missing because rich tier was rejected and we fell
+  // through to safe fields). Remove once the flow is verified.
+  console.log('[EXPENSE:LIST] sample row keys=' + (raw[0] ? Object.keys(raw[0]).join(',') : '<empty>'));
+  console.log('[EXPENSE:LIST] sample row payment_method_id =', raw[0]?.payment_method_id);
   try {
     return raw.map((e) => ({
       id: e.id,
@@ -7168,6 +7205,10 @@ export const fetchExpensesOdoo = async ({ employeeId, searchText = '', state = n
       // Number of attached files; rendered as a paperclip + count on
       // the list row (matches Odoo's web list view).
       message_attachment_count: Number(e.message_attachment_count) || 0,
+      // Many2one to hr.expense.payment.method (hr_expense_payment_method
+      // module). Odoo returns [id, name] or false; pass through as-is so
+      // callers can do Array.isArray(...) ? ...[1] : null.
+      payment_method_id: e.payment_method_id || false,
     }));
   } catch (e) {
     console.warn('fetchExpensesOdoo failed:', e?.message);
@@ -7187,6 +7228,18 @@ export const fetchExpenseByIdOdoo = async (expenseId) => {
     'id', 'name', 'date', 'product_id', 'employee_id',
     'total_amount', 'payment_mode', 'state', 'description',
     'sheet_id', 'duplicate_expense_ids', 'message_attachment_count',
+    'payment_method_id',
+  ];
+  // Odoo 19 dropped `sheet_id` from hr.expense, so the rich tier always
+  // throws "Invalid field 'sheet_id'" on that server. Mid keeps every
+  // other useful field — most importantly `payment_method_id` — so the
+  // detail screen still has it after a workflow-action refresh. Matches
+  // the same three-tier ladder fetchExpensesOdoo uses.
+  const midFields = [
+    'id', 'name', 'date', 'product_id', 'employee_id',
+    'total_amount', 'payment_mode', 'state', 'description',
+    'duplicate_expense_ids', 'message_attachment_count',
+    'payment_method_id',
   ];
   const safeFields = [
     'id', 'name', 'date', 'product_id', 'employee_id',
@@ -7212,17 +7265,42 @@ export const fetchExpenseByIdOdoo = async (expenseId) => {
   };
 
   let raw = [];
+  let tier = 'rich';
   try {
     raw = await callRead(richFields);
-  } catch (_) {
+  } catch (richErr) {
+    // Was swallowed before — surface so we can see WHY rich failed and we
+    // dropped tiers. Odoo 19 reliably trips here on `sheet_id`.
+    console.warn('[EXPENSE:DETAIL] rich read failed:', {
+      message: richErr?.payload?.data?.message || richErr?.message,
+      name: richErr?.payload?.data?.name,
+    });
+    tier = 'mid';
     try {
-      raw = await callRead(safeFields);
-    } catch (_) {
-      return null;
+      raw = await callRead(midFields);
+    } catch (midErr) {
+      // Rare — only if a field beyond sheet_id is also rejected (e.g.
+      // stripped Odoo missing duplicate_expense_ids).
+      console.warn('[EXPENSE:DETAIL] mid read failed:', {
+        message: midErr?.payload?.data?.message || midErr?.message,
+        name: midErr?.payload?.data?.name,
+      });
+      tier = 'safe';
+      try {
+        raw = await callRead(safeFields);
+      } catch (safeErr) {
+        console.warn('[EXPENSE:DETAIL] safe read also failed:', safeErr?.message);
+        return null;
+      }
     }
   }
   const e = raw[0];
   if (!e) return null;
+  // Diagnostic: distinguishes "row genuinely has no value" (false) from
+  // "field missing from response — module not installed / safeFields fallback"
+  // (undefined). Remove once the payment_method_id flow is verified end-to-end.
+  console.log('[EXPENSE:DETAIL] tier=' + tier + ' keys=' + Object.keys(e).join(','));
+  console.log('[EXPENSE:DETAIL] raw payment_method_id =', e?.payment_method_id);
   return {
     id: e.id,
     name: e.name || '',
@@ -7236,6 +7314,7 @@ export const fetchExpenseByIdOdoo = async (expenseId) => {
     sheet_id: Array.isArray(e.sheet_id) ? e.sheet_id[0] : null,
     duplicate_expense_ids: Array.isArray(e.duplicate_expense_ids) ? e.duplicate_expense_ids : [],
     message_attachment_count: Number(e.message_attachment_count) || 0,
+    payment_method_id: e.payment_method_id || false,
   };
 };
 
@@ -7301,7 +7380,7 @@ export const fetchExpenseTotalsOdoo = async ({ employeeId } = {}) => {
 };
 
 // Create an hr.expense row (state stays 'draft' until submitted).
-export const createExpenseOdoo = async ({ name, date, productId, totalAmount, paymentMode, description, employeeId } = {}) => {
+export const createExpenseOdoo = async ({ name, date, productId, totalAmount, paymentMode, description, employeeId, paymentMethodId } = {}) => {
   if (!name || !String(name).trim()) {
     return { error: { message: 'Description is required' } };
   }
@@ -7318,13 +7397,25 @@ export const createExpenseOdoo = async ({ name, date, productId, totalAmount, pa
     vals.total_amount = Number(totalAmount) || 0;
   }
   if (description) vals.description = String(description).trim();
+  if (paymentMethodId) vals.payment_method_id = Number(paymentMethodId);
 
+  // Diagnostic: confirms the picker's selection made it into the create
+  // payload. `undefined` here means the form submitted with a null picker.
+  // Remove once the payment_method_id flow is verified end-to-end.
+  console.log('[EXPENSE:CREATE] writing vals payment_method_id =', vals.payment_method_id);
   try {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
       params: { model: 'hr.expense', method: 'create', args: [vals], kwargs: {} },
     }, { headers: { 'Content-Type': 'application/json' } });
+    // Diagnostic: did Odoo accept the create? If errorName is set, the field
+    // (or some other val) was rejected. If result is a number, the new id.
+    console.log('[EXPENSE:CREATE] response =', JSON.stringify({
+      result: resp?.data?.result,
+      errorName: resp?.data?.error?.data?.name,
+      errorMessage: resp?.data?.error?.data?.message || resp?.data?.error?.message,
+    }));
     if (resp.data && resp.data.error) {
       return { error: resp.data.error };
     }
@@ -7336,7 +7427,7 @@ export const createExpenseOdoo = async ({ name, date, productId, totalAmount, pa
 };
 
 // Update an existing hr.expense (only valid while state is 'draft').
-export const updateExpenseOdoo = async (expenseId, { name, date, productId, totalAmount, paymentMode, description } = {}) => {
+export const updateExpenseOdoo = async (expenseId, { name, date, productId, totalAmount, paymentMode, description, paymentMethodId } = {}) => {
   if (!expenseId) return { error: { message: 'expenseId is required' } };
   const baseUrl = getOdooUrl();
   const vals = {};
@@ -7350,6 +7441,7 @@ export const updateExpenseOdoo = async (expenseId, { name, date, productId, tota
     vals.payment_mode = paymentMode === 'company_account' ? 'company_account' : 'own_account';
   }
   if (description !== undefined) vals.description = description ? String(description).trim() : false;
+  if (paymentMethodId !== undefined) vals.payment_method_id = paymentMethodId ? Number(paymentMethodId) : false;
 
   const writeOnce = async (payload) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
@@ -7544,7 +7636,9 @@ export const submitExpenseOdoo = async (expenseId, sheetId = null) => {
       { model: 'hr.expense', method: 'action_submit' },
       { model: 'hr.expense.sheet', method: 'action_submit_sheet' },
     ],
-    fallbackState: 'reported',
+    // Odoo 19 renamed the submitted-state from 'reported' to 'submitted'.
+    // Try the new name first, fall back to the old one for ≤18.
+    fallbackState: ['submitted', 'reported'],
   });
   if (resp?.error) {
     console.error('[EXPENSE:SUBMIT] failed', {
@@ -7574,6 +7668,20 @@ export const submitExpenseOdoo = async (expenseId, sheetId = null) => {
 // This skips the side-effects an action method would do (chatter
 // messages, sheet creation, journal moves), but for plain state
 // transitions it's a reasonable last resort that keeps the UI working.
+// Odoo signals "the action method succeeded-but-rejected this record" via
+// exceptions in the odoo.exceptions.* namespace (ValidationError, UserError,
+// AccessError, MissingError). Those are real business outcomes and the
+// caller needs to see them — falling through to the next candidate or the
+// state-write fallback would mask the message with a confusing follow-on
+// error (e.g. "Wrong value for hr.expense.state: 'reported'"). Everything
+// else — AttributeError, KeyError, TypeError, RPC 404, etc. — means the
+// method literally doesn't exist on this Odoo version and we should keep
+// trying alternatives.
+const isBusinessError = (err) => {
+  const name = err?.data?.name || '';
+  return typeof name === 'string' && name.startsWith('odoo.exceptions.');
+};
+
 const tryExpenseAction = async ({ expenseId, sheetId, candidates, kwargs = {}, fallbackState = null }) => {
   const baseUrl = getOdooUrl();
   let lastErr = null;
@@ -7597,10 +7705,18 @@ const tryExpenseAction = async ({ expenseId, sheetId, candidates, kwargs = {}, f
       }, { headers: { 'Content-Type': 'application/json' } });
       if (resp.data && resp.data.error) {
         lastErr = resp.data.error;
+        const errName = resp.data.error.data?.name;
+        const errMsg = resp.data.error.data?.message || resp.data.error.message;
         console.warn(`[EXPENSE:ACTION] ${c.model}.${c.method} returned error`, {
-          name: resp.data.error.data?.name,
-          message: resp.data.error.data?.message || resp.data.error.message,
+          name: errName,
+          message: errMsg,
         });
+        // Real business-rule rejection — surface immediately so the user sees
+        // why the action was refused instead of a misleading downstream error.
+        if (isBusinessError(resp.data.error)) {
+          console.warn(`[EXPENSE:ACTION] business error — not trying further candidates`);
+          return { error: resp.data.error };
+        }
         // "Method does not exist" / "Invalid field" — try the next candidate.
         continue;
       }
@@ -7616,21 +7732,40 @@ const tryExpenseAction = async ({ expenseId, sheetId, candidates, kwargs = {}, f
     }
   }
 
-  // All method candidates failed. Last-ditch: write state directly.
-  if (fallbackState && expenseId) {
+  // All method candidates failed (none of them existed on this Odoo).
+  // Last-ditch: write state directly. The fallback accepts a list of state
+  // values so we can try Odoo 19's renames first (e.g. 'submitted') and
+  // fall back to older synonyms ('reported') when the Selection rejects.
+  const fallbackStates = Array.isArray(fallbackState)
+    ? fallbackState
+    : (fallbackState ? [fallbackState] : []);
+  for (const stateVal of fallbackStates) {
+    if (!expenseId) break;
     try {
+      console.log(`[EXPENSE:ACTION] fallback hr.expense.write({state: '${stateVal}'})`);
       const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0',
         method: 'call',
         params: {
           model: 'hr.expense',
           method: 'write',
-          args: [[expenseId], { state: fallbackState }],
+          args: [[expenseId], { state: stateVal }],
           kwargs: {},
         },
       }, { headers: { 'Content-Type': 'application/json' } });
       if (resp.data && resp.data.error) {
         lastErr = resp.data.error;
+        const errMsg = resp.data.error.data?.message || resp.data.error.message || '';
+        // "Wrong value for hr.expense.state: '…'" → this Odoo doesn't accept
+        // this state synonym; try the next one. Other errors (business rule,
+        // permission) should surface to the caller.
+        if (/Wrong value for hr\.expense\.state/i.test(errMsg)) {
+          console.warn(`[EXPENSE:ACTION] state '${stateVal}' not accepted, trying next`);
+          continue;
+        }
+        if (isBusinessError(resp.data.error)) {
+          return { error: resp.data.error };
+        }
       } else {
         return { result: resp.data.result };
       }
