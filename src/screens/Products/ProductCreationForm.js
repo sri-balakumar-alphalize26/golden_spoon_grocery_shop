@@ -203,7 +203,11 @@ const ProductCreationForm = ({ navigation, route }) => {
       }
       const notSaved = Array.isArray(resp?.notSaved) ? resp.notSaved : [];
       const qtyFailed = resp?.qtySaved === false;
-      const hasPartialFailure = isEdit && (notSaved.length > 0 || qtyFailed);
+      // notSaved is edit-only (create writes a fresh record with all fields).
+      // qtyFailed can fire on both create and edit when the stock.quant
+      // path errors — surface it either way so the user knows the qty
+      // didn't persist instead of seeing a misleading green toast.
+      const hasPartialFailure = notSaved.length > 0 || qtyFailed;
 
       if (hasPartialFailure) {
         const labels = {

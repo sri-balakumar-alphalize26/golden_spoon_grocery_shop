@@ -2380,33 +2380,94 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
     }
   }
 
-  // Optional: bump on-hand qty via stock.change.product.qty wizard.
+  // On-hand qty path — modern stock.quant + action_apply_inventory flow.
+  // The deprecated stock.change.product.qty wizard we used previously
+  // silently returned 0 on this Odoo install (qty saved as 0 even when
+  // entered at creation). Mirrors updateProductOdoo's working pattern.
+  // qtySaved: null = not attempted, true = saved, false = failed.
+  let qtySaved = null;
   if (wantsStock && productId) {
+    qtySaved = false;
     try {
-      const wizardResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      const newQty = Number(onHandQty);
+      if (!Number.isFinite(newQty)) throw new Error('Invalid quantity');
+
+      // 1. Find an existing internal-location quant (unlikely for a fresh product).
+      const quantSearch = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0',
         method: 'call',
         params: {
-          model: 'stock.change.product.qty',
-          method: 'create',
-          args: [{ product_id: productId, new_quantity: Number(onHandQty) }],
+          model: 'stock.quant',
+          method: 'search_read',
+          args: [[['product_id', '=', productId], ['location_id.usage', '=', 'internal']]],
+          kwargs: { fields: ['id', 'location_id'], limit: 1 },
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      let quantId = (quantSearch.data?.result || [])[0]?.id || null;
+
+      if (!quantId) {
+        // 2. No quant yet — create one in the first available internal location.
+        const locResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'stock.location',
+            method: 'search_read',
+            args: [[['usage', '=', 'internal']]],
+            kwargs: { fields: ['id'], limit: 1, order: 'id' },
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        const locationId = (locResp.data?.result || [])[0]?.id || null;
+        if (!locationId) throw new Error('No internal stock location available');
+        const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'stock.quant',
+            method: 'create',
+            args: [{ product_id: productId, location_id: locationId, inventory_quantity: newQty }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        if (createResp.data?.error) throw Object.assign(new Error('quant create failed'), { payload: createResp.data.error });
+        quantId = createResp.data?.result;
+      } else {
+        // 3. Quant exists — set inventory_quantity (the count target).
+        const writeResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'stock.quant',
+            method: 'write',
+            args: [[quantId], { inventory_quantity: newQty }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        if (writeResp.data?.error) throw Object.assign(new Error('quant write failed'), { payload: writeResp.data.error });
+      }
+
+      // 4. Apply the inventory adjustment so qty_available reflects the count.
+      const applyResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'stock.quant',
+          method: 'action_apply_inventory',
+          args: [[quantId]],
           kwargs: {},
         },
       }, { headers: { 'Content-Type': 'application/json' } });
-      const wizId = wizardResp.data?.result;
-      if (wizId) {
-        await axios.post(`${baseUrl}/web/dataset/call_kw`, {
-          jsonrpc: '2.0',
-          method: 'call',
-          params: { model: 'stock.change.product.qty', method: 'change_product_qty', args: [[wizId]], kwargs: {} },
-        }, { headers: { 'Content-Type': 'application/json' } });
-      }
+      if (applyResp.data?.error) throw Object.assign(new Error('apply inventory failed'), { payload: applyResp.data.error });
+
+      qtySaved = true;
+      console.log('[createProductOdoo] on-hand qty saved:', { productId, quantId, newQty });
     } catch (qtyErr) {
       console.warn('createProductOdoo on-hand qty step failed:', qtyErr?.payload || qtyErr?.message);
+      qtySaved = false;
     }
   }
 
-  return { result: productId };
+  return { result: productId, qtySaved };
 };
 
 // Update an existing product. Writes against product.template (so fields like
