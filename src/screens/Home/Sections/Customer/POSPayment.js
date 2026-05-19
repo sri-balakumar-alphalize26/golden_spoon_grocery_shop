@@ -975,6 +975,15 @@ const POSPayment = ({ navigation, route }) => {
     (paymentMode === 'cash' || paymentMode === 'card') &&
     (isRefund ? paidAmount > total : paidAmount < total);
 
+  // Credit (Customer Account) needs a customer — applies whether the
+  // cashier picked Credit as the single payment mode or as one slot of a
+  // split. Used to disable Validate / Split Confirm up front and to drive
+  // the red "Customer required for Credit" hint above the keypad.
+  const creditSelected = paymentMode === 'credit'
+    || (paymentMode === 'split'
+        && (splitSlot1.methodKey === 'credit' || splitSlot2.methodKey === 'credit'));
+  const creditNeedsCustomer = creditSelected && !customer;
+
   // Split-payment validity — both amounts > 0, sum matches the total within
   // 0.01 tolerance, and the two slots reference different chip keys (same
   // method twice is just a single payment, not a split).
@@ -1004,6 +1013,13 @@ const POSPayment = ({ navigation, route }) => {
   // user hasn't entered enough cash, otherwise runs the existing payment flow.
   const onValidateTap = () => {
     if (paying) return;
+    // Credit-without-customer takes priority — the cashier picked Credit
+    // (single or as a Split slot) but didn't select a customer. Bounce to
+    // the customer-required popup before anything else.
+    if (creditNeedsCustomer) {
+      setCustomerModalVisible(true);
+      return;
+    }
     if (paymentMode === 'split') {
       if (!splitConfirmed || !splitValid) {
         // Reopen the popup so the cashier can finish entering the split.
@@ -1219,6 +1235,58 @@ const POSPayment = ({ navigation, route }) => {
             </View>
           ) : null}
 
+          {/* Odoo-style calculator buttons — Customer + Invoice sit directly
+              above the keypad. Customer is filled-navy (primary action,
+              tapping opens the selector); Invoice is outlined with a small
+              checkbox affordance that flips on tap. Mirrors the layout in
+              the user's Odoo POS reference screenshot. */}
+          {paymentMode !== 'split' ? (
+            <View style={styles.calcButtonRow}>
+              <TouchableOpacity
+                onPress={openCustomerSelector}
+                activeOpacity={0.85}
+                style={styles.calcCustomerBtn}
+              >
+                <MaterialIcons name="person" size={18} color="#fff" />
+                <View style={styles.calcBtnLabelWrap}>
+                  <Text style={styles.calcCustomerLabel}>Customer</Text>
+                  {customer ? (
+                    <Text style={styles.calcCustomerSubtitle} numberOfLines={1}>
+                      {customer.name || customer.display_name || ''}
+                    </Text>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setInvoiceChecked((v) => !v)}
+                activeOpacity={0.85}
+                style={[styles.calcInvoiceBtn, invoiceChecked && styles.calcInvoiceBtnActive]}
+              >
+                <MaterialIcons name="description" size={18} color={NAVY} />
+                <Text style={styles.calcInvoiceLabel}>Invoice</Text>
+                <View
+                  style={[
+                    styles.calcInvoiceCheckbox,
+                    invoiceChecked && styles.calcInvoiceCheckboxChecked,
+                  ]}
+                >
+                  {invoiceChecked ? <MaterialIcons name="check" size={12} color="#fff" /> : null}
+                </View>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* Inline red hint when Credit (single or split slot) is selected
+              but no customer has been picked yet — the cashier sees the
+              missing-customer problem before tapping Validate. */}
+          {creditNeedsCustomer ? (
+            <Text style={styles.creditCustomerHint}>
+              <MaterialIcons name="error-outline" size={12} color="#b91c1c" />
+              {'  Customer required for Credit'}
+            </Text>
+          ) : null}
+
           {/* Keypad — only useful for cash/card. Split mode has its own
               amount inputs inside the popup. */}
           {paymentMode !== 'account' && paymentMode !== 'split' ? (
@@ -1230,56 +1298,6 @@ const POSPayment = ({ navigation, route }) => {
               ))}
             </View>
           ) : null}
-
-          {/* Customer option — colored highlight matching the cart-screen chip */}
-          <TouchableOpacity
-            onPress={openCustomerSelector}
-            activeOpacity={0.85}
-            style={[
-              styles.customerOptionCard,
-              customer ? styles.customerOptionCardActive : styles.customerOptionCardEmpty,
-            ]}
-          >
-            <View
-              style={[
-                styles.customerOptionIcon,
-                { backgroundColor: customer ? '#dcfce7' : '#FFEDD5' },
-              ]}
-            >
-              <MaterialIcons
-                name={customer ? 'person-pin' : 'person-add-alt-1'}
-                size={20}
-                color={customer ? '#166534' : '#9A3412'}
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text
-                style={[
-                  styles.customerOptionLabel,
-                  { color: customer ? '#166534' : '#9A3412' },
-                ]}
-              >
-                CUSTOMER
-              </Text>
-              <Text
-                numberOfLines={1}
-                style={[
-                  styles.customerOptionValue,
-                  { color: customer ? '#166534' : '#9A3412' },
-                ]}
-              >
-                {customer?.name || 'No customer selected'}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.customerOptionAction,
-                { backgroundColor: customer ? '#22c55e' : '#F47B20' },
-              ]}
-            >
-              <MaterialIcons name={customer ? 'edit' : 'add'} size={16} color="#fff" />
-            </View>
-          </TouchableOpacity>
 
           {/* ID-proof chip — only relevant when a customer is selected.
               Green ✓ when at least the Front photo is on file, amber
@@ -1383,15 +1401,21 @@ const POSPayment = ({ navigation, route }) => {
           <TouchableOpacity
             onPress={onValidateTap}
             activeOpacity={0.85}
-            style={styles.validateBtn}
+            style={[styles.validateBtn, creditNeedsCustomer && styles.validateBtnDisabled]}
           >
             <View style={styles.validateInner}>
               {paying ? (
                 <ActivityIndicator color="#fff" />
               ) : (
                 <>
-                  <MaterialIcons name="check-circle" size={20} color="#fff" />
-                  <Text style={styles.validateText}>Validate Payment</Text>
+                  <MaterialIcons
+                    name={creditNeedsCustomer ? 'lock-outline' : 'check-circle'}
+                    size={20}
+                    color="#fff"
+                  />
+                  <Text style={styles.validateText}>
+                    {creditNeedsCustomer ? 'Pick Customer' : 'Validate Payment'}
+                  </Text>
                 </>
               )}
             </View>
@@ -1493,6 +1517,20 @@ const POSPayment = ({ navigation, route }) => {
                 {(() => {
                   const otherAmt = parseFloat(idx === 0 ? splitSlot2.amount : splitSlot1.amount) || 0;
                   const remaining = Math.max(0, total - otherAmt);
+                  // Credit slot — surface where the money lands instead of
+                  // the generic "Remaining". Red when customer is missing,
+                  // green when the receivable will post to the picked partner.
+                  if (slot.methodKey === 'credit') {
+                    return customer ? (
+                      <Text style={[styles.splitRemainingHint, { color: '#15803d' }]}>
+                        {`Goes to ${customer.name || customer.display_name || 'customer'}'s account`}
+                      </Text>
+                    ) : (
+                      <Text style={[styles.splitRemainingHint, { color: '#b91c1c' }]}>
+                        Pick a customer first
+                      </Text>
+                    );
+                  }
                   return (
                     <Text style={styles.splitRemainingHint}>
                       {`Remaining ${displayNum(remaining)}`}
@@ -1555,10 +1593,19 @@ const POSPayment = ({ navigation, route }) => {
               <TouchableOpacity
                 style={[
                   styles.customerSkipBtn,
-                  !splitValid && { opacity: 0.55 },
+                  (!splitValid || creditNeedsCustomer) && { opacity: 0.55 },
                 ]}
-                activeOpacity={splitValid ? 0.85 : 1}
+                activeOpacity={(splitValid && !creditNeedsCustomer) ? 0.85 : 1}
                 onPress={() => {
+                  if (creditNeedsCustomer) {
+                    Toast.show({
+                      type: 'error',
+                      text1: 'Split Payment',
+                      text2: 'Pick a customer before using Credit',
+                      position: 'bottom',
+                    });
+                    return;
+                  }
                   if (!splitValid) {
                     let msg = 'Both amounts must be greater than zero';
                     if (!splitSlot1.methodKey || !splitSlot2.methodKey) {
@@ -2878,5 +2925,99 @@ letterSpacing: 0.4,
     fontFamily: FONT_FAMILY.urbanistExtraBold,
     fontSize: 14,
     letterSpacing: 0.3,
+  },
+
+  // Odoo-style calculator buttons — Customer + Invoice row above the keypad.
+  // Customer is the primary filled-NAVY button; Invoice is the outlined
+  // toggle with a small checkbox affordance, switching to a tinted fill when
+  // checked. Matches the reference Odoo POS layout the user shared.
+  calcButtonRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  calcCustomerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    backgroundColor: NAVY,
+    gap: 6,
+    minHeight: 48,
+  },
+  calcBtnLabelWrap: {
+    flexShrink: 1,
+    alignItems: 'flex-start',
+  },
+  calcCustomerLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  calcCustomerSubtitle: {
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 10,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    fontStyle: 'italic',
+    marginTop: 1,
+  },
+  calcInvoiceBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    backgroundColor: '#fff',
+    gap: 8,
+    minHeight: 48,
+  },
+  calcInvoiceBtnActive: {
+    backgroundColor: '#EEF0F6',
+  },
+  calcInvoiceLabel: {
+    color: NAVY,
+    fontSize: 14,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+    flex: 1,
+    textAlign: 'left',
+    marginLeft: 4,
+  },
+  calcInvoiceCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: NAVY,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calcInvoiceCheckboxChecked: {
+    backgroundColor: NAVY,
+  },
+  // Inline red hint when Credit is selected but no customer chosen yet.
+  creditCustomerHint: {
+    color: '#b91c1c',
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  validateBtnDisabled: {
+    opacity: 0.55,
   },
 });
