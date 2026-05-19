@@ -791,6 +791,10 @@ const POSPayment = ({ navigation, route }) => {
           // decrementing. sync_from_ui IS the official UI pipeline and
           // always creates the picking, so route every paid order
           // through it whether or not a draft existed.
+          // The Place Order pre-create now uses a `DRAFT-<ts>` placeholder
+          // name (see createPosOrderOdoo) so Odoo never consumed a real
+          // sequence number on the draft. Deleting the draft is safe and
+          // the sync_from_ui below allocates the real ref number once.
           if (createdOrderId) {
             push(`delete pre-existing: ${createdOrderId}`);
             console.log('[POSFinalize] discarding pre-existing draft id=', createdOrderId, 'before sync_from_ui');
@@ -798,8 +802,6 @@ const POSPayment = ({ navigation, route }) => {
             if (delResp?.error) {
               push(`delete pre-existing: err ${delResp.error?.message || ''}`);
               console.warn('[POSFinalize] discard draft warning:', delResp.error?.message || delResp.error);
-              // Soft-warn only — even if the draft survives in 'cancel' state,
-              // sync_from_ui will still create a fresh paid order with picking.
             } else {
               push('delete pre-existing: ok');
             }
@@ -971,7 +973,7 @@ const POSPayment = ({ navigation, route }) => {
                   console.log('[INVOICE] Final invoice total:', finalTotal, 'Expected:', actualTotal, 'Match:', Math.abs(finalTotal - actualTotal) < 0.0001);
 
                   const invoiceDate = new Date().toISOString().slice(0, 10);
-                  const invResp = await createInvoiceOdoo({ partnerId, products: invoiceProducts, invoiceDate, journalId: selectedJournal?.id || null });
+                  const invResp = await createInvoiceOdoo({ partnerId, products: invoiceProducts, invoiceDate, journalId: selectedJournal?.id || null, withTax: withTaxMode });
                   console.log('[INVOICE] createInvoiceOdoo response:', invResp);
                   const invoiceResult = {
                     id: invResp?.id,
@@ -1127,10 +1129,9 @@ const POSPayment = ({ navigation, route }) => {
       Toast.show({ type: 'error', text1: 'POS Error', text2: e?.message || 'Failed to create POS order', position: 'bottom' });
     } finally {
       setPaying(false);
-      // Single unmissable flow-trace popup — fires on every Validate Payment
-      // exit, regardless of success / exception / early return. Lets us see
-      // exactly which checkpoints were reached without trawling Metro logs.
-      Alert.alert('Flow trace', trace.join('\n'), [{ text: 'OK' }], { cancelable: false });
+      // Flow trace stays in Metro console (console.log via the push()
+      // helper above) — the in-app Alert popup has been removed now
+      // that the cash/credit/partial chains are verified working.
     }
   };
 

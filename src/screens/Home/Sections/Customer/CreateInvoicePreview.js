@@ -9,7 +9,10 @@ import * as FileSystem from 'expo-file-system';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
 import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
+import { getOdooUrl } from '@api/config/odooConfig';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
@@ -57,6 +60,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const [previewHtml, setPreviewHtml] = useState('');
   const [downloading, setDownloading] = useState(false);
   const [printing, setPrinting] = useState(false);
+  // Linked Accounting invoice id (account.move) — populated from the
+  // pos.order.account_move field when this order was credit-finalized.
+  // Drives visibility of the "Download PDF (Credit)" chip.
+  const [linkedInvoiceId, setLinkedInvoiceId] = useState(null);
+  const [linkedInvoiceName, setLinkedInvoiceName] = useState('');
+  const [downloadingCredit, setDownloadingCredit] = useState(false);
   // Tappable Location button + popup with Open-in-Maps link
   // (popup is the shared <LocationModal> so the past-order detail and
   // this screen render the same UI).
@@ -176,12 +185,119 @@ const CreateInvoicePreview = ({ navigation, route }) => {
         if (orderRes && !orderRes.error && orderRes.name) {
           setOrderName(orderRes.name);
         }
+        // Linked accounting invoice — account_move is [id, "INV/..."]
+        // when set, false otherwise. The "Download PDF (Credit)" button
+        // only appears when this is populated.
+        const am = orderRes?.account_move;
+        if (Array.isArray(am) && am[0]) {
+          setLinkedInvoiceId(Number(am[0]));
+          setLinkedInvoiceName(String(am[1] || `Invoice-${am[0]}`));
+        } else {
+          // Fallback — when linkInvoiceToPosOrderOdoo's write didn't
+          // land (or for older orders predating the link fix), Odoo
+          // still stamps `invoice_origin` on the move with this pos
+          // order's name. Search by that so the Credit PDF button
+          // still appears for credit-finalized orders.
+          (async () => {
+            try {
+              const baseUrl = getOdooUrl();
+              const refName = orderRes?.name || orderRes?.pos_reference;
+              if (!refName || refName === '/') return;
+              const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                  model: 'account.move',
+                  method: 'search_read',
+                  args: [[['invoice_origin', '=', refName], ['move_type', 'in', ['out_invoice', 'out_refund']]]],
+                  kwargs: { fields: ['id', 'name'], limit: 1 },
+                },
+              }, { headers: { 'Content-Type': 'application/json' } });
+              const inv = resp.data?.result?.[0];
+              if (inv?.id) {
+                setLinkedInvoiceId(Number(inv.id));
+                setLinkedInvoiceName(String(inv.name || `Invoice-${inv.id}`));
+                console.log('[Receipt] linked invoice via invoice_origin fallback:', inv);
+              }
+            } catch (e) {
+              console.warn('[Receipt] invoice_origin fallback error:', e?.message || e);
+            }
+          })();
+        }
       })
       .catch(() => { /* keep defaults for fallback */ });
     return () => { alive = false; };
   }, [orderId]);
 
   const isSplit = payments.length > 1;
+
+  // Download the linked Accounting → Invoicing PDF for this pos.order.
+  // Used by the "Download PDF (Credit)" chip — appears between Preview
+  // and Download when the order has account_move populated (credit
+  // flow). Mirrors InvoiceDetailScreen's onPreviewPdf: fetches with
+  // session cookie, tries multiple report names, then prompts the user
+  // for a save location (Android SAF / iOS share sheet).
+  const onDownloadCreditPdf = async () => {
+    if (!linkedInvoiceId) return;
+    const base = getOdooUrl();
+    if (!base) {
+      Toast.show({ type: 'error', text1: 'Odoo URL not set', position: 'bottom' });
+      return;
+    }
+    setDownloadingCredit(true);
+    const safeName = `${(linkedInvoiceName || `Invoice-${linkedInvoiceId}`).replace(/[^A-Za-z0-9._-]/g, '_')}.pdf`;
+    const cachePath = `${FileSystem.cacheDirectory}${safeName}`;
+    const REPORT_NAMES = [
+      'account.report_invoice_with_payments',
+      'account.account_invoices',
+      'account.report_invoice',
+    ];
+    try {
+      const sessionId = await AsyncStorage.getItem('odoo_session_id');
+      const headers = sessionId ? { Cookie: `session_id=${sessionId}` } : {};
+      let dl = null;
+      for (const reportName of REPORT_NAMES) {
+        const url = `${base}/report/pdf/${reportName}/${linkedInvoiceId}`;
+        try {
+          const attempt = await FileSystem.downloadAsync(url, cachePath, { headers });
+          if (!attempt?.uri) continue;
+          const info = await FileSystem.getInfoAsync(attempt.uri);
+          if (info.exists && (info.size || 0) >= 1000) {
+            console.log('[CreditPDF] downloaded via', reportName, 'size=', info.size);
+            dl = attempt;
+            break;
+          }
+        } catch (_) { /* try next */ }
+      }
+      if (!dl?.uri) {
+        Toast.show({ type: 'error', text1: 'PDF empty', text2: 'Try again or re-login', position: 'bottom' });
+        return;
+      }
+      if (Platform.OS === 'android') {
+        const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+        if (!perm.granted) {
+          Toast.show({ type: 'info', text1: 'Save cancelled', position: 'bottom' });
+          return;
+        }
+        const b64 = await FileSystem.readAsStringAsync(dl.uri, { encoding: FileSystem.EncodingType.Base64 });
+        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
+          perm.directoryUri, safeName, 'application/pdf'
+        );
+        await FileSystem.writeAsStringAsync(targetUri, b64, { encoding: FileSystem.EncodingType.Base64 });
+        Toast.show({ type: 'success', text1: 'Saved', text2: safeName, position: 'bottom' });
+      } else {
+        const canShare = await Sharing.isAvailableAsync();
+        if (!canShare) {
+          Toast.show({ type: 'error', text1: 'Sharing not available', position: 'bottom' });
+          return;
+        }
+        await Sharing.shareAsync(dl.uri, { mimeType: 'application/pdf', dialogTitle: safeName, UTI: 'com.adobe.pdf' });
+      }
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Download failed', text2: e?.message || 'Unable to download', position: 'bottom' });
+    } finally {
+      setDownloadingCredit(false);
+    }
+  };
 
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const runPreview = (paperWidthMm) => {
@@ -538,6 +654,27 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               </View>
               <Text style={s.actionChipText}>Preview</Text>
             </TouchableOpacity>
+
+            {/* Download PDF (Credit) — only shown when this order was
+                credit-finalized and has a linked Accounting → Invoicing
+                record. Fetches the invoice PDF for that same order id. */}
+            {linkedInvoiceId ? (
+              <TouchableOpacity
+                onPress={onDownloadCreditPdf}
+                disabled={downloadingCredit}
+                activeOpacity={0.85}
+                style={[s.actionChip, s.previewChip, downloadingCredit && { opacity: 0.6 }]}
+              >
+                <View style={s.actionIconDisk}>
+                  {downloadingCredit ? (
+                    <ActivityIndicator color="#7B2D8E" size="small" />
+                  ) : (
+                    <MaterialIcons name="file-download" size={20} color="#7B2D8E" />
+                  )}
+                </View>
+                <Text style={s.actionChipText} numberOfLines={2}>PDF (Credit)</Text>
+              </TouchableOpacity>
+            ) : null}
 
             <TouchableOpacity
               onPress={() => setSizePicker('download')}

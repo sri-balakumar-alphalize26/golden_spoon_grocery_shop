@@ -1124,6 +1124,28 @@ export const fetchCustomerInvoicesOdoo = async ({
 // Read one account.move (Invoice or Journal Entry) with the fields needed
 // for the detail screen plus its line items. Used by InvoiceDetailScreen
 // and JournalEntryDetailScreen.
+// Fetch the list of cash/bank journals available for invoice payments.
+// Used by the Pay wizard popup on the invoice detail screen — populates
+// the Journal dropdown so the user can pick where the payment lands.
+export const fetchAccountJournalsForPaymentOdoo = async () => {
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.journal',
+        method: 'search_read',
+        args: [[['type', 'in', ['cash', 'bank']]]],
+        kwargs: { fields: ['id', 'name', 'type'], order: 'name asc' },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) return { error: resp.data.error };
+    return { result: resp.data?.result || [] };
+  } catch (e) {
+    return { error: { message: e?.message || String(e) } };
+  }
+};
+
 export const fetchInvoiceDetailOdoo = async (moveId) => {
   if (!moveId) return { error: { message: 'moveId required' } };
   try {
@@ -1141,6 +1163,11 @@ export const fetchInvoiceDetailOdoo = async (moveId) => {
           'journal_id', 'company_id', 'currency_id',
           'amount_untaxed', 'amount_tax', 'amount_total', 'amount_residual',
           'narration', 'invoice_line_ids', 'line_ids',
+          // Odoo's computed JSON widget — contains the "Paid on <date>:
+          // <amount>" rows shown in the web invoice form footer. We
+          // surface those in the detail screen so the user sees the
+          // same payment history Odoo shows.
+          'invoice_payments_widget',
         ]],
         kwargs: {},
       },
@@ -1177,16 +1204,84 @@ export const fetchInvoiceDetailOdoo = async (moveId) => {
   }
 };
 
-// Reset a posted/cancelled account.move back to draft via Odoo's button_draft.
+// Reset a posted/cancelled account.move back to draft.
+//
+// Odoo's `button_draft` typically refuses on invoices whose payment
+// lines are reconciled ("You cannot reset to draft this invoice because
+// some of its lines are reconciled"). We catch that case, unreconcile
+// the move's lines via `account.move.line.remove_move_reconcile`, then
+// retry. After both attempts we read the move's state back to confirm
+// the reset actually landed — Odoo sometimes returns success on the
+// RPC but keeps the move in 'posted' state due to a silent constraint.
 export const resetInvoiceToDraftOdoo = async (moveId) => {
   if (!moveId) return { error: { message: 'moveId required' } };
+  const baseUrl = getOdooUrl();
+  const headers = { 'Content-Type': 'application/json' };
+  const id = Number(moveId);
+
+  const callButtonDraft = async (ctx = {}) => axios.post(`${baseUrl}/web/dataset/call_kw`, {
+    jsonrpc: '2.0', method: 'call',
+    params: { model: 'account.move', method: 'button_draft', args: [[id]], kwargs: { context: ctx } },
+  }, { headers });
+
+  const readState = async () => {
+    const r = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'account.move', method: 'read', args: [[id], ['state', 'payment_state', 'line_ids']], kwargs: {} },
+    }, { headers });
+    return r.data?.result?.[0] || {};
+  };
+
   try {
-    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
-      jsonrpc: '2.0',
-      method: 'call',
-      params: { model: 'account.move', method: 'button_draft', args: [[Number(moveId)]], kwargs: {} },
-    }, { headers: { 'Content-Type': 'application/json' } });
-    if (resp.data?.error) return { error: resp.data.error };
+    // Preemptive unreconcile — when the invoice is paid/partial, Odoo
+    // silently refuses to flip state to draft even though button_draft
+    // returns success. Removing the reconcile links first guarantees
+    // the subsequent button_draft has nothing to refuse on.
+    const before = await readState();
+    console.log('[resetInvoiceToDraftOdoo] before reset, state=', before.state, 'payment_state=', before.payment_state);
+    if ((before.payment_state === 'paid' || before.payment_state === 'partial' || before.payment_state === 'in_payment')
+        && Array.isArray(before.line_ids) && before.line_ids.length > 0) {
+      const unrecResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'account.move.line', method: 'remove_move_reconcile', args: [before.line_ids], kwargs: {} },
+      }, { headers });
+      if (unrecResp.data?.error) {
+        console.warn('[resetInvoiceToDraftOdoo] preemptive unreconcile error:', unrecResp.data.error);
+        // keep going — button_draft will surface a clearer error if needed
+      } else {
+        console.log('[resetInvoiceToDraftOdoo] preemptive unreconcile ok on', before.line_ids.length, 'lines');
+      }
+    }
+
+    let resp = await callButtonDraft();
+    if (resp.data?.error) {
+      console.warn('[resetInvoiceToDraftOdoo] button_draft error:', resp.data.error?.data?.message || resp.data.error?.message);
+      return { error: resp.data.error };
+    }
+
+    // Verify state actually changed. If still posted, try one more
+    // forced path: direct write({state:'draft'}). This bypasses Odoo's
+    // silent constraint that refuses to flip state without unreconcile,
+    // which is exactly the case the user is hitting on paid invoices.
+    let after = await readState();
+    console.log('[resetInvoiceToDraftOdoo] after button_draft, state=', after.state, 'payment_state=', after.payment_state);
+    if (after.state !== 'draft') {
+      console.log('[resetInvoiceToDraftOdoo] state still posted — trying force write');
+      const writeResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: { model: 'account.move', method: 'write', args: [[id], { state: 'draft' }], kwargs: {} },
+      }, { headers });
+      if (writeResp.data?.error) {
+        console.warn('[resetInvoiceToDraftOdoo] force write error:', writeResp.data.error?.data?.message || writeResp.data.error?.message);
+        return { error: writeResp.data.error };
+      }
+      after = await readState();
+      console.log('[resetInvoiceToDraftOdoo] after force write, state=', after.state);
+    }
+
+    if (after.state !== 'draft') {
+      return { error: { message: `Reset did not change state (still: ${after.state || 'unknown'})` } };
+    }
     return { result: true };
   } catch (e) {
     return { error: { message: e?.message || String(e) } };
@@ -4818,7 +4913,7 @@ export const fetchPaymentJournalsOdoo = async () => {
 let _cachedSaleJournalId = null;
 export const _resetSaleJournalCache = () => { _cachedSaleJournalId = null; };
 
-export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = null, invoiceDate = null, reference = '' } = {}) => {
+export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = null, invoiceDate = null, reference = '', withTax = true } = {}) => {
   try {
     if (!partnerId) throw new Error('partnerId is required');
 
@@ -4967,9 +5062,16 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
         console.warn(`[INVOICE LINE] Skipping product_id for product '${p.name || p.product_name || ''}' (id: ${String(p.id)}) - not a numeric Odoo id`);
       }
 
-      // tax_ids intentionally omitted — Odoo's account.move.line.create
-      // auto-fills it from product_id.taxes_id (the current value), so the
-      // invoice always reflects the product's live tax setup in Odoo.
+      // tax_ids: when withTax is true we leave the field unset so Odoo
+      // auto-fills from product.product.taxes_id (the product's live tax
+      // setup). When withTax is false (cashier toggled "With Tax" off
+      // on the Payment screen) we EXPLICITLY ship an empty many2many to
+      // override Odoo's auto-fill — otherwise the invoice in
+      // Accounting → Customers → Invoices would still show 5% VAT even
+      // though the POS order was rung up tax-free.
+      if (withTax === false) {
+        vals.tax_ids = [[6, 0, []]];
+      }
       const lineSubtotal = price_unit * quantity * (1 - discount_pct / 100);
       console.log(`[INVOICE LINE] Product ${p.id} price_unit:`, price_unit, 'quantity:', quantity, 'discount:', discount_pct + '%', 'line_subtotal:', lineSubtotal, 'resolved_product_id:', vals.product_id || 'none');
       totalUntaxed += lineSubtotal;
@@ -5176,9 +5278,17 @@ export const createPosOrderOdoo = async ({ partnerId = null, lines = [], session
     // Calculate total (allow override when discount applied by client)
     const calculated_total = lines.reduce((sum, l) => sum + (l.price || l.price_unit || l.list_price || 0) * (l.qty || l.quantity || 1), 0);
     const amount_total = (override_amount_total !== null && override_amount_total !== undefined) ? Number(override_amount_total) : calculated_total;
+    // Use a unique placeholder name (NOT '/') so Odoo's pos.order.create
+    // skips its sequence_id._next() call. If we ship '/', Odoo advances
+    // the per-config sequence here AND again when handlePay deletes this
+    // draft + creates the final order via sync_from_ui — producing the
+    // visible "Order Ref jumps by 2" skip. The placeholder is discarded
+    // when handlePay deletes the draft; sync_from_ui then ships '/'
+    // itself and Odoo allocates the real sequence number exactly once.
+    const placeholderName = orderName || `DRAFT-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const vals = {
       company_id: companyId || 1, // Default to 1 if not provided
-      name: orderName || '/', // Use '/' for auto-generated name if not provided
+      name: placeholderName,
       partner_id: partnerId || false,
       lines: line_items,
       amount_tax: 0,
@@ -6864,6 +6974,12 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           // children of THIS order. Used to disable the Return Products
           // button when the order is already a refund or fully refunded.
           'refunded_order_id', 'refund_orders_count',
+          // Linked Accounting → Invoicing record id. Set when the order
+          // was finalized via Credit (the credit-side flow creates an
+          // account.move and links it back here). Used by the receipt
+          // screen to expose a "Download PDF (Credit)" button that
+          // fetches that invoice's PDF.
+          'account_move',
         ],
         limit: 1,
       },
@@ -6969,6 +7085,11 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
     order_latitude: order.order_latitude == null || order.order_latitude === false ? null : Number(order.order_latitude),
     order_longitude: order.order_longitude == null || order.order_longitude === false ? null : Number(order.order_longitude),
     order_location_name: order.order_location_name || '',
+    // Linked Accounting invoice — [id, "INV/..."] or false. The receipt
+    // screen uses this to decide whether to show the Download PDF
+    // (Credit) chip. Must be in the returned shape (not just in the
+    // fields list) — the result object below is what callers read.
+    account_move: order.account_move || false,
   };
   console.log('[POSLocation] fetchPosOrderDetailOdoo returned', {
     id: result.id,

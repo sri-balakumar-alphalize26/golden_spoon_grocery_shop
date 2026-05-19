@@ -22,10 +22,10 @@ import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
 // filter dropdown — two chips combine multiple states via OR (Odoo's
 // ['state','in',[...]] operator).
 const STATE_FILTERS = [
-  { key: 'all',           states: [],                   label: 'All' },
-  { key: 'paid_invoiced', states: ['paid', 'invoiced'], label: 'Paid / Invoiced' },
-  { key: 'posted_draft',  states: ['done', 'draft'],    label: 'Posted / Draft' },
-  { key: 'cancelled',     states: ['cancel'],           label: 'Cancelled' },
+  { key: 'all',       states: [],         label: 'All' },
+  { key: 'paid',      states: ['paid'],   label: 'Paid' },
+  { key: 'draft',     states: ['draft'],  label: 'Draft' },
+  { key: 'cancelled', states: ['cancel'], label: 'Cancelled' },
 ];
 
 // Map a raw single-state string (passed via route params from POSRegister
@@ -44,17 +44,16 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const configId = route?.params?.configId || null;
   const sessionId = route?.params?.sessionId || null;
   const configName = route?.params?.configName || null;
-  // stateFilter is the chip key ('all' / 'paid_invoiced' / 'posted_draft' /
-  // 'cancelled'). Initialised by translating a raw route-param state string
-  // (e.g. Continue Selling passes 'draft' → posted_draft chip) into the
-  // matching chip key.
+  // stateFilter is the chip key ('all' / 'paid' / 'draft' / 'cancelled').
+  // Initialised by translating a raw route-param state string (e.g.
+  // Continue Selling passes 'draft' → draft chip) into the matching key.
   const initialStateFilter = chipForState(route?.params?.stateFilter);
   const [stateFilter, setStateFilter] = useState(initialStateFilter);
   // The actual pos.order.state values the active chip filters by.
   const activeStates = (STATE_FILTERS.find((f) => f.key === stateFilter)?.states) || [];
   const headerTitle = (() => {
-    if (stateFilter === 'posted_draft' && configName) return `Posted/Draft — ${configName}`;
-    if (stateFilter === 'posted_draft') return 'Posted / Draft Orders';
+    if (stateFilter === 'draft' && configName) return `Draft — ${configName}`;
+    if (stateFilter === 'draft') return 'Draft Orders';
     if (configName) return `Orders — ${configName}`;
     if (sessionId) return 'Orders — this session';
     return 'Orders';

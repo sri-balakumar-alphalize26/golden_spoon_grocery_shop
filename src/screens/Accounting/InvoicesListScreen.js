@@ -3,7 +3,9 @@
 // out_invoice / out_refund). Reuses the same visual language as
 // MyOrdersScreen for consistency.
 import React, { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
+import { FONT_FAMILY } from '@constants/theme';
 import { NavigationHeader } from '@components/Header';
 import { SafeAreaView, RoundedContainer, SearchContainer } from '@components/containers';
 import { EmptyState } from '@components/common/empty';
@@ -14,6 +16,8 @@ import { formatCurrency } from '@utils/currency';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
 import InvoiceFiltersModal from '@components/Modal/InvoiceFiltersModal';
+import InvoiceGroupByModal from '@components/Modal/InvoiceGroupByModal';
+import { SectionList } from 'react-native';
 
 const STATE_FILTERS = [
   { key: 'all',    states: [],                       label: 'All' },
@@ -37,6 +41,30 @@ const stateColor = (state, paymentState) => {
     case 'cancel': return '#dc2626';
     default:       return '#6b7280';
   }
+};
+
+// Reshape rows into [{ title, data: [] }] sections for the SectionList
+// when a group-by key is selected. Keyed by salesperson / partner /
+// status / payment_method / journal.
+const groupRows = (rows, key) => {
+  if (!key || !Array.isArray(rows) || rows.length === 0) return [];
+  const pick = (row) => {
+    switch (key) {
+      case 'salesperson':    return Array.isArray(row.invoice_user_id) ? row.invoice_user_id[1] : 'No Salesperson';
+      case 'partner':        return Array.isArray(row.partner_id) ? row.partner_id[1] : 'No Partner';
+      case 'status':         return row.state || '—';
+      case 'payment_method': return row.payment_state || '—';
+      case 'journal':        return Array.isArray(row.journal_id) ? row.journal_id[1] : '—';
+      default:               return '—';
+    }
+  };
+  const map = new Map();
+  for (const r of rows) {
+    const title = String(pick(r) || '—');
+    if (!map.has(title)) map.set(title, []);
+    map.get(title).push(r);
+  }
+  return Array.from(map.entries()).map(([title, data]) => ({ title, data }));
 };
 
 const stateLabel = (state, paymentState, moveType) => {
@@ -64,6 +92,11 @@ const InvoicesListScreen = ({ navigation }) => {
   const [filterPayload, setFilterPayload] = useState({
     states: [], paymentStates: [], moveTypes: [], overdueOnly: false,
   });
+  // Group By — single key like 'salesperson' / 'partner' / 'status' /
+  // 'payment_method' / 'journal'. When set, the list switches from
+  // FlatList to SectionList with rows grouped by that key.
+  const [groupByModalVisible, setGroupByModalVisible] = useState(false);
+  const [groupBy, setGroupBy] = useState(null);
   // Tax breakdown modal (mirror MyOrdersScreen) — taps on the Tax chip
   // open this modal with the per-line subtotal/tax detail.
   const [taxModalVisible, setTaxModalVisible] = useState(false);
@@ -131,6 +164,16 @@ const InvoicesListScreen = ({ navigation }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stateFilter, filterPayload]);
 
+  // Auto-refresh on every focus so newly-posted invoices (e.g. ones the
+  // user just created on the Payment screen) show up without manual
+  // pull-to-refresh. Mirrors MyOrdersScreen's behaviour.
+  useFocusEffect(
+    useCallback(() => {
+      load({ searchText, resetOffset: true });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchText, stateFilter, filterPayload])
+  );
+
   const handleLoadMore = () => {
     if (loadingMore || !hasMore || loading) return;
     setLoadingMore(true);
@@ -193,6 +236,7 @@ const InvoicesListScreen = ({ navigation }) => {
               <Text style={styles.taxChipText}>
                 {`Tax ${formatCurrency(tax, currency)}`}
               </Text>
+              <Icon name="chevron-right" size={14} color="#1E88E5" />
             </TouchableOpacity>
           ) : null}
           {residual > 0 ? (
@@ -216,22 +260,10 @@ const InvoicesListScreen = ({ navigation }) => {
         onChangeText={handleSearchTextChange}
         placeholder="Search by invoice # or customer"
       />
+      {/* Only the Filters + Group By buttons — no quick-state chip row.
+          All state filtering (Draft/Posted/Cancelled etc.) lives inside
+          the Filters popup. */}
       <View style={styles.filterBar}>
-        <View style={styles.filterRow}>
-          {STATE_FILTERS.map((f) => {
-            const active = stateFilter === f.key;
-            return (
-              <TouchableOpacity
-                key={f.key}
-                onPress={() => setStateFilter(f.key)}
-                activeOpacity={0.85}
-                style={[styles.filterChip, active && styles.filterChipActive]}
-              >
-                <Text style={[styles.filterText, active && styles.filterTextActive]}>{f.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
         <TouchableOpacity
           style={styles.filtersBtn}
           activeOpacity={0.85}
@@ -242,12 +274,42 @@ const InvoicesListScreen = ({ navigation }) => {
             {filterKeys.length > 0 ? `Filters (${filterKeys.length})` : 'Filters'}
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.filtersBtn, { marginLeft: 8 }]}
+          activeOpacity={0.85}
+          onPress={() => setGroupByModalVisible(true)}
+        >
+          <Icon name="layers" size={18} color="#1E88E5" />
+          <Text style={styles.filtersBtnText}>
+            {groupBy ? `Group: ${groupBy}` : 'Group By'}
+          </Text>
+        </TouchableOpacity>
       </View>
       <RoundedContainer>
         {loading ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator color="#1E88E5" />
           </View>
+        ) : groupBy ? (
+          <SectionList
+            sections={groupRows(rows, groupBy)}
+            keyExtractor={(it, i) => `inv-${it.id || i}`}
+            renderItem={renderItem}
+            renderSectionHeader={({ section }) => (
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionHeaderText}>{section.title}</Text>
+                <Text style={styles.sectionHeaderCount}>{section.data.length}</Text>
+              </View>
+            )}
+            stickySectionHeadersEnabled={false}
+            contentContainerStyle={{ paddingBottom: 24 }}
+            refreshControl={
+              <RefreshControl
+                refreshing={loading}
+                onRefresh={() => load({ searchText, resetOffset: true })}
+              />
+            }
+          />
         ) : (
           <FlatList
             data={rows}
@@ -299,42 +361,65 @@ const InvoicesListScreen = ({ navigation }) => {
           setFiltersModalVisible(false);
         }}
       />
+      <InvoiceGroupByModal
+        isVisible={groupByModalVisible}
+        initialKey={groupBy}
+        onClose={() => setGroupByModalVisible(false)}
+        onApply={(key) => {
+          setGroupBy(key);
+          setGroupByModalVisible(false);
+        }}
+      />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  // filterBar: pill row + Filters button laid out horizontally so the
-  // legacy quick-state pills (All/Posted/Draft/Cancelled) remain usable
-  // alongside the new multi-axis dropdown modal.
+  // filterBar: Filters (left) + Group By (right) icon buttons. Lives
+  // INSIDE RoundedContainer so it's not clipped by the rounded top
+  // corners. Full-width white row with even vertical padding.
   filterBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
-    paddingVertical: 4,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f2f6',
   },
+  filterBarRight: { flexDirection: 'row', alignItems: 'center' },
   filtersBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
     paddingVertical: 6,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#BFDBFE',
     backgroundColor: '#E7F1FD',
   },
   filtersBtnText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#1E88E5',
     fontWeight: '700',
   },
   filterRow: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 6,
     paddingVertical: 4,
+    flex: 1,
   },
+  // Section header for the SectionList when Group By is active.
+  sectionHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 8,
+    backgroundColor: '#F5F8FE', borderBottomWidth: 1, borderBottomColor: '#BFDBFE',
+  },
+  sectionHeaderText: { fontSize: 13, fontFamily: FONT_FAMILY.urbanistBold, color: '#1E88E5' },
+  sectionHeaderCount: { fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold, color: '#1E88E5' },
   filterChip: {
     paddingHorizontal: 12,
     paddingVertical: 6,

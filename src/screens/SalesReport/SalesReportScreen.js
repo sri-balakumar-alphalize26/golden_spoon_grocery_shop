@@ -1090,14 +1090,14 @@ const SalesReportScreen = ({ navigation }) => {
           activeOpacity={0.85}
           onPress={() => openMenu('section')}
         >
-          <MaterialIcons name="dashboard" size={14} color={sectionActive ? '#fff' : NAVY} />
+          <MaterialIcons name="dashboard" size={14} color={sectionActive ? '#fff' : '#1E88E5'} />
           <Text
             numberOfLines={1}
             style={[styles.filterBarPillText, sectionActive && styles.filterBarPillTextActive]}
           >
             {sectionLabel}
           </Text>
-          <MaterialIcons name="arrow-drop-down" size={16} color={sectionActive ? '#fff' : NAVY} />
+          <MaterialIcons name="arrow-drop-down" size={16} color={sectionActive ? '#fff' : '#1E88E5'} />
         </TouchableOpacity>
         <FeatureGate featureKey="sales_report.date_filter">
           <TouchableOpacity
@@ -1105,14 +1105,14 @@ const SalesReportScreen = ({ navigation }) => {
             activeOpacity={0.85}
             onPress={() => openMenu('date')}
           >
-            <MaterialIcons name="event" size={14} color={dateActive ? '#fff' : NAVY} />
+            <MaterialIcons name="event" size={14} color={dateActive ? '#fff' : '#1E88E5'} />
             <Text
               numberOfLines={1}
               style={[styles.filterBarPillText, dateActive && styles.filterBarPillTextActive]}
             >
               {dateRangeLabel}
             </Text>
-            <MaterialIcons name="arrow-drop-down" size={16} color={dateActive ? '#fff' : NAVY} />
+            <MaterialIcons name="arrow-drop-down" size={16} color={dateActive ? '#fff' : '#1E88E5'} />
           </TouchableOpacity>
         </FeatureGate>
       </View>
@@ -2853,29 +2853,34 @@ const styles = StyleSheet.create({
   },
   modeBtnTextActive: { color: '#fff' },
 
+  // Section / Date pills grouped at the LEFT edge (no flex-wrap apart),
+  // styled to match the Invoices Filters/Group By buttons — light blue
+  // background (#E7F1FD), blue border (#BFDBFE), blue text (#1E88E5).
   filterBar: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    alignItems: 'center',
+    gap: 6,
     marginBottom: 8,
+    justifyContent: 'flex-start',
   },
   filterBarPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: '#fff',
-    borderWidth: 1.5,
-    borderColor: NAVY,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#E7F1FD',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
   },
   filterBarPillActive: {
-    backgroundColor: NAVY,
+    backgroundColor: '#1E88E5',
+    borderColor: '#1E88E5',
   },
   filterBarPillText: {
     fontSize: 12,
-    color: NAVY,
+    color: '#1E88E5',
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.3,
   },

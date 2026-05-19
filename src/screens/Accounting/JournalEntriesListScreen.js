@@ -1,6 +1,7 @@
 // Accounting → Journal Entries. Mirrors Odoo's Accounting → Accounting →
 // Journal Entries page in the app — each row is one `account.move`.
 import React, { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { SafeAreaView, RoundedContainer, SearchContainer } from '@components/containers';
@@ -11,9 +12,11 @@ import useAuthStore from '@stores/auth/useAuthStore';
 import { formatCurrency } from '@utils/currency';
 import useDebouncedSearch from '@hooks/useDebouncedSearch';
 
+// All entries by default — Odoo shows posted + draft + cancel mixed in
+// its Accounting → Journal Entries view, so the app should too.
 const STATE_FILTERS = [
-  { key: 'posted', states: ['posted'], label: 'Posted' },
   { key: 'all',    states: [],         label: 'All' },
+  { key: 'posted', states: ['posted'], label: 'Posted' },
   { key: 'draft',  states: ['draft'],  label: 'Draft' },
   { key: 'cancel', states: ['cancel'], label: 'Cancelled' },
 ];
@@ -48,7 +51,7 @@ const JournalEntriesListScreen = ({ navigation, route }) => {
   const journalTypes = route?.params?.journalTypes || null;
   const titleSuffix = route?.params?.titleSuffix || '';
   const currency = useAuthStore((s) => s.currency);
-  const [stateFilter, setStateFilter] = useState('posted');
+  const [stateFilter, setStateFilter] = useState('all');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -91,6 +94,15 @@ const JournalEntriesListScreen = ({ navigation, route }) => {
     load({ searchText, resetOffset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stateFilter]);
+
+  // Auto-refresh on focus so journal entries reflect new postings made
+  // from elsewhere in the app — matches MyOrdersScreen behaviour.
+  useFocusEffect(
+    useCallback(() => {
+      load({ searchText, resetOffset: true });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchText, stateFilter, journalTypes])
+  );
 
   const handleLoadMore = () => {
     if (loadingMore || !hasMore || loading) return;

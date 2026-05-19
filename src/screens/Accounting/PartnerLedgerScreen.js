@@ -4,6 +4,7 @@
 // partner_id then date desc; we group them client-side into collapsible
 // partner sections.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, TouchableOpacity, SectionList, ActivityIndicator, RefreshControl } from 'react-native';
 import { NavigationHeader } from '@components/Header';
 import { SafeAreaView, RoundedContainer, SearchContainer } from '@components/containers';
@@ -59,6 +60,15 @@ const PartnerLedgerScreen = ({ navigation }) => {
 
   useEffect(() => { load({ resetOffset: true }); }, []);  // eslint-disable-line
 
+  // Auto-refresh on focus so any new payment / invoice posted elsewhere
+  // shows up in the ledger without manual pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      load({ searchText, resetOffset: true });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchText])
+  );
+
   const handleLoadMore = () => {
     if (loadingMore || !hasMore || loading) return;
     setLoadingMore(true);
@@ -97,6 +107,8 @@ const PartnerLedgerScreen = ({ navigation }) => {
     const debit = Number(item.debit) || 0;
     const credit = Number(item.credit) || 0;
     const balance = Number(item.balance) || 0;
+    const dueDate = item.date_maturity ? formatDate(item.date_maturity) : '';
+    const matching = item.matching_number || '';
     return (
       <TouchableOpacity
         style={styles.row}
@@ -105,27 +117,41 @@ const PartnerLedgerScreen = ({ navigation }) => {
           if (moveId) navigation.navigate('InvoiceDetailScreen', { invoiceId: moveId });
         }}
       >
+        {/* Line 1: Date · Journal Entry · Due Date · Matching # */}
         <View style={styles.rowTop}>
           <Text style={styles.rowDate}>{formatDate(item.date)}</Text>
           <Text style={styles.rowMove} numberOfLines={1}>{move}</Text>
-          <Text style={[styles.rowBalance, balance < 0 && { color: '#dc2626' }]}>
-            {formatCurrency(balance, currency)}
-          </Text>
+          {dueDate ? <Text style={styles.rowDue}>{`Due ${dueDate}`}</Text> : null}
+          {matching ? (
+            <View style={styles.matchChip}>
+              <Text style={styles.matchChipText}>{`M ${matching}`}</Text>
+            </View>
+          ) : null}
         </View>
-        <View style={styles.rowBottom}>
+        {/* Line 2: Account · Label */}
+        <View style={styles.rowMid}>
           <Text style={styles.rowAccount} numberOfLines={1}>{account}</Text>
-          <View style={styles.rowAmts}>
-            {debit > 0 ? (
-              <Text style={styles.rowDebit}>{`D ${formatCurrency(debit, currency)}`}</Text>
-            ) : null}
-            {credit > 0 ? (
-              <Text style={styles.rowCredit}>{`C ${formatCurrency(credit, currency)}`}</Text>
-            ) : null}
+          {item.name ? (
+            <Text style={styles.rowLabel} numberOfLines={1}>{item.name}</Text>
+          ) : null}
+        </View>
+        {/* Line 3: Debit / Credit / Balance — right-aligned three-column */}
+        <View style={styles.rowAmtsRow}>
+          <View style={styles.rowAmtCol}>
+            <Text style={styles.rowAmtLabel}>Debit</Text>
+            <Text style={styles.rowAmtVal}>{debit > 0 ? formatCurrency(debit, currency) : '—'}</Text>
+          </View>
+          <View style={styles.rowAmtCol}>
+            <Text style={styles.rowAmtLabel}>Credit</Text>
+            <Text style={styles.rowAmtVal}>{credit > 0 ? formatCurrency(credit, currency) : '—'}</Text>
+          </View>
+          <View style={styles.rowAmtCol}>
+            <Text style={styles.rowAmtLabel}>Balance</Text>
+            <Text style={[styles.rowAmtVal, balance < 0 && { color: '#dc2626' }]}>
+              {formatCurrency(balance, currency)}
+            </Text>
           </View>
         </View>
-        {item.name ? (
-          <Text style={styles.rowLabel} numberOfLines={1}>{item.name}</Text>
-        ) : null}
       </TouchableOpacity>
     );
   };
@@ -199,16 +225,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 8,
     borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
   },
-  rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rowDate: { fontSize: 11, color: '#6b7280', width: 64, fontWeight: '700' },
+  // Line 1: Date · Journal Entry · Due Date · Matching #
+  rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  rowDate: { fontSize: 11, color: '#6b7280', width: 70, fontWeight: '700' },
   rowMove: { flex: 1, fontSize: 12, color: '#1f2937', fontWeight: '700' },
-  rowBalance: { fontSize: 12, color: '#111827', fontWeight: '900' },
-  rowBottom: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  rowDue: { fontSize: 11, color: '#d97706', fontWeight: '700' },
+  matchChip: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: '#E7F1FD' },
+  matchChipText: { fontSize: 10, color: '#1E88E5', fontWeight: '700' },
+  // Line 2: Account · Label
+  rowMid: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   rowAccount: { flex: 1, color: '#4b5563', fontSize: 11 },
-  rowAmts: { flexDirection: 'row', gap: 6 },
-  rowDebit: { color: '#1d4ed8', fontSize: 11, fontWeight: '800' },
-  rowCredit: { color: '#16a34a', fontSize: 11, fontWeight: '800' },
-  rowLabel: { color: '#6b7280', fontSize: 10, marginTop: 3, fontStyle: 'italic' },
+  rowLabel: { flex: 1, color: '#6b7280', fontSize: 10, fontStyle: 'italic', textAlign: 'right' },
+  // Line 3: Debit / Credit / Balance three-column
+  rowAmtsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#f1f2f6' },
+  rowAmtCol: { flex: 1, alignItems: 'flex-end' },
+  rowAmtLabel: { fontSize: 9, color: '#9ca3af', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  rowAmtVal: { fontSize: 12, color: '#111827', fontWeight: '700', marginTop: 1 },
 });
 
 export default PartnerLedgerScreen;
