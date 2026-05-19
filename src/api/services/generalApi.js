@@ -688,7 +688,13 @@ export const submitPosOrderToOdoo = async ({
     amount_total: Number(amountTotal) || 0,
     amount_tax: Number(amountTax) || 0,
     amount_return: Number(amountReturn) || 0,
-    state: 'paid',
+    // Ship as draft so sync_from_ui creates the order + payments without
+    // firing action_pos_order_paid inside the same transaction (Odoo's
+    // _is_pos_order_paid check has been failing when state='paid' is set
+    // up-front — likely because the amount_paid compute field hasn't
+    // settled before the check). We call action_pos_order_paid via a
+    // separate RPC right after sync_from_ui returns the id.
+    state: 'draft',
     lines: lineTuples,
     payment_ids: paymentTuples,
     // Intentionally disabled — Odoo's sync_from_ui-driven invoice creation
@@ -700,21 +706,25 @@ export const submitPosOrderToOdoo = async ({
   });
 
   const callSyncFromUi = async () => {
+    const orderPayload = buildSyncFromUiOrder();
+    console.log('[SUBMIT PAYLOAD] sync_from_ui order=', JSON.stringify(orderPayload));
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
       params: {
         model: 'pos.order',
         method: 'sync_from_ui',
-        args: [[buildSyncFromUiOrder()]],
+        args: [[orderPayload]],
         kwargs: {},
       },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data?.error) {
+      console.log('[SUBMIT RESPONSE] sync_from_ui error=', JSON.stringify(resp.data.error));
       const e = new Error('sync_from_ui error');
       e.payload = resp.data.error;
       throw e;
     }
+    console.log('[SUBMIT RESPONSE] sync_from_ui result=', JSON.stringify(resp.data?.result));
     return resp.data?.result ?? null;
   };
 
@@ -868,6 +878,49 @@ export const submitPosOrderToOdoo = async ({
     }
   } catch (nameErr) {
     console.warn('[POS submit] name backfill failed:', nameErr?.message || nameErr);
+  }
+
+  // Mark the order paid via a SEPARATE RPC. We ship state='draft' in
+  // sync_from_ui so the order + payment rows are created without firing
+  // _is_pos_order_paid inside the same transaction (that check was failing
+  // because the amount_paid compute hadn't settled). By the time this
+  // call runs, all compute fields are up to date and the check evaluates
+  // against the actual stored amount_paid (= sum of payment_ids.amount).
+  try {
+    const paidResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'action_pos_order_paid',
+        args: [[createdId]],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (paidResp.data?.error) {
+      // Read back the order's state for diagnosis when the check fails.
+      try {
+        const dbgResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'pos.order',
+            method: 'read',
+            args: [[createdId], ['name', 'amount_total', 'amount_paid', 'amount_return', 'amount_tax', 'state', 'payment_ids']],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        console.log('[POS submit] action_pos_order_paid FAILED. Order read-back=', JSON.stringify(dbgResp.data?.result));
+      } catch (dbgErr) {
+        console.log('[POS submit] action_pos_order_paid failed AND read-back errored:', dbgErr?.message || dbgErr);
+      }
+      console.log('[POS submit] action_pos_order_paid error=', JSON.stringify(paidResp.data.error));
+      return { error: paidResp.data.error };
+    }
+    console.log('[POS submit] action_pos_order_paid ok for id=', createdId);
+  } catch (paidErr) {
+    console.warn('[POS submit] action_pos_order_paid threw:', paidErr?.message || paidErr);
+    return { error: { message: paidErr?.message || 'action_pos_order_paid failed' } };
   }
 
   return { result: createdId, raw: result };
@@ -4663,8 +4716,19 @@ export const createInvoiceOdoo = async ({ partnerId, products = [], journalId = 
       // Get discount percentage from product
       const discount_pct = Number(p.discount || p.discount_percent || 0);
 
+      // Compose the line description. Odoo renders this as the line's
+      // text on the printed invoice. If the cashier attached an order
+      // note, append it on a new line below the product name — Odoo's
+      // invoice template preserves the newline, so the note appears as
+      // small secondary text right under the product name.
+      const productName = p.name || p.product_name || '';
+      const lineNote = p.customer_note || p.note || '';
+      const composedName = lineNote
+        ? `${productName}\n${String(lineNote).trim()}`
+        : productName;
+
       const vals = {
-        name: p.name || p.product_name || '',
+        name: composedName,
         quantity,
         price_unit,
         discount: discount_pct, // Include discount percentage on invoice line

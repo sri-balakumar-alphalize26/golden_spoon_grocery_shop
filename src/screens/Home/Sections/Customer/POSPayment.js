@@ -669,10 +669,20 @@ const POSPayment = ({ navigation, route }) => {
             const journalId = Array.isArray(method.journal_id) ? method.journal_id[0] : method.journal_id;
             console.log('[PAYMENT] selected method:', { paymentMethodId, journalId, name: method.name });
             if (paymentMode === 'cash') {
+              // One positive pos.payment row of `total`. Change lives in
+              // pos.order.amount_return (computed by Odoo from
+              // tendered-vs-total). We ship `state: 'draft'` from
+              // submitPosOrderToOdoo and mark the order paid via a separate
+              // action_pos_order_paid RPC AFTER sync_from_ui commits — this
+              // lets compute fields (amount_paid from payment_ids) settle
+              // before Odoo's _is_pos_order_paid check fires.
               payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
-              console.log(`💵 Cash payment: Total=${total}, Received=${paidAmount}, Change=${Math.abs(remaining)}`);
+              push(`cash: ${total} (tendered=${paidAmount} change=${Math.max(0, paidAmount - total)})`);
+              console.log(`💵 Cash payment: Total=${total}, Received=${paidAmount}, Change=${Math.max(0, paidAmount - total)}`);
             } else if (paymentMode === 'card') {
+              // Card charges exact total — no change concept.
               payments.push({ amount: total, paymentMethodId, journalId, paymentMode });
+              push(`card: ${total}`);
               console.log(`💳 Card payment: Total=${total}`);
             } else if (paymentMode === 'credit') {
               // Inline credit-partial path — when a "Pay Now via" method is
@@ -855,7 +865,7 @@ const POSPayment = ({ navigation, route }) => {
               amountTax: taxAmount,
               amountPaid: totalPaymentAmount,
               amountReturn: Math.max(0, paidAmount - total),
-              toInvoice: invoiceChecked || Boolean(customer && (customer.id || customer._id)),
+              toInvoice: invoiceChecked && Boolean(customer && (customer.id || customer._id)),
               companyId,
               withTax: withTaxMode,
             });
@@ -910,7 +920,10 @@ const POSPayment = ({ navigation, route }) => {
               console.warn('[POS] ref refetch failed:', refErr?.message || refErr);
             }
 
-            const shouldCreateInvoice = invoiceChecked || Boolean(customer && (customer.id || customer._id));
+            // Invoices REQUIRE a partner — Odoo rejects with "partnerId is
+            // required" otherwise. So we only invoice when both the
+            // checkbox is on AND a customer is attached.
+            const shouldCreateInvoice = invoiceChecked && Boolean(customer && (customer.id || customer._id));
               push(`shouldCreateInvoice: ${shouldCreateInvoice} (invoiceChecked=${invoiceChecked}, customer=${customer?.id || customer?._id || 'none'})`);
               console.log('[INVOICE FLOW] shouldCreateInvoice=', shouldCreateInvoice,
                 'invoiceChecked=', invoiceChecked,
@@ -938,6 +951,11 @@ const POSPayment = ({ navigation, route }) => {
                     name: p.name || p.product_name || '',
                     quantity: Number(p.quantity || p.qty || 1),
                     price: Math.round(Number(p.price || p.price_unit || 0) * ratio * 1000) / 1000,
+                    // Carry the cashier's order note through to the invoice
+                    // line — createInvoiceOdoo appends it to the line's
+                    // `name` field so Odoo's invoice PDF renders it below
+                    // the product name in small text.
+                    customer_note: p.customer_note || p.note || '',
                   }));
 
                   const currentTotal = Math.round(invoiceProducts.reduce((sum, p) => sum + (p.price * p.quantity), 0) * 1000000) / 1000000;
@@ -1933,11 +1951,11 @@ const POSPayment = ({ navigation, route }) => {
             </View>
             <Text style={styles.alertTitle}>Customer Required</Text>
             <Text style={styles.alertText}>
-              No customer is selected for this order. Enter a customer or skip to continue.
+              Please select a customer to validate the payment.
             </Text>
             <View style={styles.customerActionsRow}>
               <TouchableOpacity
-                style={styles.customerEnterBtn}
+                style={[styles.customerEnterBtn, { flex: 1 }]}
                 activeOpacity={0.85}
                 onPress={() => {
                   setCustomerModalVisible(false);
@@ -1945,16 +1963,6 @@ const POSPayment = ({ navigation, route }) => {
                 }}
               >
                 <Text style={styles.customerEnterText}>Enter Customer</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.customerSkipBtn}
-                activeOpacity={0.85}
-                onPress={() => {
-                  setCustomerModalVisible(false);
-                  handlePay();
-                }}
-              >
-                <Text style={styles.customerSkipText}>Skip & Validate</Text>
               </TouchableOpacity>
             </View>
           </View>

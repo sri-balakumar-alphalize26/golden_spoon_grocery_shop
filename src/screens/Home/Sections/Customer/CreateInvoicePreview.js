@@ -116,6 +116,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
       discount_percent: discountPercent,
       discount_amount: discountAmount,
       subtotal: typeof it.subtotal !== 'undefined' ? Number(it.subtotal) : netTotal,
+      // Preserve the cashier's order note so it can render below the
+      // product name in the paper preview (and gets shipped into
+      // generateInvoiceHtml below for the printed receipt).
+      customer_note: it.customer_note || it.note || '',
     };
   }) : [];
 
@@ -410,11 +414,17 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               </View>
               {items.map((item, idx) => {
                 const itemTotal = item.subtotal || ((item.price * item.qty) - (item.discount_amount || 0));
+                const itemNote = item.customer_note || item.note || '';
                 return (
                   <View key={idx}>
                     <View style={s.paperRow}>
                       <Text style={[s.paperPlain, { flex: 0.4 }]}>{idx + 1}.</Text>
-                      <Text style={[s.paperPlain, { flex: 2 }]} numberOfLines={1}>{item.name || 'Product'}</Text>
+                      <View style={{ flex: 2 }}>
+                        <Text style={s.paperPlain} numberOfLines={1}>{item.name || 'Product'}</Text>
+                        {itemNote ? (
+                          <Text style={s.paperItemNote} numberOfLines={2}>{`📝 ${itemNote}`}</Text>
+                        ) : null}
+                      </View>
                       <Text style={[s.paperPlain, { flex: 0.6, textAlign: 'center' }]}>{item.qty}</Text>
                       <Text style={[s.paperPlain, { flex: 0.9, textAlign: 'right' }]}>{displayNum(item.price)}</Text>
                       <Text style={[s.paperPlain, { flex: 0.9, textAlign: 'right' }]}>
@@ -831,6 +841,15 @@ const s = StyleSheet.create({
   },
   paperPlain: {
     fontSize: 11, color: '#000',
+  },
+  // Order note under the product name — small italic line so the cashier
+  // / customer can see the note without it competing with the product
+  // title. Mirrors the receipt PDF rendering in invoiceHtml.js.
+  paperItemNote: {
+    fontSize: 9,
+    color: '#555',
+    fontStyle: 'italic',
+    marginTop: 2,
   },
   paperPlainBold: {
     fontSize: 11, fontWeight: '700', color: '#000',
