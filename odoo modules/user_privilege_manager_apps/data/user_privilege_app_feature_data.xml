@@ -364,5 +364,116 @@
         <field name="sequence">191</field>
     </record>
 
+    <!-- Accounting section: parent home tiles -->
+    <record id="feature_home_tile_invoices" model="app.feature.app">
+        <field name="feature_key">home.tile.invoices</field>
+        <field name="name">Invoices Tile</field>
+        <field name="description">Home tile: opens the Customer Invoices list (Accounting section).</field>
+        <field name="sequence">200</field>
+    </record>
+    <record id="feature_home_tile_journal_entries" model="app.feature.app">
+        <field name="feature_key">home.tile.journal_entries</field>
+        <field name="name">Journal Entries Tile</field>
+        <field name="description">Home tile: opens the Journal Entries sub-tile popup (Sales / Purchases / Bank &amp; Cash / Miscellaneous).</field>
+        <field name="sequence">201</field>
+    </record>
+    <record id="feature_home_tile_partner_ledger" model="app.feature.app">
+        <field name="feature_key">home.tile.partner_ledger</field>
+        <field name="name">Partner Ledger Tile</field>
+        <field name="description">Home tile: opens the Partner Ledger view (Accounting section).</field>
+        <field name="sequence">202</field>
+    </record>
+
+    <!-- Accounting: cross-cutting data scope -->
+    <record id="feature_accounting_see_all_data" model="app.feature.app">
+        <field name="feature_key">accounting.see_all_data</field>
+        <field name="name">See All Users' Data</field>
+        <field name="description">When enabled, the user sees every record in Orders, Invoices, Journal Entries, and Partner Ledger. When the admin DISABLES this for a user, that user only sees records they personally created (their own pos.orders, invoices where invoice_user_id matches, etc.).</field>
+        <field name="sequence">205</field>
+    </record>
+
+    <!-- Accounting: invoice detail action buttons -->
+    <record id="feature_acc_invoice_pay" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.pay</field>
+        <field name="name">Invoice - Pay</field>
+        <field name="description">Show the Pay button on the invoice detail screen (opens the Pay wizard popup).</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">210</field>
+    </record>
+    <record id="feature_acc_invoice_reset_draft" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.reset_to_draft</field>
+        <field name="name">Invoice - Reset to Draft</field>
+        <field name="description">Show the Reset to Draft button on the invoice detail screen.</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">211</field>
+    </record>
+    <record id="feature_acc_invoice_cancel" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.cancel</field>
+        <field name="name">Invoice - Cancel</field>
+        <field name="description">Show the Cancel Invoice button on the invoice detail screen.</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">212</field>
+    </record>
+    <record id="feature_acc_invoice_post" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.post</field>
+        <field name="name">Invoice - Confirm &amp; Post</field>
+        <field name="description">Show the Confirm &amp; Post button on draft invoices (transitions to posted).</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">213</field>
+    </record>
+    <record id="feature_acc_invoice_download_pdf" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.download_pdf</field>
+        <field name="name">Invoice - Download PDF</field>
+        <field name="description">Show the Download PDF button on the invoice detail screen (fetches Odoo's rendered invoice report).</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">214</field>
+    </record>
+
+    <!-- Accounting: invoice list filter buttons -->
+    <record id="feature_acc_invoice_filters" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.filters</field>
+        <field name="name">Invoices - Filters</field>
+        <field name="description">Show the Filters button + modal on the Invoices list (My Invoices, Status, Type, Payment, Date sub-sections).</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">220</field>
+    </record>
+    <record id="feature_acc_invoice_group_by" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.group_by</field>
+        <field name="name">Invoices - Group By</field>
+        <field name="description">Show the Group By button + modal on the Invoices list (Salesperson / Partner / Status / Payment Method / Journal).</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">221</field>
+    </record>
+
+    <!-- Accounting: Journals popup sub-tiles -->
+    <record id="feature_acc_journals_sales" model="app.feature.app">
+        <field name="feature_key">accounting.journals.sales</field>
+        <field name="name">Journals - Sales</field>
+        <field name="description">Show the Sales sub-tile in the Journal Entries popup.</field>
+        <field name="parent_id" ref="feature_home_tile_journal_entries"/>
+        <field name="sequence">230</field>
+    </record>
+    <record id="feature_acc_journals_purchases" model="app.feature.app">
+        <field name="feature_key">accounting.journals.purchases</field>
+        <field name="name">Journals - Purchases</field>
+        <field name="description">Show the Purchases sub-tile in the Journal Entries popup.</field>
+        <field name="parent_id" ref="feature_home_tile_journal_entries"/>
+        <field name="sequence">231</field>
+    </record>
+    <record id="feature_acc_journals_bank_cash" model="app.feature.app">
+        <field name="feature_key">accounting.journals.bank_cash</field>
+        <field name="name">Journals - Bank &amp; Cash</field>
+        <field name="description">Show the Bank &amp; Cash sub-tile in the Journal Entries popup.</field>
+        <field name="parent_id" ref="feature_home_tile_journal_entries"/>
+        <field name="sequence">232</field>
+    </record>
+    <record id="feature_acc_journals_miscellaneous" model="app.feature.app">
+        <field name="feature_key">accounting.journals.miscellaneous</field>
+        <field name="name">Journals - Miscellaneous</field>
+        <field name="description">Show the Miscellaneous sub-tile in the Journal Entries popup.</field>
+        <field name="parent_id" ref="feature_home_tile_journal_entries"/>
+        <field name="sequence">233</field>
+    </record>
+
     </data>
 </odoo>
