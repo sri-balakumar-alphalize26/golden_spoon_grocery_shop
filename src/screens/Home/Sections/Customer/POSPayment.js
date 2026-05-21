@@ -1002,15 +1002,7 @@ const POSPayment = ({ navigation, route }) => {
 
                     try {
                       const totalPaymentAmount2 = (payments || []).reduce((s, p) => s + (p.amount || 0), 0);
-                      if (paymentMode === 'split') {
-                        // Skip the single-shot account.payment for split mode.
-                        // The two pos.payment records on the order already
-                        // cover the full amount, and linkInvoiceToPosOrderOdoo
-                        // (called above) lets Odoo reconcile them against the
-                        // invoice. Posting another account.payment here would
-                        // double-count the total on the invoice.
-                        console.log('[INVOICE PAYMENT] split mode — relying on pos.payment reconciliation, no extra account.payment posted');
-                      } else if (paymentMode === 'credit' && creditNowMethod && creditNowAmount > 0) {
+                      if (paymentMode === 'credit' && creditNowMethod && creditNowAmount > 0) {
                         // Credit-partial: reconcile ONLY the now (cash/card)
                         // portion against the invoice. The remainder stays
                         // open on the invoice (Amount Due = creditDueAmount)
@@ -1055,12 +1047,78 @@ const POSPayment = ({ navigation, route }) => {
                         // the customer-account pos.payment.method posts it to
                         // the partner's receivable automatically.
                         console.log('[INVOICE PAYMENT] full-credit mode — invoice stays open, receivable handled by pay_later method');
-                      } else if (selectedJournal && selectedJournal.id && totalPaymentAmount2 >= total) {
-                        try {
-                          const payResp = await createAccountPaymentOdoo({ partnerId, journalId: selectedJournal.id, amount: total, invoiceId });
-                          console.log('[INVOICE PAYMENT] createAccountPaymentOdoo response:', payResp);
-                        } catch (payErr) {
-                          console.warn('[INVOICE PAYMENT] Failed to create invoice payment:', payErr);
+                      } else if (paymentMode === 'split') {
+                        // Split — register one account.payment PER LEG so the
+                        // invoice's payment widget (and the rendered PDF)
+                        // shows both rows: e.g. "Paid on … : 5.000 (Cash)"
+                        // + "Paid on … : 0.250 (Mobile Transfer)" instead
+                        // of one consolidated cash line. Each leg uses its
+                        // own pos.payment.method's journal.
+                        console.log('[INVOICE PAYMENT] split reconcile begin', {
+                          invoiceId, total, legs: payments.length, partnerId,
+                        });
+                        for (let i = 0; i < payments.length; i += 1) {
+                          const leg = payments[i];
+                          const legAmount = Number(leg?.amount) || 0;
+                          if (legAmount <= 0) continue;
+                          const legJournalId = leg?.journalId || null;
+                          if (!legJournalId) {
+                            push(`reconcile leg ${i + 1}: skipped — no journal`);
+                            console.warn('[INVOICE PAYMENT] split leg skipped — no journal', { i, leg });
+                            continue;
+                          }
+                          try {
+                            const regResp = await registerPaymentForInvoiceOdoo({
+                              invoiceId, amount: legAmount, journalId: legJournalId, partnerId,
+                            });
+                            if (regResp?.error) {
+                              push(`reconcile leg ${i + 1}: err ${regResp.error?.message || JSON.stringify(regResp.error)}`);
+                              console.warn('[INVOICE PAYMENT] split leg error:', regResp.error);
+                            } else {
+                              push(`reconcile leg ${i + 1}: ${legAmount} (journal ${legJournalId}) → residual=${regResp.amount_residual} state=${regResp.payment_state}`);
+                              console.log('[INVOICE PAYMENT] split leg ok:', { i, regResp });
+                            }
+                          } catch (e) {
+                            push(`reconcile leg ${i + 1}: threw ${e?.message || e}`);
+                            console.warn('[INVOICE PAYMENT] split leg threw:', e);
+                          }
+                        }
+                      } else {
+                        // Cash / Card single-method — the customer already paid
+                        // at the till, so register ONE full-amount payment via
+                        // the wizard. Journal comes from cashMethod / cardMethod
+                        // (NOT `selectedJournal`, which is often null here).
+                        const nowMethodResolved = paymentMode === 'card' ? cardMethod : cashMethod;
+                        const nowJournalId = Array.isArray(nowMethodResolved?.journal_id)
+                          ? nowMethodResolved.journal_id[0]
+                          : nowMethodResolved?.journal_id;
+                        console.log('[INVOICE PAYMENT] non-credit reconcile begin', {
+                          paymentMode, invoiceId, total, nowJournalId, partnerId,
+                          methodName: nowMethodResolved?.name || null,
+                        });
+                        if (nowJournalId) {
+                          try {
+                            const regResp = await registerPaymentForInvoiceOdoo({
+                              invoiceId, amount: total, journalId: nowJournalId, partnerId,
+                            });
+                            if (regResp?.error) {
+                              push(`reconcile full: err ${regResp.error?.message || JSON.stringify(regResp.error)}`);
+                              console.warn('[INVOICE PAYMENT] reconcile error:', regResp.error);
+                            } else {
+                              push(`reconcile full: ${total} → invoice ${invoiceId} (residual=${regResp.amount_residual} state=${regResp.payment_state})`);
+                              console.log('[INVOICE PAYMENT] reconcile ok:', regResp);
+                            }
+                          } catch (e) {
+                            push(`reconcile full: threw ${e?.message || e}`);
+                            console.warn('[INVOICE PAYMENT] reconcile threw:', e);
+                          }
+                        } else {
+                          push(`reconcile full: skipped — no journal on ${paymentMode} method`);
+                          console.warn('[INVOICE PAYMENT] reconcile skipped — no journal on method', {
+                            paymentMode,
+                            methodId: nowMethodResolved?.id || null,
+                            methodName: nowMethodResolved?.name || null,
+                          });
                         }
                       }
                     } catch (outerPayErr) {
@@ -1221,10 +1279,12 @@ const POSPayment = ({ navigation, route }) => {
   // is resolved at submit time inside handlePay (same resolver the normal
   // Cash/Card/Credit buttons use), so these three chips render even on a
   // register that only has Cash configured.
+  // Split popup supports cash + card only — Credit is its own
+  // standalone mode (full Credit / credit-partial) handled outside the
+  // split flow, so we don't expose it as a split-leg method here.
   const SPLIT_CHIPS = [
-    { key: 'cash',   label: 'Cash',   icon: 'payments' },
-    { key: 'card',   label: 'Card',   icon: 'credit-card' },
-    { key: 'credit', label: 'Credit', icon: 'credit-score' },
+    { key: 'cash', label: 'Cash', icon: 'payments' },
+    { key: 'card', label: 'Card', icon: 'credit-card' },
   ];
   const getChipByKey = (key) => SPLIT_CHIPS.find((c) => c.key === key) || null;
 
@@ -1772,6 +1832,47 @@ const POSPayment = ({ navigation, route }) => {
             <Text style={styles.alertText}>
               {`Total to collect: ${displayNum(total)}`}
             </Text>
+
+            {/* Mirror of the Payment screen's calc-row buttons — Customer
+                / Invoice / With Tax — so the cashier can pick a customer,
+                toggle the invoice flag, or flip With Tax without dismissing
+                the Split popup. All three are bound to the same parent
+                state (same setters / openers used elsewhere). */}
+            <View style={styles.splitControlsRow}>
+              <TouchableOpacity
+                style={styles.splitControlBtn}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setSplitModalVisible(false);
+                  openCustomerSelector && openCustomerSelector();
+                }}
+              >
+                <MaterialIcons name="person" size={14} color="#1E88E5" />
+                <Text style={styles.splitControlText} numberOfLines={1}>
+                  {customer ? (customer.name || 'Customer') : 'Select Customer'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.splitControlBtn, invoiceChecked && styles.splitControlBtnActive]}
+                activeOpacity={0.85}
+                onPress={() => setInvoiceChecked((v) => !v)}
+              >
+                <MaterialIcons
+                  name={invoiceChecked ? 'check-box' : 'check-box-outline-blank'}
+                  size={14}
+                  color="#1E88E5"
+                />
+                <Text style={styles.splitControlText}>Invoice</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.splitControlBtn, withTaxMode && styles.splitControlBtnActive]}
+                activeOpacity={0.85}
+                onPress={() => setWithTaxMode((v) => !v)}
+              >
+                <MaterialIcons name="receipt-long" size={14} color="#1E88E5" />
+                <Text style={styles.splitControlText}>{withTaxMode ? 'With Tax' : 'No Tax'}</Text>
+              </TouchableOpacity>
+            </View>
 
             {[
               { slot: splitSlot1, setSlot: setSplitSlot1, label: 'Method 1' },
@@ -2807,6 +2908,38 @@ letterSpacing: 0.4,
     borderWidth: 2,
     borderColor: NAVY,
     ...cardShadow,
+  },
+  // 3-button row inside the Split popup: Customer / Invoice / With Tax.
+  // Mirrors the calc-row controls on the main Payment screen so the
+  // cashier can change those settings without dismissing the popup.
+  splitControlsRow: {
+    flexDirection: 'row',
+    alignSelf: 'stretch',
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    gap: 6,
+  },
+  splitControlBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#F5F8FE',
+  },
+  splitControlBtnActive: {
+    backgroundColor: '#E7F1FD',
+    borderColor: '#1E88E5',
+  },
+  splitControlText: {
+    fontSize: 11,
+    color: '#1E88E5',
+    fontWeight: '700',
   },
   splitSlotCard: {
     backgroundColor: '#F9FAFB',
