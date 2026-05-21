@@ -923,6 +923,144 @@ export const submitPosOrderToOdoo = async ({
     return { error: { message: paidErr?.message || 'action_pos_order_paid failed' } };
   }
 
+  // ── Stock decrement ────────────────────────────────────────────────
+  // Two-step approach because Odoo's standard `_create_order_picking`
+  // doesn't always fire stock moves — when `pos.config.update_stock_at_closing`
+  // is True the method early-returns and the picking is deferred to
+  // session close. So:
+  //   1. Try `_create_order_picking` (creates the audit picking record
+  //      when config allows).
+  //   2. Read picking_count. If still 0, the config defers stock — we
+  //      force a direct stock.quant decrement per line so qty_available
+  //      drops immediately like the cashier expects.
+  let pickingCountAfter = 0;
+  try {
+    await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'pos.order', method: '_create_order_picking', args: [[createdId]], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const verifyResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model: 'pos.order', method: 'read', args: [[createdId], ['picking_ids', 'picking_count']], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    const after = verifyResp.data?.result?.[0] || {};
+    pickingCountAfter = Number(after.picking_count) || 0;
+    console.log('[POS submit] _create_order_picking → picking_count=', pickingCountAfter, 'picking_ids=', after.picking_ids);
+  } catch (pickErr) {
+    console.warn('[POS submit] _create_order_picking threw:', pickErr?.message || pickErr);
+  }
+
+  // Force-decrement fallback. Fires whenever no picking landed (most
+  // installs that have "Update Stock at Closing" enabled). Loops over
+  // the pos.order's lines and writes the new inventory_quantity on the
+  // corresponding stock.quant, then applies the adjustment so
+  // qty_available reflects it immediately.
+  if (pickingCountAfter === 0) {
+    console.log('[POS submit] no picking created — applying manual stock decrement fallback');
+    try {
+      // 1. Read order lines.
+      const lineResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'pos.order',
+          method: 'read',
+          args: [[createdId], ['lines']],
+          kwargs: {},
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const lineIds = lineResp.data?.result?.[0]?.lines || [];
+      let lines = [];
+      if (lineIds.length > 0) {
+        const linesDetail = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0', method: 'call',
+          params: {
+            model: 'pos.order.line',
+            method: 'read',
+            args: [lineIds, ['product_id', 'qty']],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } });
+        lines = linesDetail.data?.result || [];
+      }
+
+      // 2. Pick the first internal stock location once.
+      const locResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'stock.location',
+          method: 'search_read',
+          args: [[['usage', '=', 'internal']]],
+          kwargs: { fields: ['id'], limit: 1, order: 'id' },
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      const locationId = (locResp.data?.result || [])[0]?.id || null;
+      if (!locationId) {
+        console.warn('[POS submit] manual decrement skipped — no internal stock location found');
+      } else {
+        for (const ln of lines) {
+          const pid = Array.isArray(ln.product_id) ? ln.product_id[0] : ln.product_id;
+          const qty = Number(ln.qty) || 0;
+          if (!pid || qty <= 0) continue;
+          try {
+            // Find existing quant at this location.
+            const quantResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+              jsonrpc: '2.0', method: 'call',
+              params: {
+                model: 'stock.quant',
+                method: 'search_read',
+                args: [[['product_id', '=', pid], ['location_id', '=', locationId]]],
+                kwargs: { fields: ['id', 'quantity'], limit: 1 },
+              },
+            }, { headers: { 'Content-Type': 'application/json' } });
+            const quant = (quantResp.data?.result || [])[0];
+            const currentQty = quant ? Number(quant.quantity) || 0 : 0;
+            const newQty = currentQty - qty;
+            let quantId = quant?.id || null;
+            if (!quantId) {
+              // No quant yet — create one with the negative count target so
+              // the apply step records a movement that ends at -qty.
+              const createResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                  model: 'stock.quant',
+                  method: 'create',
+                  args: [{ product_id: pid, location_id: locationId, inventory_quantity: newQty }],
+                  kwargs: {},
+                },
+              }, { headers: { 'Content-Type': 'application/json' } });
+              quantId = createResp.data?.result;
+            } else {
+              await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+                jsonrpc: '2.0', method: 'call',
+                params: {
+                  model: 'stock.quant',
+                  method: 'write',
+                  args: [[quantId], { inventory_quantity: newQty }],
+                  kwargs: {},
+                },
+              }, { headers: { 'Content-Type': 'application/json' } });
+            }
+            // Apply the inventory adjustment so qty_available reflects it.
+            await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+              jsonrpc: '2.0', method: 'call',
+              params: {
+                model: 'stock.quant',
+                method: 'action_apply_inventory',
+                args: [[quantId]],
+                kwargs: {},
+              },
+            }, { headers: { 'Content-Type': 'application/json' } });
+            console.log('[POS submit] manual decrement: product', pid, currentQty, '→', newQty, '(line qty', qty, ')');
+          } catch (lineErr) {
+            console.warn('[POS submit] manual decrement failed for product', pid, ':', lineErr?.message || lineErr);
+          }
+        }
+      }
+    } catch (decErr) {
+      console.warn('[POS submit] manual decrement threw:', decErr?.message || decErr);
+    }
+  }
+
   return { result: createdId, raw: result };
 };
 
