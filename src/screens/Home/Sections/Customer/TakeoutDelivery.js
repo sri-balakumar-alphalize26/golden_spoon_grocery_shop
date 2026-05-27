@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '@components/containers';
 import { formatCurrency } from '@utils/currency';
 import StyledConfirmModal from '@components/Modal/StyledConfirmModal';
+import { useFeatureHidden } from '@components/FeatureGate';
 
 // Render a money value with the Odoo-configured company currency.
 const displayNum = (n) => formatCurrency(n);
@@ -22,6 +23,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const currency = useAuthStore((s) => s.currency);
   const currencyName = currency?.symbol || currency?.name || '';
   const decimalAccuracy = useAuthStore((s) => s.decimalAccuracy);
+  // Privilege gate: when "POS - Edit Line Price" is hidden (OFF) for this
+  // user, the cart-line amount is read-only. Default (visible/ON) = editable.
+  const priceEditHidden = useFeatureHidden('pos.register.edit_price');
+  useEffect(() => {
+    console.log('[PRIVILEGE] pos.register.edit_price hidden=', priceEditHidden, '→ price edit', priceEditHidden ? 'LOCKED (read-only)' : 'ALLOWED (tap to edit)');
+  }, [priceEditHidden]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery name=', currencyName); }, [currencyName]);
   useEffect(() => { console.log('[CURRENCY:RENDER] TakeoutDelivery decimalAccuracy=', decimalAccuracy); }, [decimalAccuracy]);
 
@@ -513,9 +520,10 @@ const TakeoutDelivery = ({ navigation, route }) => {
           )}
 
           {/* Subtotal — tap to override the unit price (skipped in
-              multi-select mode where the row tap toggles selection). The
-              dotted underline hints it's editable. */}
-          {multiSelectMode ? (
+              multi-select mode where the row tap toggles selection, and
+              when the "POS - Edit Line Price" privilege is hidden for this
+              user). The dotted underline hints it's editable. */}
+          {(multiSelectMode || priceEditHidden) ? (
             <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
               {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
             </Text>

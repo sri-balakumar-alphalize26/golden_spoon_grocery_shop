@@ -154,6 +154,13 @@
         <field name="parent_id" ref="feature_home_tile_pos"/>
         <field name="sequence">111</field>
     </record>
+    <record id="feature_pos_edit_price" model="app.feature.app">
+        <field name="feature_key">pos.register.edit_price</field>
+        <field name="name">POS - Edit Line Price</field>
+        <field name="description">Allow the cashier to tap a cart line's amount on the POS Register and override its unit price. When this is turned OFF (hidden) for a user, the amount is read-only for them.</field>
+        <field name="parent_id" ref="feature_home_tile_pos"/>
+        <field name="sequence">25</field>
+    </record>
 
     <!-- Orders operations -->
     <record id="feature_orders_resume_draft" model="app.feature.app">
