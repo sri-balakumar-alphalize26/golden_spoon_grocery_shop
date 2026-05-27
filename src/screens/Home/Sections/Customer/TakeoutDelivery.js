@@ -81,6 +81,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [qtyEditFor, setQtyEditFor] = useState(null);
   const [qtyDraft, setQtyDraft] = useState('');
   const qtyInputRef = useRef(null);
+  // Per-line price override — tap the amount to open the "Set Unit Price"
+  // popup (mirrors the qty editor). Lets the cashier change the price that
+  // otherwise comes fixed from the product's sales price.
+  const [priceEditFor, setPriceEditFor] = useState(null);
+  const [priceDraft, setPriceDraft] = useState('');
+  const priceInputRef = useRef(null);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
@@ -246,6 +252,28 @@ const TakeoutDelivery = ({ navigation, route }) => {
       addProduct({ ...qtyEditFor.rawItem, quantity: n, qty: n });
     }
     closeQtyEditor();
+  };
+
+  const openPriceEditor = (item) => {
+    setPriceEditFor(item);
+    const unit = Number(item.price_unit ?? item.unit ?? item.price ?? 0);
+    setPriceDraft(String(unit));
+  };
+
+  const closePriceEditor = () => {
+    setPriceEditFor(null);
+    setPriceDraft('');
+  };
+
+  const confirmPriceEdit = () => {
+    if (!priceEditFor) return;
+    const parsed = parseFloat(priceDraft);
+    const n = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    // Preserve the current qty — addProduct defaults qty to 1 when omitted,
+    // so we pass it through. The store recalcs price_subtotal = n * qty.
+    const q = Number(priceEditFor.qty) || 1;
+    addProduct({ ...priceEditFor.rawItem, price_unit: n, price: n, quantity: q, qty: q });
+    closePriceEditor();
   };
 
   const enterMultiSelectWith = (item) => {
@@ -484,10 +512,24 @@ const TakeoutDelivery = ({ navigation, route }) => {
             </View>
           )}
 
-          {/* Subtotal */}
-          <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
-            {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
-          </Text>
+          {/* Subtotal — tap to override the unit price (skipped in
+              multi-select mode where the row tap toggles selection). The
+              dotted underline hints it's editable. */}
+          {multiSelectMode ? (
+            <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, minWidth: 56, textAlign: 'right' }}>
+              {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
+            </Text>
+          ) : (
+            <TouchableOpacity
+              onPress={() => openPriceEditor(item)}
+              activeOpacity={0.6}
+              style={{ minWidth: 56, alignItems: 'flex-end' }}
+            >
+              <Text style={{ fontWeight: '900', color: '#1a1a2e', fontSize: 14, textAlign: 'right', textDecorationLine: 'underline', textDecorationStyle: 'dotted' }}>
+                {displayNum(item.subtotal || item.price_subtotal || (item.unit * item.qty))}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {/* Per-row delete (hidden in multi-select) */}
           {!multiSelectMode && (
@@ -1361,6 +1403,95 @@ const TakeoutDelivery = ({ navigation, route }) => {
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={confirmQtyEdit}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#2E294E', alignItems: 'center', marginLeft: 5 }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Set</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Unit-price editor — mirror of the quantity editor. Tap the line
+          amount to open; the field is pre-filled with the current unit
+          price and fully selected on show so a single keystroke replaces
+          it. Decimal-pad with a single-dot guard. */}
+      <Modal
+        visible={!!priceEditFor}
+        transparent
+        animationType="fade"
+        onRequestClose={closePriceEditor}
+        onShow={() => {
+          priceInputRef.current?.focus();
+          setTimeout(() => {
+            const end = priceDraft.length;
+            priceInputRef.current?.setNativeProps({ selection: { start: 0, end } });
+          }, 50);
+        }}
+      >
+        <Pressable
+          onPress={closePriceEditor}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: '100%',
+              backgroundColor: '#fff',
+              borderRadius: 10,
+              borderColor: '#2E294E',
+              borderWidth: 2,
+              paddingVertical: 22,
+              paddingHorizontal: 16,
+              alignItems: 'center',
+            }}
+          >
+            <Text style={{ fontSize: 17, fontWeight: '800', color: '#2E294E', marginBottom: 8, textAlign: 'center' }}>
+              Set Unit Price
+            </Text>
+            {priceEditFor ? (
+              <Text style={{ fontSize: 13, color: '#8896ab', marginBottom: 12, textAlign: 'center' }} numberOfLines={1}>
+                {priceEditFor.name}
+              </Text>
+            ) : null}
+            <TextInput
+              ref={priceInputRef}
+              value={priceDraft}
+              onChangeText={(t) => {
+                // Allow digits + a single decimal point.
+                let v = t.replace(/[^0-9.]/g, '');
+                const firstDot = v.indexOf('.');
+                if (firstDot !== -1) {
+                  v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '');
+                }
+                setPriceDraft(v);
+              }}
+              keyboardType="decimal-pad"
+              returnKeyType="done"
+              onSubmitEditing={confirmPriceEdit}
+              style={{
+                alignSelf: 'stretch',
+                borderWidth: 1,
+                borderColor: '#d0ceea',
+                borderRadius: 10,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                fontSize: 18,
+                fontWeight: '800',
+                color: '#1a1a2e',
+                textAlign: 'center',
+                marginBottom: 14,
+              }}
+            />
+            <View style={{ flexDirection: 'row', alignSelf: 'stretch' }}>
+              <TouchableOpacity
+                onPress={closePriceEditor}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#f3f4f6', alignItems: 'center', marginRight: 5 }}
+              >
+                <Text style={{ color: '#6b7280', fontWeight: '800', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmPriceEdit}
                 style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#2E294E', alignItems: 'center', marginLeft: 5 }}
               >
                 <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Set</Text>
