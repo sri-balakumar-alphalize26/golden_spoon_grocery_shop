@@ -7,6 +7,8 @@ import { useAuthStore } from '@stores/auth';
 import { useCurrencyStore } from '@stores/currency';
 import * as deviceApi from '@api/services/deviceApi';
 import { refreshCurrencyFromStorage } from '@api/services/currencyApi';
+import { getDeviceName } from '@utils/deviceInfo';
+import { showToastMessage } from '@components/Toast';
 
 const SplashScreen = () => {
     const navigation = useNavigation();
@@ -76,14 +78,47 @@ const SplashScreen = () => {
                 return;
             }
 
-            // Fire-and-forget last_login refresh — never block boot on it.
+            // Heartbeat + status gate. Odoo bumps last_login AND returns the
+            // device's current registry status. A blocked or deactivated device
+            // must not proceed into the app — it is bounced back to Device Setup
+            // and must re-scan its QR. Bounded by a 6s timeout so a slow/dead
+            // server can't strand the user on the splash screen (offline tolerance).
             if (deviceUuid) {
-                deviceApi.initDevice({
-                    baseUrl: deviceServerUrl,
-                    databaseName: deviceDbName,
-                    deviceId: deviceUuid,
-                    deviceName: 'Golden Spoon Vegetables',
-                }).catch(() => {});
+                try {
+                    const initRes = await Promise.race([
+                        deviceApi.initDevice({
+                            baseUrl: deviceServerUrl,
+                            databaseName: deviceDbName,
+                            deviceId: deviceUuid,
+                            deviceName: getDeviceName(),
+                        }),
+                        new Promise((resolve) => setTimeout(() => resolve(null), 6000)),
+                    ]);
+                    console.log('[DEVICE] splash init result =', initRes);
+
+                    const status = initRes?.status;
+                    if (status === 'blocked' || status === 'deactivated') {
+                        if (status === 'blocked') {
+                            console.log(
+                                `[DEVICE] splash blocked — serial=${initRes?.serial_no || '—'} at=${initRes?.last_blocked || '—'}`
+                            );
+                        }
+                        console.log('[DEVICE] splash bounce to DeviceSetup — status =', status);
+                        try { await AsyncStorage.removeItem('device_registered'); } catch (_) {}
+                        showToastMessage(
+                            status === 'blocked'
+                                ? `Device blocked (Serial ${initRes?.serial_no || '—'}). Contact your administrator.`
+                                : "This device's session ended. Please reconnect by scanning the QR."
+                        );
+                        if (!cancelled) {
+                            navigation.reset({ index: 0, routes: [{ name: 'DeviceSetup' }] });
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    // Server unreachable — can't verify status, so proceed as normal.
+                    console.log('[DEVICE] splash init failed (offline tolerance) —', e?.message || e);
+                }
             }
 
             // Step 2: device approved — restore user session if any, else go to Login
@@ -155,6 +190,11 @@ const SplashScreen = () => {
                 source={require('@assets/images/Splash/splash.png')}
                 style={styles.image}
                 resizeMode="contain"
+                // Android decodes the large source into a full bitmap before
+                // scaling; "resize" scales DOWN during decode to avoid a stall.
+                // No-op on iOS.
+                resizeMethod="resize"
+                fadeDuration={0}
             />
             <Text style={styles.poweredText}>Powered by 369ai</Text>
         </View>

@@ -25,11 +25,6 @@
       }
     },
     "android": {
-      "splash": {
-        "image": "./assets/splash.png",
-        "resizeMode": "contain",
-        "backgroundColor": "#ffffff"
-      },
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       },

@@ -69,8 +69,27 @@ const DeviceSetupScreen = () => {
         }
         setDeviceUUID(uuid);
 
+        // Intentionally do NOT pre-fill the Server URL field — it starts empty
+        // every time the user (re)enters Device Setup so they re-enter it fresh.
         const savedUrl = pairs[1][1];
-        if (savedUrl) setServerUrl(savedUrl);
+
+        // Deactivate-on-reentry: if a prior device config exists, end that
+        // session in Odoo (active → deactivated) so the device must re-scan.
+        // Fire-and-forget — never block the setup UI.
+        const prevDbName = pairs[2][1];
+        console.log('[DEVICE] DeviceSetup mount — deactivate check', {
+          uuid,
+          prevServerUrl: savedUrl || null,
+          prevDbName: prevDbName || null,
+        });
+        if (uuid && savedUrl && prevDbName) {
+          deviceApi
+            .deactivateDevice({ baseUrl: savedUrl, databaseName: prevDbName, deviceId: uuid })
+            .then((r) => console.log('[DEVICE] DeviceSetup deactivate done', r))
+            .catch((e) => console.log('[DEVICE] DeviceSetup deactivate failed', e?.message || e));
+        } else {
+          console.log('[DEVICE] DeviceSetup — no prior config, skipping deactivate');
+        }
       } catch (_) {}
     }
     init();
@@ -372,6 +391,8 @@ const DeviceSetupScreen = () => {
               You only need to do this once per device.
             </Text>
 
+            <Text style={styles.poweredBy}>Powered by 369ai</Text>
+
           </View>
         </ScrollView>
 
@@ -409,6 +430,14 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1,
     paddingBottom: 40,
+  },
+  poweredBy: {
+    fontSize: 12,
+    color: '#bbb',
+    textAlign: 'center',
+    marginTop: 'auto',
+    paddingTop: 16,
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
   header: {
     alignItems: 'center',

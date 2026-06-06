@@ -10,7 +10,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 // expo-camera v14 (Expo SDK 50) — the modern CameraView/useCameraPermissions
 // API lives under the `/next` sub-entry. They moved to the main entry only in v15+.
@@ -34,6 +33,9 @@ const DeviceQRScannerScreen = () => {
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('Point camera at the QR code on the Odoo screen');
   const [wrongDbInfo, setWrongDbInfo] = useState(null);
+  // Generic slide-up dialog (logout popup style) — replaces native Alert.alert.
+  // { title, message, confirmLabel, cancelLabel, onConfirm, onCancel }
+  const [dialog, setDialog] = useState(null);
 
   useEffect(() => {
     requestPermission();
@@ -56,18 +58,22 @@ const DeviceQRScannerScreen = () => {
       try {
         parsed = JSON.parse(data);
       } catch (_) {
-        Alert.alert('Invalid QR', 'This QR code is not a valid device registration code.', [
-          { text: 'Try Again', onPress: resetScanner },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
-        ]);
+        setDialog({
+          title: 'Invalid QR',
+          message: 'This QR code is not a valid device registration code.',
+          confirmLabel: 'Try Again', cancelLabel: 'Cancel',
+          onConfirm: resetScanner, onCancel: () => navigation.goBack(),
+        });
         return;
       }
 
       if (parsed.a !== 'ng_reg' || !parsed.d) {
-        Alert.alert('Invalid QR', 'This QR code is not a device registration code.', [
-          { text: 'Try Again', onPress: resetScanner },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
-        ]);
+        setDialog({
+          title: 'Invalid QR',
+          message: 'This QR code is not a device registration code.',
+          confirmLabel: 'Try Again', cancelLabel: 'Cancel',
+          onConfirm: resetScanner, onCancel: () => navigation.goBack(),
+        });
         return;
       }
 
@@ -95,24 +101,37 @@ const DeviceQRScannerScreen = () => {
         setStatusMsg('Device registered! Redirecting…');
         navigation.reset({ index: 0, routes: [{ name: 'LoginScreenOdoo' }] });
       } else if (result.status === 'blocked') {
-        Alert.alert('Device Blocked', 'This device has been blocked by the administrator.', [
-          { text: 'OK', onPress: () => navigation.goBack() },
-        ]);
+        const serial = result.serial_no || '—';
+        console.log(`[DEVICE] QR scan blocked — serial=${serial}`);
+        setDialog({
+          title: 'Device Blocked',
+          message: `This device has been blocked by the administrator.\n\nSerial: ${serial}\n\nGive this Serial to your admin to unblock the device.`,
+          confirmLabel: 'OK',
+          onConfirm: () => navigation.goBack(),
+        });
+      } else if (result.status === 'used') {
+        console.log('[DEVICE] QR scan rejected — already used');
+        setDialog({
+          title: 'QR Already Used',
+          message: 'This QR code has already been used. Tap New in Odoo to generate a fresh QR, then scan it.',
+          confirmLabel: 'Try Again', cancelLabel: 'Cancel',
+          onConfirm: resetScanner, onCancel: () => navigation.goBack(),
+        });
       } else {
-        Alert.alert('Registration Failed', result.message || 'Could not register device. Try again.', [
-          { text: 'Try Again', onPress: resetScanner },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
-        ]);
+        setDialog({
+          title: 'Registration Failed',
+          message: result.message || 'Could not register device. Try again.',
+          confirmLabel: 'Try Again', cancelLabel: 'Cancel',
+          onConfirm: resetScanner, onCancel: () => navigation.goBack(),
+        });
       }
     } catch (err) {
-      Alert.alert(
-        'Cannot Reach Server',
-        `Check that the device and server are on the same network.\n\nServer URL: ${serverUrl}\n\nMake sure the URL uses the network IP (not localhost).`,
-        [
-          { text: 'Try Again', onPress: resetScanner },
-          { text: 'Cancel', onPress: () => navigation.goBack() },
-        ]
-      );
+      setDialog({
+        title: 'Cannot Reach Server',
+        message: `Check that the device and server are on the same network.\n\nServer URL: ${serverUrl}\n\nMake sure the URL uses the network IP (not localhost).`,
+        confirmLabel: 'Try Again', cancelLabel: 'Cancel',
+        onConfirm: resetScanner, onCancel: () => navigation.goBack(),
+      });
     } finally {
       setLoading(false);
     }
@@ -188,6 +207,16 @@ const DeviceQRScannerScreen = () => {
         cancelLabel="Go Back"
         onConfirm={() => { setWrongDbInfo(null); resetScanner(); }}
         onCancel={() => { setWrongDbInfo(null); navigation.goBack(); }}
+      />
+
+      <StyledConfirmModal
+        isVisible={!!dialog}
+        title={dialog?.title}
+        message={dialog?.message}
+        confirmLabel={dialog?.confirmLabel || 'OK'}
+        cancelLabel={dialog?.cancelLabel}
+        onConfirm={() => { const d = dialog; setDialog(null); d?.onConfirm?.(); }}
+        onCancel={() => { const d = dialog; setDialog(null); d?.onCancel?.(); }}
       />
     </View>
   );

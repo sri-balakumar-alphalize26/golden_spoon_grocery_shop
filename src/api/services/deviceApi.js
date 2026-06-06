@@ -98,6 +98,29 @@ export async function initDevice({ baseUrl, databaseName, deviceId, deviceName }
 }
 
 /**
+ * End a device's session — flips an 'active' record to 'deactivated' in Odoo.
+ * Called when the app re-enters Device Setup so the device must re-scan its QR.
+ * Never throws (returns { success: false } on any failure).
+ */
+export async function deactivateDevice({ baseUrl, databaseName, deviceId }) {
+  const url = `${normalizeUrl(baseUrl)}/device/deactivate`;
+  console.log('[DEVICE] deactivateDevice -> calling', { url, databaseName, deviceId });
+  try {
+    const res = await axios.post(
+      url,
+      jsonrpcBody({ device_id: deviceId, database_name: databaseName }),
+      { headers: JSONRPC_HEADERS, timeout: TIMEOUT_MS }
+    );
+    const result = res.data?.result || { success: false };
+    console.log('[DEVICE] deactivateDevice <- response', result);
+    return result;
+  } catch (err) {
+    console.log('[DEVICE] deactivateDevice <- error', err?.message || err);
+    return { success: false };
+  }
+}
+
+/**
  * Check if a device is already registered.
  */
 export async function checkDevice({ baseUrl, deviceId, databaseName }) {
