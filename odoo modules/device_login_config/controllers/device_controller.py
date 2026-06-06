@@ -293,10 +293,11 @@ class DeviceController(http.Controller):
                 now = datetime.now()
 
                 if existing:
-                    # Device exists — update last login
+                    # Device exists — update last login. Never change status here,
+                    # so a deactivated/blocked record is never silently reactivated.
                     existing.write({'last_login': now})
                     cr.commit()
-                    return {'registered': True}
+                    return {'registered': True, 'status': existing.status}
                 else:
                     # New device — register it
                     if not base_url:
@@ -315,3 +316,45 @@ class DeviceController(http.Controller):
         except Exception as exc:
             _logger.error('device_init error: %s', exc)
             return {'registered': False, 'error': str(exc)}
+
+    @http.route(
+        '/device/deactivate',
+        type='jsonrpc',
+        auth='none',
+        methods=['POST'],
+        csrf=False,
+    )
+    def device_deactivate(self, device_id=None, database_name=None, **kwargs):
+        """
+        Ends a device's session — called by the app when the user re-enters
+        Device Config. Flips an 'active' record to 'deactivated'. Leaves
+        'blocked' and 'pre_registered' untouched and never raises to the app.
+
+        A deactivated device cannot silently resume; it must re-scan its QR
+        (handled by /device/register-from-scan, which sets status back to active).
+
+        Response: { "success": true } if a record was deactivated, else
+                  { "success": false }.
+        """
+        if not device_id or not _UUID_RE.match(device_id):
+            return {'success': False}
+        db = (database_name or request.db or '').strip()
+        if not db:
+            return {'success': False}
+
+        try:
+            with Registry(db).cursor() as cr:
+                env = odoo.api.Environment(cr, SUPERUSER_ID, {})
+                rec = env['device.registry'].search([
+                    ('device_id', '=', device_id),
+                    ('database_name', '=', db),
+                ], limit=1)
+                if rec and rec.status == 'active':
+                    rec.write({'status': 'deactivated'})
+                    cr.commit()
+                    _logger.info('Device deactivated: id=%s db=%s', device_id, db)
+                    return {'success': True}
+            return {'success': False}
+        except Exception as exc:
+            _logger.warning('device_deactivate failed for db=%s: %s', db, exc)
+            return {'success': False}

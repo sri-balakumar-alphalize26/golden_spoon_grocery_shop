@@ -30,6 +30,7 @@ class DeviceRegistry(models.Model):
         selection=[
             ('pre_registered', 'Pre-Registered'),
             ('active', 'Active'),
+            ('deactivated', 'Deactivated'),
             ('blocked', 'Blocked'),
         ],
         string='Status',
@@ -58,14 +59,51 @@ class DeviceRegistry(models.Model):
         string='Last Login',
         readonly=True,
     )
+    last_deactivated = fields.Datetime(
+        string='Last Deactivated',
+        readonly=True,
+        help='Set automatically when the device leaves its session '
+             '(when the app re-enters Device Config).',
+    )
+    last_blocked = fields.Datetime(
+        string='Last Blocked',
+        readonly=True,
+        help='Set automatically when this record is set to Blocked.',
+    )
+    awaiting_rescan = fields.Boolean(
+        string='Awaiting Re-scan',
+        default=False,
+        copy=False,
+        help='Set when a device is unblocked — its old QR is now invalid and the '
+             'admin must tap New so the device can scan a fresh QR.',
+    )
+    serial_no = fields.Char(
+        string='Serial No',
+        readonly=True,
+        copy=False,
+        index=True,
+        store=True,
+        compute='_compute_serial_no',
+        help='Unique serial per record/login (DEV-#####). '
+             'Shown in the app block popup so an admin can locate this record.',
+    )
+
+    @api.depends('create_date')
+    def _compute_serial_no(self):
+        for rec in self:
+            if rec.serial_no:
+                continue
+            rec.serial_no = ('DEV-%05d' % rec.id) if isinstance(rec.id, int) else False
 
     # ---------- QR code — includes record ID so scan updates THIS record ----------
     registration_qr_image = fields.Binary(
         string='Registration QR Code',
         compute='_compute_registration_qr_image',
+        store=True,
         help='App scans this to fill Device ID and Name into this record.',
     )
 
+    @api.depends('create_date')
     def _compute_registration_qr_image(self):
         try:
             import qrcode
@@ -87,11 +125,10 @@ class DeviceRegistry(models.Model):
             for rec in self:
                 rec.registration_qr_image = False
 
-    _sql_constraints = [
-        ('mac_address_uniq',
-         'UNIQUE(mac_address)',
-         'This Device ID is already registered.'),
-    ]
+    # NOTE: Device ID (mac_address) is intentionally NOT unique. Each session is
+    # a fresh record (admin taps New → device scans the new QR), so one physical
+    # device accumulates a history of records — one per session — each keeping its
+    # own Last Deactivated time. The old UNIQUE(mac_address) constraint was removed.
 
     @api.constrains('mac_address')
     def _check_device_id(self):
@@ -112,3 +149,33 @@ class DeviceRegistry(models.Model):
                     'Device ID must be a UUID, a MAC address '
                     '(XX:XX:XX:XX:XX:XX), or a plain alphanumeric ID (4–64 chars).'
                 )
+
+    def write(self, vals):
+        # Stamp the block time whenever a record is set to Blocked.
+        if vals.get('status') == 'blocked':
+            vals.setdefault('last_blocked', fields.Datetime.now())
+        return super().write(vals)
+
+    def action_block(self):
+        """Header button — block the device (live/active records)."""
+        self.write({'status': 'blocked'})
+
+    def action_unblock(self):
+        """
+        Header button — unblock the device *device-wide*. The OLD QR(s) are
+        invalidated: every blocked record for this device id (including this one)
+        becomes Deactivated, so scanning any old QR is rejected as 'used'. This
+        record is flagged `awaiting_rescan` to show the "tap New and scan" banner.
+        The admin must tap New to issue a fresh QR.
+        """
+        for rec in self:
+            if rec.device_id:
+                others = self.search([
+                    ('device_id', '=', rec.device_id),
+                    ('database_name', '=', rec.database_name),
+                    ('status', '=', 'blocked'),
+                    ('id', '!=', rec.id),
+                ])
+                if others:
+                    others.write({'status': 'deactivated'})
+            rec.write({'status': 'deactivated', 'awaiting_rescan': True})

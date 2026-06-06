@@ -7,6 +7,7 @@
         <field name="model">device.registry</field>
         <field name="arch" type="xml">
             <list string="Device Registry">
+                <field name="serial_no"/>
                 <field name="device_name"/>
                 <field name="mac_address" string="Device ID"/>
                 <field name="database_name"/>
@@ -14,8 +15,11 @@
                 <field name="status"
                        decoration-warning="status == 'pre_registered'"
                        decoration-success="status == 'active'"
+                       decoration-muted="status == 'deactivated'"
                        decoration-danger="status == 'blocked'"/>
                 <field name="last_login"/>
+                <field name="last_deactivated"/>
+                <field name="last_blocked"/>
             </list>
         </field>
     </record>
@@ -25,8 +29,24 @@
         <field name="name">device.registry.form</field>
         <field name="model">device.registry</field>
         <field name="arch" type="xml">
-            <form string="Device Registry">
+            <form string="Device Registry" create="0">
+                <header>
+                    <button name="action_block" type="object" string="Block"
+                            class="btn-danger" invisible="status != 'active'"
+                            confirm="Block this device? It will be signed out and cannot reconnect until unblocked."/>
+                    <button name="action_unblock" type="object" string="Unblock"
+                            class="btn-warning" invisible="status != 'blocked'"/>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="pre_registered,active,deactivated,blocked"/>
+                </header>
                 <sheet>
+                    <!-- Yellow banner shown after Unblock — old QR is now invalid. -->
+                    <field name="awaiting_rescan" invisible="1"/>
+                    <div class="alert alert-warning" role="alert"
+                         invisible="not awaiting_rescan">
+                        This device is unblocked — the old QR is now invalid.
+                        Tap <b>New</b> and scan a fresh QR to use this device again.
+                    </div>
                     <group>
                         <group string="Auto-filled by App Scan">
                             <field name="device_name"
@@ -35,7 +55,7 @@
                             <field name="mac_address"
                                    string="Device ID"
                                    placeholder="Auto-filled by app scan, or type manually"/>
-                            <field name="status"/>
+                            <field name="serial_no"/>
                         </group>
                         <group string="Connection Details">
                             <field name="device_id"
@@ -48,6 +68,10 @@
                                    readonly="1"
                                    placeholder="Filled when app activates"/>
                             <field name="last_login" readonly="1"/>
+                            <field name="last_deactivated" readonly="1"
+                                   invisible="status != 'deactivated'"/>
+                            <field name="last_blocked" readonly="1"
+                                   invisible="status != 'blocked'"/>
                         </group>
                     </group>
 
@@ -78,6 +102,7 @@
         <field name="model">device.registry</field>
         <field name="arch" type="xml">
             <search string="Search Devices">
+                <field name="serial_no"/>
                 <field name="mac_address" string="Device ID"/>
                 <field name="device_name"/>
                 <field name="database_name"/>
@@ -85,6 +110,8 @@
                         domain="[('status','=','pre_registered')]"/>
                 <filter string="Active" name="active"
                         domain="[('status','=','active')]"/>
+                <filter string="Deactivated" name="deactivated"
+                        domain="[('status','=','deactivated')]"/>
                 <filter string="Blocked" name="blocked"
                         domain="[('status','=','blocked')]"/>
                 <separator/>
@@ -119,6 +146,7 @@
     <!-- Menu -->
     <menuitem id="device_registry_menu_root"
               name="Device Registry"
+              web_icon="device_login_config,static/description/icon.png"
               sequence="90"
               groups="base.group_system"/>
 
