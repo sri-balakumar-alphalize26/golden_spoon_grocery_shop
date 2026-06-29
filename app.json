@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Golden Spoon Vegetables",
+    "name": "NEXGENN VAN-SALE",
     "slug": "golden-spoon-vegetables",
     "version": "1.2.0",
     "orientation": "portrait",
@@ -21,7 +21,7 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "NSLocationWhenInUseUsageDescription": "Golden Spoon Vegetables needs your location to record where each sale happened on the receipt."
+        "NSLocationWhenInUseUsageDescription": "NEXGENN VAN-SALE needs your location to record where each sale happened on the receipt."
       }
     },
     "android": {
@@ -47,13 +47,13 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Golden Spoon Vegetables to use your camera to capture ID-proof photos."
+          "cameraPermission": "Allow NEXGENN VAN-SALE to use your camera to capture ID-proof photos."
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Golden Spoon Vegetables needs your location to record where each sale happened on the receipt."
+          "locationWhenInUsePermission": "NEXGENN VAN-SALE needs your location to record where each sale happened on the receipt."
         }
       ]
     ],

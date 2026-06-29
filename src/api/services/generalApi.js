@@ -4376,6 +4376,148 @@ export const fetchPartnersWithIdProofOdoo = async () => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// POS-order signatures (shop owner + customer)
+//
+// Same storage strategy as ID proof: the two signature PNGs are stored as
+// `ir.attachment` rows linked to the `pos.order` (res_model='pos.order',
+// res_id=<order id>), with the role encoded in the attachment `name`. No
+// custom Odoo module is required — `ir.attachment` ships on every install
+// and Odoo's record rules already gate access. Signatures are PNG, so the
+// mimetype is image/png (ID proof uses jpeg).
+const POS_SIGNATURE_ATTACH_NAMES = {
+  owner: 'shop_owner_signature',
+  customer: 'customer_signature',
+};
+
+// Find the existing signature attachments for a pos.order. Returns a dict
+// keyed by role ('owner' / 'customer') with the attachment id and base64
+// datas, or null if missing. Most-recent row wins (ordered id desc).
+const _readPosOrderSignatureAttachments = async (orderId) => {
+  if (!orderId) return { owner: null, customer: null };
+  const baseUrl = getOdooUrl();
+  const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+    jsonrpc: '2.0',
+    method: 'call',
+    params: {
+      model: 'ir.attachment',
+      method: 'search_read',
+      args: [[
+        ['res_model', '=', 'pos.order'],
+        ['res_id', '=', Number(orderId)],
+        ['name', 'in', [POS_SIGNATURE_ATTACH_NAMES.owner, POS_SIGNATURE_ATTACH_NAMES.customer]],
+      ]],
+      kwargs: { fields: ['id', 'name', 'datas'], order: 'id desc' },
+    },
+  }, { headers: { 'Content-Type': 'application/json' } });
+  if (resp.data?.error) throw new Error(resp.data.error?.data?.message || 'attachment search failed');
+  const rows = resp.data?.result || [];
+  const out = { owner: null, customer: null };
+  for (const r of rows) {
+    if (r.name === POS_SIGNATURE_ATTACH_NAMES.owner && !out.owner) {
+      out.owner = { id: r.id, datas: r.datas || null };
+    } else if (r.name === POS_SIGNATURE_ATTACH_NAMES.customer && !out.customer) {
+      out.customer = { id: r.id, datas: r.datas || null };
+    }
+  }
+  return out;
+};
+
+// Read both signature binaries for a single pos.order.
+export const fetchPosOrderSignaturesOdoo = async (orderId) => {
+  if (!orderId) return { shop_owner_signature: null, customer_signature: null };
+  try {
+    const map = await _readPosOrderSignatureAttachments(orderId);
+    return {
+      shop_owner_signature: map.owner?.datas || null,
+      customer_signature: map.customer?.datas || null,
+    };
+  } catch (e) {
+    console.warn('fetchPosOrderSignaturesOdoo failed:', e?.message);
+    return { shop_owner_signature: null, customer_signature: null };
+  }
+};
+
+// Write one or both signature binaries via ir.attachment. Behaviour per
+// role (mirrors updatePartnerIdProofOdoo):
+//   undefined  → unchanged
+//   non-empty  → if an attachment with that role's name already exists,
+//                write its `datas`; otherwise create a new one.
+//   null       → unlink the existing attachment (if any).
+export const updatePosOrderSignaturesOdoo = async (orderId, { shop_owner_signature, customer_signature } = {}) => {
+  if (!orderId) return { error: { message: 'orderId is required' } };
+  if (shop_owner_signature === undefined && customer_signature === undefined) {
+    return { result: orderId };
+  }
+  const baseUrl = getOdooUrl();
+  try {
+    const existing = await _readPosOrderSignatureAttachments(orderId);
+    const ops = [];
+
+    const apply = (role, value) => {
+      if (value === undefined) return;
+      const roleName = POS_SIGNATURE_ATTACH_NAMES[role];
+      const existingAtt = existing[role];
+      if (value === null) {
+        if (existingAtt) {
+          ops.push(axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0',
+            method: 'call',
+            params: {
+              model: 'ir.attachment',
+              method: 'unlink',
+              args: [[existingAtt.id]],
+              kwargs: {},
+            },
+          }, { headers: { 'Content-Type': 'application/json' } }));
+        }
+        return;
+      }
+      if (existingAtt) {
+        ops.push(axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.attachment',
+            method: 'write',
+            args: [[existingAtt.id], { datas: value, mimetype: 'image/png' }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } }));
+      } else {
+        ops.push(axios.post(`${baseUrl}/web/dataset/call_kw`, {
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.attachment',
+            method: 'create',
+            args: [{
+              name: roleName,
+              datas: value,
+              mimetype: 'image/png',
+              res_model: 'pos.order',
+              res_id: Number(orderId),
+              type: 'binary',
+            }],
+            kwargs: {},
+          },
+        }, { headers: { 'Content-Type': 'application/json' } }));
+      }
+    };
+
+    apply('owner', shop_owner_signature);
+    apply('customer', customer_signature);
+
+    const responses = await Promise.all(ops);
+    for (const r of responses) {
+      if (r.data?.error) return { error: r.data.error };
+    }
+    return { result: orderId };
+  } catch (e) {
+    return { error: { message: e?.message || 'Update failed' } };
+  }
+};
+
 
 export const fetchPickup = async ({ offset, limit, loginEmployeeId }) => {
   try {

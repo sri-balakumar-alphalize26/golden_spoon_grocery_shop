@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -85,6 +85,8 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // split-paid orders surface every method + amount instead of just the
   // aggregate `amount_paid`.
   const [payments, setPayments] = useState([]);
+  // Captured signatures (base64 PNG) for this order's receipt re-export.
+  const [signatures, setSignatures] = useState({ owner: null, customer: null });
 
   // Invoice-action state — Preview / Download / Print mirror the buttons on
   // the post-payment receipt screen, so the cashier can re-export any past
@@ -203,8 +205,11 @@ const OrderDetailScreen = ({ navigation, route }) => {
       discount_percent: Number(l.discount || 0),
       subtotal: Number(l.price_subtotal_incl ?? l.price_subtotal ?? 0),
     }));
-    const partner = Array.isArray(order.partner_id) ? order.partner_id : null;
-    const customer = partner ? { name: partner[1] } : null;
+    // fetchPosOrderDetailOdoo reshapes the order: the partner comes back as
+    // `order.partner = { id, name }` (NOT the raw `partner_id` tuple), so read
+    // that — otherwise the customer resolves to null and the receipt's
+    // Customer Details block is skipped on re-export.
+    const customer = order.partner ? { name: order.partner.name } : null;
     // Raw subtotal = sum of (price_unit × qty) across every line,
     // BEFORE any per-line discount %. amount_total is the discounted
     // figure that Odoo persisted, so the difference is the rolled-up
@@ -233,6 +238,8 @@ const OrderDetailScreen = ({ navigation, route }) => {
       paidAmount: Number(order.amount_paid || 0),
       customer,
       payments,
+      shopOwnerSignature: signatures.owner,
+      customerSignature: signatures.customer,
     };
   };
 
@@ -240,7 +247,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) return;
-      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: (Array.isArray(order?.user_id) ? order.user_id[1] : null) || authUser?.name || authUser?.username || authUser?.login || 'Cashier' }));
+      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' }));
       setPreviewVisible(true);
     } catch (err) {
       console.error('[OrderDetail] preview error', err);
@@ -254,7 +261,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
       const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
-      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: (Array.isArray(order?.user_id) ? order.user_id[1] : null) || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -301,7 +308,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
-      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: (Array.isArray(order?.user_id) ? order.user_id[1] : null) || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       await Print.printAsync({ html });
     } catch (err) {
       if (err?.message && !/cancel/i.test(err.message)) {
@@ -322,8 +329,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
     Promise.all([
       fetchPosOrderDetailOdoo(orderId),
       fetchPosOrderPaymentsOdoo(orderId),
+      fetchPosOrderSignaturesOdoo(orderId),
     ])
-      .then(([orderRes, paymentRows]) => {
+      .then(([orderRes, paymentRows, sigRes]) => {
         if (!alive) return;
         if (orderRes?.error) {
           Toast.show({ type: 'error', text1: 'Failed to load order', position: 'bottom' });
@@ -331,6 +339,12 @@ const OrderDetailScreen = ({ navigation, route }) => {
         }
         setOrder(orderRes);
         setPayments(Array.isArray(paymentRows) ? paymentRows : []);
+        if (sigRes) {
+          setSignatures({
+            owner: sigRes.shop_owner_signature || null,
+            customer: sigRes.customer_signature || null,
+          });
+        }
       })
       .catch(() => {
         Toast.show({ type: 'error', text1: 'Failed to load order', position: 'bottom' });

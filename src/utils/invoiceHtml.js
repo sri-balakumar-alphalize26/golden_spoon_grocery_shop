@@ -63,10 +63,20 @@ export const generateInvoiceHtml = ({
   // "Cashier: …" line on the printed receipt. Falls back to "Cashier" so
   // we never leak the old hardcoded "Admin" literal.
   cashierName = 'Cashier',
+  // Captured signatures (base64 PNG, no `data:` prefix) for the receipt
+  // footer. Null/omitted → that side is skipped. When both are null the
+  // whole signature block is left out.
+  shopOwnerSignature = null,
+  customerSignature = null,
 } = {}) => {
   console.log('[INVOICE:HTML] injecting company =', companyProfile?.name || '(none)', 'cashier =', cashierName);
   const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
   const receiptWidth = Math.max(10, pageWidth - 8);  // 4mm margin × 2
+  // Signature image height adapts to paper size so the block stays compact
+  // on narrow thermal rolls and a touch larger on A5/A4 sheets. Width is
+  // always 100% of its half-column (object-fit:contain keeps the aspect
+  // ratio), so it scales with every supported paper width.
+  const sigMaxH = pageWidth >= 148 ? 70 : (pageWidth <= 58 ? 38 : 50);
   // A4/A5 use the CSS named page size so printers paginate onto fixed-height
   // sheets. Thermal widths keep `auto` height for one continuous strip.
   const pageSizeCss =
@@ -165,24 +175,13 @@ export const generateInvoiceHtml = ({
 
       <div class="titleBox">INVOICE / فاتورة</div>
 
-      ${customer ? `<div style="border:1px solid #ddd; padding:6px; margin:6px 0; font-size:11px;">
-        <div style="text-align:center; font-weight:700; padding-bottom:6px;">Customer Details / تفاصيل</div>
-        <table style="width:100%; font-size:11px; direction:ltr;">
-          <tr>
-            <td style="width:70%; text-align:left;">Name / الاسم:</td>
-            <td style="text-align:right; font-weight:700;">${escapeHtml(customer?.name || customer?.display_name || customer?.partner_name || '')}</td>
-          </tr>
-          <tr>
-            <td style="text-align:left;">Phone / الهاتف:</td>
-            <td style="text-align:right; font-weight:700;">${escapeHtml(customer?.phone || customer?.mobile || customer?.phone_number || '')}</td>
-          </tr>
-        </table>
-      </div>` : ''}
-
-      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px;">
-        <div style="text-align:left; direction:ltr;">No: ${escapeHtml(orderRef)}</div>
-        <div style="text-align:center">Date: ${new Date().toLocaleDateString('en-GB')}</div>
-        <div style="text-align:right">Cashier: ${escapeHtml(cashierName || 'Cashier')}</div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; direction:ltr; margin-top:6px;">
+        <div style="text-align:left;">${(customer && (customer.name || customer.display_name || customer.partner_name)) ? `Customer: ${escapeHtml(customer.name || customer.display_name || customer.partner_name)}` : ''}</div>
+        <div style="text-align:right;">Cashier: ${escapeHtml(cashierName || 'Cashier')}</div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; direction:ltr; margin-bottom:6px;">
+        <div style="text-align:left;">Date: ${new Date().toLocaleDateString('en-GB')}</div>
+        <div style="text-align:right;">No: ${escapeHtml(orderRef)}</div>
       </div>
 
       <table>
@@ -222,6 +221,24 @@ export const generateInvoiceHtml = ({
           : `<div class="paymentRow"><div>Cash:</div><div>${formatCurrencyHtml(Number(paidAmount > 0 ? paidAmount : (total || subtotal)))}</div></div>
              <div class="paymentRow"><div>Change / الباقي:</div><div>${formatCurrencyHtml(Number((paidAmount > (total || subtotal) ? (paidAmount - (total || subtotal)) : 0)))}</div></div>`
       }
+
+      ${(shopOwnerSignature || customerSignature) ? `
+      <div style="border-top:1px solid #000; margin-top:10px; padding-top:8px; direction:ltr;">
+        <div style="display:flex; justify-content:space-between; gap:10px;">
+          <div style="flex:1; text-align:center;">
+            ${customerSignature
+              ? `<img src="data:image/png;base64,${customerSignature}" style="width:100%; height:auto; max-height:${sigMaxH}px; object-fit:contain;" />`
+              : `<div style="height:${sigMaxH}px;"></div>`}
+            <div style="border-top:1px solid #000; margin-top:4px; padding-top:2px; font-size:10px;">Customer / العميل</div>
+          </div>
+          <div style="flex:1; text-align:center;">
+            ${shopOwnerSignature
+              ? `<img src="data:image/png;base64,${shopOwnerSignature}" style="width:100%; height:auto; max-height:${sigMaxH}px; object-fit:contain;" />`
+              : `<div style="height:${sigMaxH}px;"></div>`}
+            <div style="border-top:1px solid #000; margin-top:4px; padding-top:2px; font-size:10px;">Cashier / الكاشير</div>
+          </div>
+        </div>
+      </div>` : ''}
 
       <div style="height:8px; border-bottom:1px dotted #000; margin-top:8px;"></div>
       <div class="footer">Thank you for your purchase!<br/>شكرا لشرائك!</div>

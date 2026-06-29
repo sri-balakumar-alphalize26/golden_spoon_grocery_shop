@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, StatusBar, BackHandler, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Platform, StatusBar, BackHandler, ActivityIndicator, Modal, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
@@ -11,7 +11,7 @@ import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
@@ -80,6 +80,15 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // (e.g. Cash 500, Card 500); for a single-method order it returns one
   // entry. Empty array while the request is in flight.
   const [payments, setPayments] = useState([]);
+
+  // Captured signatures (base64 PNG) for the receipt footer. Seeded from
+  // the POSPayment route params (in hand right after the sale) so they
+  // print without a round-trip; the async load below back-fills them from
+  // Odoo when this screen is opened cold (e.g. re-export from MyOrders).
+  const [signatures, setSignatures] = useState({
+    owner: params.signatures?.owner || null,
+    customer: params.signatures?.customer || null,
+  });
 
   // The Odoo `pos.order.name` (e.g. "Clothes Shop - 000004"). Fetched right
   // after navigation so the receipt prints the per-register sequence number
@@ -178,10 +187,20 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     Promise.all([
       fetchPosOrderPaymentsOdoo(orderId),
       fetchPosOrderDetailOdoo(orderId),
+      fetchPosOrderSignaturesOdoo(orderId),
     ])
-      .then(([rows, orderRes]) => {
+      .then(([rows, orderRes, sigRes]) => {
         if (!alive) return;
         setPayments(Array.isArray(rows) ? rows : []);
+        // Back-fill any signature side we weren't handed via route params
+        // (cold open from MyOrders, or a refresh). Don't clobber an
+        // in-hand param value with a null fetch.
+        if (sigRes) {
+          setSignatures((prev) => ({
+            owner: prev.owner || sigRes.shop_owner_signature || null,
+            customer: prev.customer || sigRes.customer_signature || null,
+          }));
+        }
         if (orderRes && !orderRes.error && orderRes.name) {
           setOrderName(orderRes.name);
         }
@@ -302,7 +321,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const runPreview = (paperWidthMm) => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -320,7 +339,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       const { uri } = await Print.printToFileAsync({ html });
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -372,7 +391,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName });
+      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -491,32 +510,20 @@ const CreateInvoicePreview = ({ navigation, route }) => {
                 <Text style={s.paperTitle}>INVOICE / فاتورة</Text>
               </View>
 
-              {/* Customer block */}
-              {customer ? (
-                <View style={s.paperCustomerBox}>
-                  <Text style={s.paperCustomerHeader}>Customer Details / تفاصيل</Text>
-                  <View style={s.paperCustomerRow}>
-                    <Text style={s.paperPlain}>Name / الاسم:</Text>
-                    <Text style={s.paperPlainBold} numberOfLines={1}>
-                      {customer.name || customer.display_name || customer.partner_name || ''}
-                    </Text>
-                  </View>
-                  {(customer.phone || customer.mobile || customer.phone_number) ? (
-                    <View style={s.paperCustomerRow}>
-                      <Text style={s.paperPlain}>Phone / الهاتف:</Text>
-                      <Text style={s.paperPlainBold}>
-                        {customer.phone || customer.mobile || customer.phone_number}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
-
-              {/* Meta — No / Date / Cashier */}
+              {/* Meta — two balanced rows:
+                  Customer (left) | Cashier (right)
+                  Date     (left) | No      (right) */}
               <View style={s.paperMetaRow}>
-                <Text style={[s.paperPlain, { flex: 1, textAlign: 'left' }]}>No: {orderNumber}</Text>
-                <Text style={[s.paperPlain, { flex: 1, textAlign: 'center' }]}>Date: {dateStr}</Text>
-                <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>{`Cashier: ${cashierName}`}</Text>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'left' }]} numberOfLines={1}>
+                  {(customer && (customer.name || customer.display_name || customer.partner_name))
+                    ? `Customer: ${customer.name || customer.display_name || customer.partner_name}`
+                    : ''}
+                </Text>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]} numberOfLines={1}>{`Cashier: ${cashierName}`}</Text>
+              </View>
+              <View style={s.paperMetaRow}>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'left' }]}>Date: {dateStr}</Text>
+                <Text style={[s.paperPlain, { flex: 1, textAlign: 'right' }]}>No: {orderNumber}</Text>
               </View>
 
               {/* Items table */}
@@ -624,6 +631,40 @@ const CreateInvoicePreview = ({ navigation, route }) => {
                   </View>
                 </>
               )}
+
+              {/* Signatures — captured at checkout (customer + shop owner).
+                  Only shown when at least one is present, matching the
+                  printed receipt. */}
+              {(signatures.customer || signatures.owner) ? (
+                <View style={s.paperSigRow}>
+                  <View style={s.paperSigCol}>
+                    {signatures.customer ? (
+                      <Image
+                        source={{ uri: `data:image/png;base64,${signatures.customer}` }}
+                        style={s.paperSigImg}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={s.paperSigImg} />
+                    )}
+                    <View style={s.paperSigLine} />
+                    <Text style={s.paperPlain} numberOfLines={1}>Customer / العميل</Text>
+                  </View>
+                  <View style={s.paperSigCol}>
+                    {signatures.owner ? (
+                      <Image
+                        source={{ uri: `data:image/png;base64,${signatures.owner}` }}
+                        style={s.paperSigImg}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={s.paperSigImg} />
+                    )}
+                    <View style={s.paperSigLine} />
+                    <Text style={s.paperPlain} numberOfLines={1}>Cashier / الكاشير</Text>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={[s.paperDottedRule, { marginTop: 8 }]} />
 
@@ -1009,6 +1050,26 @@ const s = StyleSheet.create({
   paperFooter: {
     fontSize: 12, color: '#000', textAlign: 'center',
     marginTop: 4,
+  },
+
+  // Signature block on the paper preview — two equal columns (Customer +
+  // Shop Owner) mirroring the printed receipt.
+  paperSigRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#000',
+  },
+  paperSigCol: { flex: 1, alignItems: 'center' },
+  paperSigImg: { width: '100%', height: 48, backgroundColor: '#fff' },
+  paperSigLine: {
+    width: '100%',
+    borderTopWidth: 1,
+    borderTopColor: '#000',
+    marginTop: 4,
+    marginBottom: 2,
   },
 
   // Thank you

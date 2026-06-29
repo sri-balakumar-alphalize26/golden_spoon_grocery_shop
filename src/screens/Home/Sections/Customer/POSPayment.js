@@ -11,6 +11,7 @@ import {
   createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
+  updatePosOrderSignaturesOdoo,
   submitPosOrderToOdoo,
   getCurrentDeviceLocation,
   writeOrderLocationOdoo,
@@ -24,6 +25,7 @@ import {
   fetchProductTaxMap,
 } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
+import { SignatureCapturePopup, SignatureCards } from '@components/Signature';
 // react-native-modal — used here for the ID-proof popup so it animates
 // in like LogoutModal (slide-up + dimmed backdrop) instead of the
 // instant fade the built-in `Modal` gives us.
@@ -132,11 +134,22 @@ const POSPayment = ({ navigation, route }) => {
   const [idProof, setIdProof] = useState({ front: null, back: null, loaded: false });
   const [idProofModalVisible, setIdProofModalVisible] = useState(false);
 
+  // Per-sale signatures (shop owner + customer), captured at checkout and
+  // saved against the new pos.order as ir.attachment (same storage as ID
+  // proof). The popup rises automatically when a customer is selected.
+  const [signatures, setSignatures] = useState({ owner: null, customer: null });
+  const [sigPopupVisible, setSigPopupVisible] = useState(false);
+  const setSignature = (role, b64) =>
+    setSignatures((prev) => ({ ...prev, [role]: b64 }));
+
   const openCustomerSelector = () => {
     navigation.navigate('CustomerScreen', {
       selectMode: true,
       onSelect: (selected) => {
         setCustomer(selected);
+        // Rise the signature popup right after a customer is chosen so the
+        // cashier captures the customer + shop-owner signatures up front.
+        if (selected) setSigPopupVisible(true);
       },
     });
   };
@@ -910,6 +923,27 @@ const POSPayment = ({ navigation, route }) => {
               capturedLocation = null;
             }
 
+            // Persist the captured signatures (shop owner + customer) on
+            // the new pos.order as ir.attachment. Non-blocking — same
+            // tolerance as the location write, so a signature hiccup never
+            // loses the completed sale. Only the side(s) actually signed
+            // are sent (undefined = unchanged).
+            if (signatures.owner || signatures.customer) {
+              try {
+                const sigResp = await updatePosOrderSignaturesOdoo(createdOrderId, {
+                  shop_owner_signature: signatures.owner || undefined,
+                  customer_signature: signatures.customer || undefined,
+                });
+                push(sigResp?.error
+                  ? `writeSignatures: err ${sigResp.error?.data?.message || sigResp.error?.message || 'unknown'}`
+                  : 'writeSignatures: ok');
+              } catch (sigErr) {
+                push(`writeSignatures: err ${sigErr?.message || sigErr}`);
+              }
+            } else {
+              push('writeSignatures: skipped');
+            }
+
             // Read Odoo's freshly-allocated POS reference so the receipt
             // shows the real ref (e.g. "Shop/0001") instead of the "/"
             // placeholder Odoo uses before its sequence fires.
@@ -1146,6 +1180,9 @@ const POSPayment = ({ navigation, route }) => {
       // a fresh cart should produce a fresh draft.
       try { clearProducts(); } catch (_) {}
       try { useProductStore.getState().clearDraftOrder(); } catch (_) {}
+      // This sale's signatures are saved on the order — clear them so the
+      // next sale starts with empty pads.
+      setSignatures({ owner: null, customer: null });
 
       // Tax for the receipt — when the cashier left "With Tax" checked we
       // pass through the same `taxAmount` the totals breakdown above used
@@ -1181,6 +1218,11 @@ const POSPayment = ({ navigation, route }) => {
         // here so the preview never flashes "Cash" while waiting for
         // fetchPosOrderPaymentsOdoo to resolve.
         paymentMethodLabel,
+        // Captured signatures (base64 PNG) so the receipt prints them
+        // immediately without a round-trip back to Odoo. This closure
+        // still holds the values even though state was reset above for
+        // the next sale (setState doesn't mutate the current closure).
+        signatures: { owner: signatures.owner, customer: signatures.customer },
       });
     } catch (e) {
       push(`OUTER CATCH: ${e?.message || e}`);
@@ -1714,6 +1756,34 @@ const POSPayment = ({ navigation, route }) => {
               <MaterialIcons name="chevron-right" size={18} color={idProof.front ? '#166534' : '#9A3412'} />
             </TouchableOpacity>
           ) : null}
+
+          {/* Signatures — shown on the payment screen between the end of
+              the calc and the Validate button. Read-only preview of the
+              two captured signatures; tap to re-open the capture popup. */}
+          {customer ? (
+            <View style={styles.sigSection}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => setSigPopupVisible(true)}
+                style={styles.sigSectionHeader}
+              >
+                <MaterialIcons name="gesture" size={16} color={NAVY} />
+                <Text style={styles.sigSectionTitle}>Signatures</Text>
+                <Text style={styles.sigSectionHint}>
+                  {signatures.owner && signatures.customer
+                    ? 'Tap to edit'
+                    : 'Tap to sign'}
+                </Text>
+                <MaterialIcons name="chevron-right" size={18} color={NAVY} />
+              </TouchableOpacity>
+              <SignatureCards
+                owner={signatures.owner}
+                customer={signatures.customer}
+                onChange={setSignature}
+                readOnly
+              />
+            </View>
+          ) : null}
         </ScrollView>
 
         {/* Validate footer — solid orange, always tappable; popup if cash short.
@@ -2168,6 +2238,19 @@ const POSPayment = ({ navigation, route }) => {
           </View>
         </View>
       </RNModal>
+
+      {/* Signature capture popup — rises automatically after a customer is
+          selected. Heading shows the customer name; body has the two
+          signature pads (Customer + Shop Owner). */}
+      <SignatureCapturePopup
+        visible={sigPopupVisible}
+        customerName={customer?.name}
+        owner={signatures.owner}
+        customer={signatures.customer}
+        onChange={setSignature}
+        onClose={() => setSigPopupVisible(false)}
+        busy={paying}
+      />
 
       {/* Total-discount popup — preset percentages + custom input + remove */}
       <Modal
@@ -2704,6 +2787,31 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.3,
+  },
+  // Inline signature preview on the payment screen (between the calc and
+  // the Validate footer).
+  sigSection: {
+    marginHorizontal: 14,
+    marginTop: 12,
+  },
+  sigSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  sigSectionTitle: {
+    fontSize: 13,
+    color: NAVY,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.3,
+  },
+  sigSectionHint: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: 11,
+    color: '#8896ab',
+    fontFamily: FONT_FAMILY.urbanistMedium,
   },
 // ID-proof popup — mirrors LogoutModal (white card, navy 2px border,
 // navy primary buttons in a row).
