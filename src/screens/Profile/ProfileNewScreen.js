@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
-import { View, Image, ScrollView, StyleSheet, TouchableOpacity, StatusBar } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Image, ScrollView, StyleSheet, TouchableOpacity, StatusBar, Switch } from 'react-native';
+import RNModal from 'react-native-modal';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView } from '@components/containers';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CommonActions } from '@react-navigation/native';
+import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { LogoutModal } from '@components/Modal';
+import UserManualModal from '@components/UserManual/UserManualModal';
+import { SHOW_MANUAL_KEY, openManualPdf, downloadManualPdf } from '@utils/userManual';
 import { version as appVersion } from '../../../package.json';
 
 const NAVY = COLORS.primaryThemeColor;
@@ -16,6 +19,51 @@ const ProfileNewScreen = ({ navigation }) => {
   const user = useAuthStore((s) => s.user);
   const [isVisible, setIsVisible] = useState(false);
   const hideLogoutAlert = () => setIsVisible(false);
+
+  // Admins can flip the manual on/off for this device; everyone on the
+  // device then sees the option follow that flag.
+  const isAdmin = !!(user?.is_admin || user?.uid === 2 || user?.is_superuser);
+
+  // User-manual visibility (per-device, AsyncStorage). Default ON.
+  const [showManual, setShowManual] = useState(true);
+  const [manualModalVisible, setManualModalVisible] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      AsyncStorage.getItem(SHOW_MANUAL_KEY)
+        .then((v) => { if (alive && v !== null) setShowManual(v === 'true'); })
+        .catch(() => {});
+      return () => { alive = false; };
+    }, [])
+  );
+
+  // Confirm before flipping. The Switch is controlled by `showManual`, so it
+  // won't visually move until the user confirms. `pendingShow` holds the
+  // value being confirmed.
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [pendingShow, setPendingShow] = useState(false);
+
+  const toggleShowManual = (next) => {
+    setPendingShow(next);
+    setConfirmVisible(true);
+  };
+
+  const confirmToggle = async () => {
+    const next = pendingShow;
+    setConfirmVisible(false);
+    setShowManual(next);
+    try { await AsyncStorage.setItem(SHOW_MANUAL_KEY, next ? 'true' : 'false'); } catch (_) {}
+  };
+
+  const runManualAction = async (fn) => {
+    setManualBusy(true);
+    try { await fn(); } finally {
+      setManualBusy(false);
+      setManualModalVisible(false);
+    }
+  };
 
   const displayName =
     user?.related_profile?.name ||
@@ -70,13 +118,15 @@ const ProfileNewScreen = ({ navigation }) => {
     <SafeAreaView backgroundColor={NAVY}>
       <StatusBar barStyle="light-content" backgroundColor={NAVY} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Navy header banner with company logo */}
+        {/* Navy header banner with company logo on a white plate */}
         <View style={styles.header}>
-          <Image
-            source={require('@assets/images/header/logo_header.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
+          <View style={styles.logoBox}>
+            <Image
+              source={require('@assets/images/header/logo_header.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          </View>
         </View>
 
         {/* Profile card */}
@@ -117,6 +167,58 @@ const ProfileNewScreen = ({ navigation }) => {
           ))}
         </View>
 
+        {/* Help & settings card — groups the User Manual action and the
+            admin-only visibility toggle. Admins ALWAYS see the manual;
+            staff see it only while the toggle is on. */}
+        {(isAdmin || showManual) ? (
+          <View style={styles.manualCard}>
+            <Text style={styles.manualCardHeader}>HELP</Text>
+
+            {/* Manual action — admins always; staff only when enabled. */}
+            {(isAdmin || showManual) ? (
+              <TouchableOpacity
+                style={styles.manualRow}
+                activeOpacity={0.7}
+                onPress={() => setManualModalVisible(true)}
+              >
+                <View style={[styles.manualIcon, { backgroundColor: NAVY + '12' }]}>
+                  <MaterialIcons name="menu-book" size={22} color={NAVY} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.actionTitle}>User Manual</Text>
+                  <Text style={styles.actionSub}>View or download the guide</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={22} color="#C4CAD4" />
+              </TouchableOpacity>
+            ) : null}
+
+            {/* Admin-only visibility toggle. */}
+            {isAdmin ? (
+              <>
+                <View style={styles.manualDivider} />
+                <View style={styles.manualRow}>
+                  <View style={[styles.manualIcon, { backgroundColor: '#2196F312' }]}>
+                    <MaterialIcons name="groups" size={22} color="#2196F3" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.actionTitle}>Show to users</Text>
+                    <Text style={styles.actionSub}>
+                      {showManual ? 'Users can see the manual' : 'Hidden for users (you always see it)'}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={showManual}
+                    onValueChange={toggleShowManual}
+                    trackColor={{ true: NAVY, false: '#cfd3dc' }}
+                    thumbColor="#fff"
+                    ios_backgroundColor="#cfd3dc"
+                  />
+                </View>
+              </>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* Logout button */}
         <TouchableOpacity
           style={styles.logoutButton}
@@ -129,6 +231,43 @@ const ProfileNewScreen = ({ navigation }) => {
 
         <Text style={styles.version}>Powered by 369ai  |  v{appVersion}</Text>
       </ScrollView>
+
+      <UserManualModal
+        visible={manualModalVisible}
+        busy={manualBusy}
+        onView={() => runManualAction(openManualPdf)}
+        onDownload={() => runManualAction(downloadManualPdf)}
+        onClose={() => setManualModalVisible(false)}
+      />
+
+      {/* Toggle confirmation — same look as LogoutModal (white card, navy
+          2px border, two navy buttons). */}
+      <RNModal
+        isVisible={confirmVisible}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.7}
+        animationInTiming={400}
+        animationOutTiming={300}
+        onBackButtonPress={() => setConfirmVisible(false)}
+        onBackdropPress={() => setConfirmVisible(false)}
+      >
+        <View style={styles.confirmContainer}>
+          <Text style={styles.confirmText}>
+            {pendingShow
+              ? 'Show the User Manual to users on this device?'
+              : 'Hide the User Manual from users on this device?'}
+          </Text>
+          <View style={styles.confirmRow}>
+            <TouchableOpacity style={[styles.confirmButton, { flex: 1 }]} onPress={confirmToggle}>
+              <Text style={styles.confirmButtonText}>YES</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.confirmButton, { flex: 1 }]} onPress={() => setConfirmVisible(false)}>
+              <Text style={styles.confirmButtonText}>NO</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
 
       <LogoutModal
         isVisible={isVisible}
@@ -152,9 +291,23 @@ const styles = StyleSheet.create({
     paddingTop: 30,
     paddingBottom: 100,
   },
+  // White plate behind the logo (logo PNG reads better on white than navy).
+  logoBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+  },
   logo: {
-    width: 320,
-    height: 128,
+    width: 280,
+    height: 96,
     backgroundColor: 'transparent',
   },
   card: {
@@ -258,6 +411,58 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F0F0F0',
   },
+  manualCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  manualCardHeader: {
+    fontSize: 11,
+    letterSpacing: 1,
+    color: '#9AA3B2',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    marginLeft: 6,
+    marginBottom: 2,
+  },
+  manualRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+  },
+  manualIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  manualDivider: {
+    height: 1,
+    backgroundColor: '#F0F2F5',
+    marginLeft: 64,
+  },
+  actionTitle: {
+    fontSize: 15,
+    fontFamily: FONT_FAMILY.urbanistSemiBold,
+    color: NAVY,
+    marginBottom: 2,
+  },
+  actionSub: {
+    fontSize: 12,
+    fontFamily: FONT_FAMILY.urbanistMedium,
+    color: '#8896ab',
+  },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -286,6 +491,39 @@ const styles = StyleSheet.create({
     color: '#B0B0B0',
     textAlign: 'center',
     marginTop: 20,
+  },
+  // Toggle confirmation — mirrors LogoutModal.
+  confirmContainer: {
+    backgroundColor: COLORS.white,
+    borderRadius: 10,
+    borderColor: NAVY,
+    borderWidth: 2,
+    paddingVertical: 22,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+  },
+  confirmText: {
+    marginVertical: 18,
+    fontSize: 16,
+    color: NAVY,
+    textAlign: 'center',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  confirmRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  confirmButton: {
+    backgroundColor: NAVY,
+    borderRadius: 10,
+    padding: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  confirmButtonText: {
+    color: 'white',
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
 });
 
