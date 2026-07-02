@@ -93,6 +93,7 @@ const SECTIONS = [
       { id: 'banners', title: 'App Banners', screen: 'BannersScreen', featureKey: 'home.tile.app_banners', icon: 'image', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
       { id: 'app_features', title: 'Apps Privileges', screen: 'AppFeaturesScreen', featureKey: 'home.tile.app_privileges', icon: 'visibility-off', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
       { id: 'invoice_settings', title: 'Invoice Settings', screen: 'InvoiceSettingsList', featureKey: 'home.tile.invoice_settings', icon: 'receipt-long', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
+      { id: 'user_manual', title: 'User Manual', screen: 'UserManual', featureKey: 'home.tile.user_manual', icon: 'menu-book', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
       // Module Privileges tile temporarily hidden — uncomment to restore.
       // { id: 'module_privileges', title: 'Module Privileges', screen: 'ModulePrivilegesScreen', icon: 'security', bg: '#F3E5F5', accent: '#9C27B0', requiresAdmin: true },
     ],

@@ -4117,6 +4117,76 @@ export const saveInvoiceSettings = async ({ id, vals = {}, logoBase64 = undefine
   return newId;
 };
 
+// ---------------------------------------------------------------------------
+// App User Manual (app_user_manual module). A library of PDF documents stored
+// in the DB (model `app.user.manual`), uploaded/replaced/removed by admins in
+// Odoo or from the in-app admin screen. The app lists them and fetches a chosen
+// document's bytes (base64) on demand — the proven RN binary path, since the
+// PDF is written to a cache file and handed to the OS viewer. The auth
+// interceptor attaches the session cookie + company context for free.
+// ---------------------------------------------------------------------------
+const MANUAL_MODEL = 'app.user.manual';
+
+const _manualKw = async (method, args = [], kwargs = {}) => {
+  const resp = await axios.post(
+    `${getOdooUrl()}/web/dataset/call_kw`,
+    { jsonrpc: '2.0', method: 'call', params: { model: MANUAL_MODEL, method, args, kwargs } },
+    { headers: { 'Content-Type': 'application/json' }, timeout: 30000 },
+  );
+  if (resp.data && resp.data.error) {
+    throw new Error(resp.data.error?.data?.message || resp.data.error?.message || 'Odoo error');
+  }
+  return resp.data?.result;
+};
+
+// List available manual documents (metadata only, no bytes). Returns an array
+// of { id, name, filename }, or null when the module isn't installed / the RPC
+// fails, so callers can show a friendly "not available" state.
+export const fetchUserManualList = async () => {
+  try {
+    const rows = await _manualKw('get_manuals', []);
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn('[Manual] fetchUserManualList failed:', err?.message || err);
+    return null;
+  }
+};
+
+// Fetch one document's PDF as base64. Returns { id, name, filename, data } or
+// null (missing / empty / error).
+export const fetchUserManualData = async (manualId) => {
+  if (!manualId) return null;
+  try {
+    const res = await _manualKw('get_manual', [Number(manualId)]);
+    return res && res.data ? res : null;
+  } catch (err) {
+    console.warn('[Manual] fetchUserManualData failed:', err?.message || err);
+    return null;
+  }
+};
+
+// Admin create/replace. Pass an id to update an existing document, omit it to
+// create a new one. `base64` (raw base64, no data: prefix) sets the PDF; omit
+// to leave the existing file unchanged on an update. Returns the record id.
+export const saveUserManual = async ({ id = null, name, filename, base64 } = {}) => {
+  const vals = {};
+  if (name !== undefined) vals.name = name || 'User Manual';
+  if (filename !== undefined) vals.pdf_filename = filename || false;
+  if (base64 !== undefined && base64 !== null) {
+    vals.pdf_file = base64;
+    if (filename === undefined) vals.pdf_filename = 'User Manual.pdf';
+  }
+  if (id) {
+    await _manualKw('write', [[Number(id)], vals]);
+    return Number(id);
+  }
+  return _manualKw('create', [vals]);
+};
+
+// Admin delete a document.
+export const deleteUserManual = async (manualId) =>
+  _manualKw('unlink', [[Number(manualId)]]);
+
 // Fetch categories directly from Odoo using JSON-RPC
 // NOTE: older code filtered by a non-existent `is_category` field which caused Odoo to raise
 // "Invalid field product.category.is_category". Use a safe domain (empty) and apply

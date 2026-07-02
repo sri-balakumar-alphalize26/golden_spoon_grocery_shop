@@ -79,6 +79,7 @@ import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymen
 import { UsersScreen, UserDetailsScreen } from '@screens/Users';
 import { BannersScreen, BannerDetailsScreen } from '@screens/AppBanners';
 import { AppFeaturesScreen, ModulePrivilegesScreen, InvoiceSettingsScreen, InvoiceSettingsListScreen } from '@screens/Admin';
+import UserManualScreen from '@screens/UserManual/UserManualScreen';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { StockScreen, StockDetailScreen } from '@screens/Stock';
 import { ExpensesScreen, ExpenseFormScreen, ExpenseDetailScreen } from '@screens/Expenses';
@@ -798,6 +799,12 @@ const StackNavigator = () => {
       <Stack.Screen
         name="InvoiceSettings"
         component={InvoiceSettingsScreen}
+        options={{ headerShown: false }}
+      />
+      {/* User Manual documents (view for all; manage for admins) */}
+      <Stack.Screen
+        name="UserManual"
+        component={UserManualScreen}
         options={{ headerShown: false }}
       />
       {/* Orders */}

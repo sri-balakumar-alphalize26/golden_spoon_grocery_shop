@@ -12,6 +12,25 @@ build.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-02
+
+### Added
+- Dynamic POS invoice: a branded, editable receipt (logo, shop name,
+  address, GST/VAT number, header title, footer, show/hide the tax row
+  and signatures) rendered server-side at all paper sizes. New Odoo
+  module `pos_dynamic_invoice`, gated by a per-company "Use Dynamic
+  Invoice on App" master switch.
+- In-app Invoice Settings admin (Home → Administration → Invoice
+  Settings): a per-company list plus an editor to toggle dynamic mode
+  and edit all branding, logo, header/footer and show/hide options.
+  Edits share the same record as the Odoo back office.
+- Customer and cashier signature capture on the receipt.
+- In-app user manual, with per-user hide/unhide.
+
+### Changed
+- App renamed to NEXGENN VAN-SALE.
+- White background behind the NEXGENN POS logo on the profile page.
+
 ## [1.2.0] - 2026-05-13
 
 ### Added

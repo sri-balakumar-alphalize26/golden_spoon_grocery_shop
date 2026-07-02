@@ -9,8 +9,7 @@ import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { LogoutModal } from '@components/Modal';
-import UserManualModal from '@components/UserManual/UserManualModal';
-import { SHOW_MANUAL_KEY, openManualPdf, downloadManualPdf } from '@utils/userManual';
+import { SHOW_MANUAL_KEY } from '@utils/userManual';
 import { version as appVersion } from '../../../package.json';
 
 const NAVY = COLORS.primaryThemeColor;
@@ -26,8 +25,6 @@ const ProfileNewScreen = ({ navigation }) => {
 
   // User-manual visibility (per-device, AsyncStorage). Default ON.
   const [showManual, setShowManual] = useState(true);
-  const [manualModalVisible, setManualModalVisible] = useState(false);
-  const [manualBusy, setManualBusy] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -55,14 +52,6 @@ const ProfileNewScreen = ({ navigation }) => {
     setConfirmVisible(false);
     setShowManual(next);
     try { await AsyncStorage.setItem(SHOW_MANUAL_KEY, next ? 'true' : 'false'); } catch (_) {}
-  };
-
-  const runManualAction = async (fn) => {
-    setManualBusy(true);
-    try { await fn(); } finally {
-      setManualBusy(false);
-      setManualModalVisible(false);
-    }
   };
 
   const displayName =
@@ -179,14 +168,14 @@ const ProfileNewScreen = ({ navigation }) => {
               <TouchableOpacity
                 style={styles.manualRow}
                 activeOpacity={0.7}
-                onPress={() => setManualModalVisible(true)}
+                onPress={() => navigation.navigate('UserManual')}
               >
                 <View style={[styles.manualIcon, { backgroundColor: NAVY + '12' }]}>
                   <MaterialIcons name="menu-book" size={22} color={NAVY} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.actionTitle}>User Manual</Text>
-                  <Text style={styles.actionSub}>View or download the guide</Text>
+                  <Text style={styles.actionSub}>View or download the guides</Text>
                 </View>
                 <MaterialIcons name="chevron-right" size={22} color="#C4CAD4" />
               </TouchableOpacity>
@@ -231,14 +220,6 @@ const ProfileNewScreen = ({ navigation }) => {
 
         <Text style={styles.version}>Powered by 369ai  |  v{appVersion}</Text>
       </ScrollView>
-
-      <UserManualModal
-        visible={manualModalVisible}
-        busy={manualBusy}
-        onView={() => runManualAction(openManualPdf)}
-        onDownload={() => runManualAction(downloadManualPdf)}
-        onClose={() => setManualModalVisible(false)}
-      />
 
       {/* Toggle confirmation — same look as LogoutModal (white card, navy
           2px border, two navy buttons). */}
