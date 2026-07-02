@@ -11,7 +11,7 @@ import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
@@ -319,9 +319,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   };
 
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
-  const runPreview = (paperWidthMm) => {
+  const runPreview = async (paperWidthMm) => {
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -339,8 +339,11 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      console.log(`[Download] start — order=${orderId} size=${paperWidthMm}mm`);
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      console.log(`[Download] receipt HTML ready — ${html?.length || 0} chars`);
       const { uri } = await Print.printToFileAsync({ html });
+      console.log(`[Download] PDF generated — ${uri || '(no uri)'}`);
       if (!uri) throw new Error('Failed to generate PDF');
 
       if (Platform.OS === 'android') {
@@ -391,7 +394,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const runPrint = async (paperWidthMm) => {
     setPrinting(true);
     try {
-      const html = generateInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors

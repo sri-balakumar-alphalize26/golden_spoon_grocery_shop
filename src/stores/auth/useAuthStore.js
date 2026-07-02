@@ -1,6 +1,6 @@
 // stores/auth/login
 import { create } from 'zustand';
-import { fetchUserApiToken, fetchHiddenAppFeatures } from '@api/services/generalApi';
+import { fetchUserApiToken, fetchHiddenAppFeatures, checkDynamicInvoiceInstalled } from '@api/services/generalApi';
 import { refreshCurrencyFromStorage } from '@api/services/currencyApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setActiveCurrency, setActiveDigits } from '@utils/currency';
@@ -15,6 +15,10 @@ const FALLBACK_CURRENCY = { symbol: '', name: '', position: 'before' };
 // restart, before the post-login refresh RPC has finished.
 const HIDDEN_FEATURES_KEY = 'hiddenAppFeatures';
 const COMPANY_PROFILE_KEY = 'companyProfile';
+// Cached "is the pos_dynamic_invoice Odoo module installed?" flag. Persisted so
+// the receipt screens know which renderer to use on the first paint after a
+// relaunch, before the post-login refresh RPC has resolved.
+const DYNAMIC_INVOICE_KEY = 'dynamicInvoiceEnabled';
 
 const useAuthStore = create((set, get) => ({
     isLoggedIn: false,
@@ -162,6 +166,30 @@ const useAuthStore = create((set, get) => ({
         console.log(`[AUTH] hiddenFeatures refreshed: ${keys.length} key(s): [${keys.join(', ')}]`);
     },
 
+    // True when the connected Odoo has the pos_dynamic_invoice module. Read by
+    // resolveInvoiceHtml (generalApi) to decide whether the receipt screens
+    // render the server-side dynamic invoice or the built-in one. Default false
+    // so a fresh/unknown install always uses the built-in receipt.
+    dynamicInvoiceEnabled: false,
+
+    // Re-detect the pos_dynamic_invoice module and cache the flag (memory +
+    // AsyncStorage). Called at login and on app launch, mirroring
+    // refreshHiddenFeatures / refreshCompanyProfile. Fire-and-forget.
+    refreshDynamicInvoiceFlag: async () => {
+        try {
+            const enabled = await checkDynamicInvoiceInstalled();
+            set({ dynamicInvoiceEnabled: !!enabled });
+            try {
+                await AsyncStorage.setItem(DYNAMIC_INVOICE_KEY, enabled ? '1' : '0');
+            } catch (e) {
+                console.warn('[DynInvoice] persist flag failed:', e?.message || e);
+            }
+            console.log('[DynInvoice] dynamicInvoiceEnabled =', !!enabled);
+        } catch (e) {
+            console.warn('[DynInvoice] refreshDynamicInvoiceFlag failed:', e?.message || e);
+        }
+    },
+
     // Initialize store by loading persisted user data
     initializeAuth: async () => {
         console.log('[CURRENCY:STORE-AUTH] initializeAuth called');
@@ -210,6 +238,15 @@ const useAuthStore = create((set, get) => ({
             } catch (e) {
                 console.warn('[COMPANY] hydrate error:', e?.message || e);
             }
+            // Hydrate the cached dynamic-invoice flag so the receipt screens
+            // pick the right renderer on first paint, before the launch-time
+            // refresh RPC resolves. Defaults to false (built-in receipt) on miss.
+            try {
+                const cachedDyn = await AsyncStorage.getItem(DYNAMIC_INVOICE_KEY);
+                if (cachedDyn != null) set({ dynamicInvoiceEnabled: cachedDyn === '1' });
+            } catch (e) {
+                // Ignore — defaults to the built-in receipt.
+            }
             // Hydrate decimal.precision map (saved alongside currencyConfig
             // on the most recent refresh / login). Falls back to {} on miss.
             try {
@@ -233,6 +270,9 @@ const useAuthStore = create((set, get) => ({
                 if (uid) {
                     get().refreshHiddenFeatures(uid).catch(() => {});
                 }
+                // Re-detect the dynamic-invoice module on launch so installing/
+                // uninstalling it in Odoo reflects without a re-login.
+                get().refreshDynamicInvoiceFlag?.().catch(() => {});
                 // Refresh currency from Odoo so server-side changes (e.g.
                 // switching the company currency) propagate without
                 // requiring a logout + re-login. Fire-and-forget.
@@ -279,6 +319,9 @@ const useAuthStore = create((set, get) => ({
             if (uid) {
                 get().refreshHiddenFeatures(uid).catch(() => {});
             }
+            // Detect the pos_dynamic_invoice module right after login so the
+            // receipt screens know which renderer to use. Fire-and-forget.
+            get().refreshDynamicInvoiceFlag?.().catch(() => {});
 
             // Ask for location permission once per install. The captured GPS
             // is used when validating a POS payment (see captureAndStoreOrderLocation
@@ -308,12 +351,13 @@ const useAuthStore = create((set, get) => ({
             await AsyncStorage.removeItem('isLoggedIn');
             await AsyncStorage.removeItem(HIDDEN_FEATURES_KEY);
             await AsyncStorage.removeItem(COMPANY_PROFILE_KEY);
+            await AsyncStorage.removeItem(DYNAMIC_INVOICE_KEY);
             // Note: We keep savedCredentials for auto-fill
             console.log('[AUTH] Session cleared');
         } catch (e) {
             console.warn('Failed to clear session', e);
         }
-        set({ isLoggedIn: false, user: null, hiddenFeatures: new Set(), companyProfile: null });
+        set({ isLoggedIn: false, user: null, hiddenFeatures: new Set(), companyProfile: null, dynamicInvoiceEnabled: false });
     },
 }));
 

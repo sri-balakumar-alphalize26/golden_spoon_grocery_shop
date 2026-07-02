@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -243,11 +243,12 @@ const OrderDetailScreen = ({ navigation, route }) => {
     };
   };
 
-  const runPreview = (paperWidthMm) => {
+  const runPreview = async (paperWidthMm) => {
     try {
       const params = buildInvoiceParams();
       if (!params) return;
-      setPreviewHtml(generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' }));
+      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
       console.error('[OrderDetail] preview error', err);
@@ -261,8 +262,11 @@ const OrderDetailScreen = ({ navigation, route }) => {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
       const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
-      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      console.log(`[Download] start — order=${order?.id} size=${paperWidthMm}mm`);
+      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      console.log(`[Download] receipt HTML ready — ${html?.length || 0} chars`);
       const { uri } = await Print.printToFileAsync({ html });
+      console.log(`[Download] PDF generated — ${uri || '(no uri)'}`);
       if (!uri) throw new Error('Failed to generate PDF');
 
       if (Platform.OS === 'android') {
@@ -308,7 +312,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
-      const html = generateInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       await Print.printAsync({ html });
     } catch (err) {
       if (err?.message && !/cancel/i.test(err.message)) {

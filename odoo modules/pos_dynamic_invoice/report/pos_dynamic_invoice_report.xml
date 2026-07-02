@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Dedicated paper format: full A4 but with tiny margins and no header/
+         footer spacing, so short receipts fit on a single page. Same approach
+         as pos_receipt_preview's paperformat. -->
+    <record id="paperformat_pos_dynamic_invoice" model="report.paperformat">
+        <field name="name">POS Dynamic Invoice</field>
+        <field name="format">A4</field>
+        <field name="orientation">Portrait</field>
+        <field name="margin_top">4</field>
+        <field name="margin_bottom">4</field>
+        <field name="margin_left">4</field>
+        <field name="margin_right">4</field>
+        <field name="header_spacing">0</field>
+        <field name="header_line" eval="False"/>
+        <field name="dpi">90</field>
+    </record>
+
+    <!-- Standard Odoo report so the preview embeds in Odoo and the toolbar's
+         Print/Download use the normal flow. qweb-html renders the receipt as an
+         embedded web page; the app fetches the same HTML via
+         pos.order.get_dynamic_receipt_html(). Per-wizard render values come
+         from wizard._render_context(). -->
+    <record id="action_report_pos_dynamic_invoice" model="ir.actions.report">
+        <field name="name">Dynamic Receipt</field>
+        <field name="model">pos.dynamic.invoice.wizard</field>
+        <field name="report_type">qweb-html</field>
+        <field name="report_name">pos_dynamic_invoice.report_pos_dynamic_invoice</field>
+        <field name="report_file">pos_dynamic_invoice.report_pos_dynamic_invoice</field>
+        <field name="print_report_name">'Receipt - %s' % (object.order_id.name or object.order_id.id)</field>
+        <field name="paperformat_id" ref="paperformat_pos_dynamic_invoice"/>
+    </record>
+
+    <!-- Dynamic receipt template — port of pos_receipt_preview.report_pos_receipt
+         with four injection points made editable from pos.invoice.settings:
+         logo, header title, VAT/GST line and footer text; plus an optional
+         Terms & Conditions block. Fully self-contained — inline <style> + base64
+         images only, NO external /web/assets bundles — so the mobile app can
+         render/print it instantly. Rendered directly for the app via
+         get_dynamic_receipt_html, and wrapped by the backend report below.
+         Expects d, receipt_width, page_size_css and sig_max_h in context. -->
+    <template id="report_pos_dynamic_invoice_doc">
+                    <div class="pos_dyn_inv_root">
+                        <style>
+                            @page { size: <t t-esc="page_size_css"/>; margin: 4mm; }
+                            .pos_dyn_inv_root .receipt { width:<t t-esc="receipt_width"/>mm; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; direction: rtl; padding:4mm 4mm; }
+                            .pos_dyn_inv_root .rcpthead { text-align:center; font-size:11px; }
+                            .pos_dyn_inv_root .rcpthead .logo { width:45%; height:auto; margin:0 auto 6px; display:block; }
+                            .pos_dyn_inv_root .rcpthead .company { font-weight:700; font-size:13px; }
+                            .pos_dyn_inv_root .hr { border-top:1px solid #999; margin:10px 0; }
+                            .pos_dyn_inv_root .titleBox { border-top:2px solid #000; border-bottom:2px solid #000; padding:6px 0; margin:8px 0; text-align:center; font-weight:700; }
+                            .pos_dyn_inv_root .meta { font-size:11px; margin-bottom:6px; }
+                            .pos_dyn_inv_root table { width:100%; border-collapse:collapse; font-size:11px; }
+                            .pos_dyn_inv_root th { font-weight:700; font-size:11px; padding:6px 4px; text-align:center; border-bottom:1px solid #000; }
+                            .pos_dyn_inv_root td { font-size:11px; padding:6px 4px; }
+                            .pos_dyn_inv_root .numCol { width:5%; }
+                            .pos_dyn_inv_root .prodCol { width:40%; }
+                            .pos_dyn_inv_root .qtyCol { width:10%; text-align:center; }
+                            .pos_dyn_inv_root .unitCol { width:15%; text-align:right; }
+                            .pos_dyn_inv_root .discCol { width:15%; text-align:right; }
+                            .pos_dyn_inv_root .totalCol { width:15%; text-align:right; }
+                            .pos_dyn_inv_root .divider-dotted { border-bottom:1px dotted #000; margin:8px 0; }
+                            .pos_dyn_inv_root .totals { margin-top:6px; }
+                            .pos_dyn_inv_root .totals .line { display:flex; justify-content:space-between; font-size:12px; padding:4px 0; }
+                            .pos_dyn_inv_root .totals .label { font-weight:400; }
+                            .pos_dyn_inv_root .totals .value { font-weight:700; }
+                            .pos_dyn_inv_root .paymentTitle { font-weight:700; text-decoration:underline; margin-top:8px; padding-top:6px; }
+                            .pos_dyn_inv_root .paymentRow { display:flex; justify-content:space-between; padding:4px 0; }
+                            .pos_dyn_inv_root .termsTitle { font-weight:700; text-decoration:underline; margin-top:8px; padding-top:6px; }
+                            .pos_dyn_inv_root .termsRow { font-size:10px; padding:2px 0; }
+                            .pos_dyn_inv_root .rcptfoot { text-align:center; font-size:11px; margin-top:8px; white-space:pre-line; }
+                        </style>
+                        <div class="receipt">
+                            <div class="rcpthead">
+                                <t t-if="d['show_logo'] and d['logo']">
+                                    <img class="logo" t-att-src="'data:image/png;base64,' + d['logo']"/>
+                                </t>
+                                <div class="company"><t t-esc="d['company']['name']"/></div>
+                                <t t-foreach="d['company']['address_lines']" t-as="addr_line">
+                                    <div class="meta"><t t-esc="addr_line"/></div>
+                                </t>
+                                <t t-if="d['company']['phone']"><div class="meta"><t t-esc="d['company']['phone']"/></div></t>
+                                <t t-if="d['company']['email']"><div class="meta"><t t-esc="d['company']['email']"/></div></t>
+                                <t t-if="d['vat_number']"><div class="meta">VAT: <t t-esc="d['vat_number']"/></div></t>
+                            </div>
+
+                            <div class="hr"></div>
+
+                            <div class="titleBox"><t t-esc="d['header_title']"/></div>
+
+                            <div style="display:flex; justify-content:space-between; font-size:11px; direction:ltr; margin-top:6px;">
+                                <div style="text-align:left;"><t t-if="d['customer']">Customer: <t t-esc="d['customer']"/></t></div>
+                                <div style="text-align:right;">Cashier: <t t-esc="d['cashier']"/></div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; font-size:11px; direction:ltr; margin-bottom:6px;">
+                                <div style="text-align:left;">Date: <t t-esc="d['date']"/></div>
+                                <div style="text-align:right;">No: <t t-esc="d['order_ref']"/></div>
+                            </div>
+
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th class="totalCol">Total<br/><span style="font-weight:400;font-size:10px;">المجموع</span></th>
+                                        <th class="discCol">Disc<br/><span style="font-weight:400;font-size:10px;">خصم</span></th>
+                                        <th class="unitCol">Unit<br/><span style="font-weight:400;font-size:10px;">سعر</span></th>
+                                        <th class="qtyCol">Qty<br/><span style="font-weight:400;font-size:10px;">كمية</span></th>
+                                        <th class="prodCol">Product<br/><span style="font-weight:400;font-size:10px;">المنتج</span></th>
+                                        <th class="numCol">#</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="d['items']" t-as="item">
+                                        <tr>
+                                            <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['total_f']"/></span></td>
+                                            <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['disc_f']"/></span></td>
+                                            <td style="padding:6px 4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['unit_f']"/></span></td>
+                                            <td style="padding:6px 4px; text-align:center; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['qty']"/></span></td>
+                                            <td style="padding:6px 4px; vertical-align:top;"><t t-esc="item['name']"/><div style="font-size:10px; color:#333; margin-top:4px;">KG</div><t t-if="item['note']"><div style="font-size:9px; color:#666; margin-top:2px; font-style:italic;">📝 <t t-esc="item['note']"/></div></t></td>
+                                            <td style="padding:6px 4px; vertical-align:top;"><t t-esc="item['num']"/>.</td>
+                                        </tr>
+                                        <tr><td colspan="6" style="border-bottom:1px dotted #000; height:6px;">&#160;</td></tr>
+                                    </t>
+                                </tbody>
+                            </table>
+
+                            <div class="divider-dotted"></div>
+
+                            <div class="totals">
+                                <div class="line"><div class="label">Subtotal / المجموع الفرعي</div><div class="value"><t t-esc="d['subtotal_f']"/></div></div>
+                                <t t-if="d['show_discount']"><div class="line"><div class="label">Discount / الخصم</div><div class="value" style="color:#c00;">-<t t-esc="d['discount_f']"/></div></div></t>
+                                <t t-if="d['show_tax']"><div class="line"><div class="label">Tax / الضريبة</div><div class="value"><t t-esc="d['tax_f']"/></div></div></t>
+                                <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
+                                <div class="line" style="font-size:13px; font-weight:700;"><div class="label">Grand Total / الإجمالي</div><div class="value"><t t-esc="d['total_f']"/></div></div>
+                            </div>
+
+                            <div style="border-top:1px solid #000; margin-top:8px; padding-top:6px;"></div>
+                            <div class="paymentTitle"><t t-if="d['is_split']">Payment Details (Split) / تفاصيل الدفع</t><t t-else="">Payment Details / تفاصيل الدفع</t></div>
+                            <t t-if="d['has_payments']">
+                                <t t-foreach="d['payments']" t-as="pay">
+                                    <div class="paymentRow"><div><t t-esc="pay['name']"/>:</div><div><t t-esc="pay['amount_f']"/></div></div>
+                                </t>
+                                <t t-if="d['show_change']">
+                                    <div class="paymentRow"><div>Change / الباقي:</div><div><t t-esc="d['change_f']"/></div></div>
+                                </t>
+                            </t>
+                            <t t-else="">
+                                <div class="paymentRow"><div>Cash:</div><div><t t-esc="d['cash_f']"/></div></div>
+                                <div class="paymentRow"><div>Change / الباقي:</div><div><t t-esc="d['cash_change_f']"/></div></div>
+                            </t>
+
+                            <t t-if="d['show_customer_sig'] or d['show_shop_owner_sig']">
+                                <div style="border-top:1px solid #000; margin-top:10px; padding-top:8px; direction:ltr;">
+                                    <div style="display:flex; justify-content:space-between; gap:10px;">
+                                        <t t-if="d['show_customer_sig']">
+                                            <div style="flex:1; text-align:center;">
+                                                <img t-att-src="'data:image/png;base64,' + d['customer_signature']" t-attf-style="width:100%; height:auto; max-height:#{sig_max_h}px; object-fit:contain;"/>
+                                                <div style="border-top:1px solid #000; margin-top:4px; padding-top:2px; font-size:10px;">Customer / العميل</div>
+                                            </div>
+                                        </t>
+                                        <t t-if="d['show_shop_owner_sig']">
+                                            <div style="flex:1; text-align:center;">
+                                                <img t-att-src="'data:image/png;base64,' + d['shop_owner_signature']" t-attf-style="width:100%; height:auto; max-height:#{sig_max_h}px; object-fit:contain;"/>
+                                                <div style="border-top:1px solid #000; margin-top:4px; padding-top:2px; font-size:10px;">Cashier / الكاشير</div>
+                                            </div>
+                                        </t>
+                                    </div>
+                                </div>
+                            </t>
+
+                            <t t-if="d['show_footer']">
+                                <div style="height:8px; border-bottom:1px dotted #000; margin-top:8px;"></div>
+                                <div class="rcptfoot">
+                                    <t t-foreach="d['footer_lines']" t-as="fline">
+                                        <div><t t-esc="fline"/></div>
+                                    </t>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+    </template>
+
+    <!-- Backend report: wraps the self-contained receipt body in Odoo's
+         html_container + basic_layout so the in-Odoo "Preview Receipt (Dynamic)"
+         and the report toolbar's Print/Download keep working (they need the
+         <main> element). The mobile app does NOT use this wrapper — it would
+         pull in /web/assets bundles that never load on-device and hang the
+         print engine; the app renders report_pos_dynamic_invoice_doc directly. -->
+    <template id="report_pos_dynamic_invoice">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="doc">
+                <t t-set="v" t-value="doc._render_context()"/>
+                <t t-set="d" t-value="v['d']"/>
+                <t t-set="receipt_width" t-value="v['receipt_width']"/>
+                <t t-set="page_size_css" t-value="v['page_size_css']"/>
+                <t t-set="sig_max_h" t-value="v['sig_max_h']"/>
+                <t t-call="web.basic_layout">
+                    <t t-call="pos_dynamic_invoice.report_pos_dynamic_invoice_doc"/>
+                </t>
+            </t>
+        </t>
+    </template>
+</odoo>

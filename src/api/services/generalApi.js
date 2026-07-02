@@ -2257,6 +2257,7 @@ import { get } from "./utils";
 import { API_ENDPOINTS } from "@api/endpoints";
 import { useAuthStore } from '@stores/auth';
 import handleApiError from "../utils/handleApiError";
+import { generateInvoiceHtml } from '@utils/invoiceHtml';
 
 // Active company id from the auth store. Used to scope multi-company writes
 // + reads (POS orders) so a draft created in company A is visible to a list
@@ -3883,6 +3884,237 @@ export const fetchHiddenAppFeatures = async (userId) => {
     console.warn('[FeatureGate] fetchHiddenAppFeatures failed:', err?.message || err);
     return [];
   }
+};
+
+// ---------------------------------------------------------------------------
+// Dynamic POS invoice (pos_dynamic_invoice module) integration.
+//
+// When that Odoo module is installed the receipt becomes an admin-editable,
+// branded document (logo / GST / header / footer / show-hide toggles) rendered
+// server-side. The app detects the module once (cached in the auth store) and,
+// when present, pulls the rendered HTML per order/size; otherwise it builds the
+// built-in receipt locally. Same graceful "model-not-found → fall back" pattern
+// as fetchHiddenAppFeatures above.
+// ---------------------------------------------------------------------------
+
+// True when the app should render the dynamic invoice — i.e. the
+// pos_dynamic_invoice module is installed AND its "Use Dynamic Invoice on App"
+// switch is on for the user's company. Calls pos.invoice.settings
+// .app_dynamic_enabled (readable by POS users, unlike admin-only
+// ir.module.module). A missing model (module not installed) → RPC error →
+// false, so the app falls back to its built-in receipt.
+export const checkDynamicInvoiceInstalled = async () => {
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.invoice.settings',
+          method: 'app_dynamic_enabled',
+          args: [],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 10000 },
+    );
+    if (response.data && response.data.error) {
+      // Module not installed (model unknown) → dynamic invoice unavailable.
+      console.log('[DynInvoice] dynamic unavailable:', response.data.error?.data?.message || 'no pos.invoice.settings');
+      return false;
+    }
+    const enabled = !!response.data?.result;
+    console.log('[DynInvoice] app_dynamic_enabled =', enabled);
+    return enabled;
+  } catch (err) {
+    console.warn('[DynInvoice] checkDynamicInvoiceInstalled failed:', err?.message || err);
+    return false;
+  }
+};
+
+// Fetch the server-rendered dynamic receipt HTML for one order at a given paper
+// width (mm). Returns the HTML string, or null on any failure (module absent,
+// order not yet in Odoo, network) so the caller can fall back to the built-in
+// receipt without ever blocking a print.
+export const fetchDynamicReceiptHtml = async ({ orderId, paperWidthMm = 80 } = {}) => {
+  if (!orderId) return null;
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.order',
+          method: 'get_dynamic_receipt_html',
+          args: [[Number(orderId)], String(paperWidthMm)],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 },
+    );
+    if (response.data && response.data.error) {
+      console.warn('[DynInvoice] get_dynamic_receipt_html error:', response.data.error?.data?.message || response.data.error);
+      return null;
+    }
+    const html = response.data?.result;
+    return (typeof html === 'string' && html.length > 0) ? html : null;
+  } catch (err) {
+    console.warn('[DynInvoice] fetchDynamicReceiptHtml failed:', err?.message || err);
+    return null;
+  }
+};
+
+// Resolve the receipt HTML for a set of invoice params. When the connected
+// Odoo has pos_dynamic_invoice installed (cached flag in the auth store) and
+// the params carry an Odoo orderId, fetch the dynamic invoice; on any miss —
+// flag off, no orderId, or a failed/empty fetch — fall back to the built-in
+// generateInvoiceHtml. Always resolves to an HTML string so callers can
+// preview / print / download unconditionally. This is the single entry point
+// the receipt screens use in place of generateInvoiceHtml.
+export const resolveInvoiceHtml = async (params = {}) => {
+  try {
+    // Re-check the live "Use Dynamic Invoice on App" toggle at generation time
+    // (one lightweight app_dynamic_enabled RPC) instead of trusting the cached
+    // flag. This makes a change take effect on the very NEXT invoice regardless
+    // of where it was saved: an Odoo-web toggle used to only reflect after a
+    // foreground/relaunch flag refresh, while an app-side save refreshed it
+    // immediately — hence "works from the app, not from Odoo". Reading it fresh
+    // here removes that asymmetry. checkDynamicInvoiceInstalled already swallows
+    // its own errors and returns false (module absent / offline), in which case
+    // we simply fall back to the built-in receipt below.
+    let enabled = false;
+    if (params?.orderId) {
+      enabled = await checkDynamicInvoiceInstalled();
+      // Keep the cached flag in sync so other readers agree with what we just
+      // rendered (and so a later offline generation still has a sane value).
+      try { useAuthStore.setState?.({ dynamicInvoiceEnabled: !!enabled }); } catch (_) {}
+    }
+    if (enabled && params?.orderId) {
+      const dyn = await fetchDynamicReceiptHtml({ orderId: params.orderId, paperWidthMm: params.paperWidthMm });
+      if (dyn) return dyn;
+    }
+  } catch (e) {
+    console.warn('[DynInvoice] resolveInvoiceHtml dynamic path failed:', e?.message || e);
+  }
+  return generateInvoiceHtml(params);
+};
+
+// ---------------------------------------------------------------------------
+// In-app admin editing of pos.invoice.settings. Reads/writes the SAME record
+// the Odoo backend "Invoice Settings" edits, so a change from the app is
+// identical to one an Odoo admin made. Company is auto-scoped by the auth
+// interceptor. Logo bytes are NOT read here (heavy) — the screen previews the
+// current logo via /web/image.
+// ---------------------------------------------------------------------------
+const INVOICE_SETTINGS_FIELDS = [
+  'company_id',
+  'use_dynamic_invoice', 'address', 'phone', 'email', 'vat_number',
+  'show_logo', 'header_title', 'footer_text', 'show_tax',
+  'show_customer_signature', 'show_shop_owner_signature', 'show_footer',
+];
+
+const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {
+  const resp = await axios.post(
+    `${getOdooUrl()}/web/dataset/call_kw`,
+    { jsonrpc: '2.0', method: 'call', params: { model, method, args, kwargs } },
+    { headers: { 'Content-Type': 'application/json' }, timeout: 20000 },
+  );
+  if (resp.data && resp.data.error) {
+    throw new Error(resp.data.error?.data?.message || resp.data.error?.message || 'Odoo error');
+  }
+  return resp.data?.result;
+};
+
+// Load the current company's invoice-settings record (+ its terms), creating it
+// if none exists yet. Returns { id, ...fields, terms:[...] } or null on failure
+// (e.g. module not installed).
+export const fetchInvoiceSettings = async (recordId = null) => {
+  try {
+    let rows;
+    if (recordId) {
+      rows = await _invSettingsKw('pos.invoice.settings', 'read', [[Number(recordId)], INVOICE_SETTINGS_FIELDS]);
+    } else {
+      rows = await _invSettingsKw('pos.invoice.settings', 'search_read', [[]], { fields: INVOICE_SETTINGS_FIELDS, limit: 1 });
+      if (!rows || rows.length === 0) {
+        const newId = await _invSettingsKw('pos.invoice.settings', 'create', [{}]);
+        rows = await _invSettingsKw('pos.invoice.settings', 'read', [[Number(newId)], INVOICE_SETTINGS_FIELDS]);
+      }
+    }
+    const rec = rows && rows[0];
+    if (!rec) return null;
+    return { ...rec };
+  } catch (err) {
+    console.warn('[DynInvoice] fetchInvoiceSettings failed:', err?.message || err);
+    return null;
+  }
+};
+
+// Read the current logo of a settings record as a base64 string (or '' when
+// none). Used by the in-app editor to preview the logo reliably as a data URI
+// (RN Image renders data URIs consistently, unlike /web/image + cookie).
+export const fetchInvoiceLogo = async (id) => {
+  if (!id) return '';
+  try {
+    const rows = await _invSettingsKw('pos.invoice.settings', 'read', [[Number(id)], ['logo']]);
+    const logo = rows && rows[0] && rows[0].logo;
+    return typeof logo === 'string' && logo.length ? logo : '';
+  } catch (err) {
+    console.warn('[DynInvoice] fetchInvoiceLogo failed:', err?.message || err);
+    return '';
+  }
+};
+
+// Companies the user can pick for the invoice-settings Company dropdown.
+export const fetchInvoiceCompanies = async () => {
+  try {
+    const rows = await _invSettingsKw('res.company', 'search_read', [[]], { fields: ['id', 'name'], order: 'name' });
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn('[DynInvoice] fetchInvoiceCompanies failed:', err?.message || err);
+    return [];
+  }
+};
+
+// List of invoice-settings records (one per company the user can see) for the
+// in-app list screen. Returns [] when none, or null on error / module missing.
+export const fetchInvoiceSettingsList = async () => {
+  try {
+    const rows = await _invSettingsKw(
+      'pos.invoice.settings', 'search_read', [[]],
+      { fields: ['id', 'company_id', 'use_dynamic_invoice'], order: 'company_id' },
+    );
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn('[DynInvoice] fetchInvoiceSettingsList failed:', err?.message || err);
+    return null;
+  }
+};
+
+// Delete an invoice-settings record (admin list delete button). Note: it is
+// auto-recreated with defaults the next time the app/module needs it
+// (get_for_company), so this effectively resets the company's settings.
+export const deleteInvoiceSettings = async (id) => {
+  if (!id) throw new Error('Missing settings id');
+  return _invSettingsKw('pos.invoice.settings', 'unlink', [[Number(id)]]);
+};
+
+// Persist edits. `vals` = scalar fields; `logoBase64` = raw base64 to set,
+// false to clear, or undefined to leave the logo unchanged.
+export const saveInvoiceSettings = async ({ id, vals = {}, logoBase64 = undefined } = {}) => {
+  const writeVals = { ...vals };
+  if (logoBase64 !== undefined) {
+    writeVals.logo = logoBase64 || false;
+  }
+  if (id) {
+    console.log('[DynInvoice] saveInvoiceSettings WRITE id=', id, 'keys=', Object.keys(writeVals).join(','));
+    await _invSettingsKw('pos.invoice.settings', 'write', [[Number(id)], writeVals]);
+    return Number(id);
+  }
+  console.log('[DynInvoice] saveInvoiceSettings CREATE keys=', Object.keys(writeVals).join(','));
+  const newId = await _invSettingsKw('pos.invoice.settings', 'create', [writeVals]);
+  return newId;
 };
 
 // Fetch categories directly from Odoo using JSON-RPC

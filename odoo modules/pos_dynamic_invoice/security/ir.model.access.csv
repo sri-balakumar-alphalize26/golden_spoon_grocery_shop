@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_pos_invoice_settings_user,pos.invoice.settings.user,model_pos_invoice_settings,point_of_sale.group_pos_user,1,0,0,0
+access_pos_invoice_settings_manager,pos.invoice.settings.manager,model_pos_invoice_settings,point_of_sale.group_pos_manager,1,1,1,1
+access_pos_dynamic_invoice_wizard_user,pos.dynamic.invoice.wizard.user,model_pos_dynamic_invoice_wizard,point_of_sale.group_pos_user,1,1,1,1
+access_pos_dynamic_invoice_wizard_manager,pos.dynamic.invoice.wizard.manager,model_pos_dynamic_invoice_wizard,point_of_sale.group_pos_manager,1,1,1,1

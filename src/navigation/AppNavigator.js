@@ -79,7 +79,13 @@ const AppNavigator = () => {
     checkDeviceStatus(); // initial check on entering the app
     const interval = setInterval(checkDeviceStatus, 5000); // every 5s
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') checkDeviceStatus();
+      if (state === 'active') {
+        checkDeviceStatus();
+        // Re-detect the dynamic-invoice switch on foreground so flipping
+        // "Use Dynamic Invoice on App" in Odoo reflects within ~1s without a
+        // relaunch (mirrors the company-profile foreground refresh).
+        try { require('@stores/auth').useAuthStore.getState().refreshDynamicInvoiceFlag?.(); } catch (_) {}
+      }
     });
     return () => {
       clearInterval(interval);

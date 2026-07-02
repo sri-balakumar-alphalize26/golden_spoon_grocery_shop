@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Settings form: the admin edits branding, logo, toggles and T&C here. -->
+    <record id="pos_invoice_settings_form" model="ir.ui.view">
+        <field name="name">pos.invoice.settings.form</field>
+        <field name="model">pos.invoice.settings</field>
+        <field name="arch" type="xml">
+            <form string="Dynamic Invoice Settings">
+                <sheet>
+                    <div class="alert alert-info" role="alert" invisible="use_dynamic_invoice">
+                        The app is showing its <b>normal</b> built-in receipt. Turn on
+                        <b>Use Dynamic Invoice on App</b> below to switch the app to this dynamic invoice.
+                    </div>
+                    <group>
+                        <field name="use_dynamic_invoice" widget="boolean_toggle"/>
+                    </group>
+                    <group invisible="not use_dynamic_invoice">
+                        <group string="Branding">
+                            <field name="company_id"/>
+                            <field name="address" placeholder="One line per row (defaults to company address)"/>
+                            <field name="phone" placeholder="Defaults to company phone"/>
+                            <field name="email" placeholder="Defaults to company email"/>
+                            <field name="vat_number" placeholder="VAT / GST number"/>
+                        </group>
+                        <group string="Logo">
+                            <field name="show_logo"/>
+                            <field name="logo" widget="image" class="oe_avatar" options="{'size': [160, 90]}"/>
+                        </group>
+                    </group>
+                    <group invisible="not use_dynamic_invoice">
+                        <group string="Header &amp; Footer">
+                            <field name="header_title"/>
+                            <field name="footer_text"/>
+                        </group>
+                        <group string="Options">
+                            <field name="show_tax"/>
+                            <field name="show_customer_signature"/>
+                            <field name="show_shop_owner_signature"/>
+                            <field name="show_footer"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="pos_invoice_settings_list" model="ir.ui.view">
+        <field name="name">pos.invoice.settings.list</field>
+        <field name="model">pos.invoice.settings</field>
+        <field name="arch" type="xml">
+            <list string="Dynamic Invoice Settings">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="use_dynamic_invoice" widget="boolean_toggle"/>
+                <field name="vat_number"/>
+                <field name="show_logo"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_pos_invoice_settings" model="ir.actions.act_window">
+        <field name="name">Invoice Settings</field>
+        <field name="res_model">pos.invoice.settings</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Configure the dynamic POS invoice
+            </p>
+            <p>
+                Set the brand name, logo, GST number, footer and terms shown on
+                the POS receipt. One record per company.
+            </p>
+        </field>
+    </record>
+
+    <!-- Menu under the Point of Sale root. Parented to menu_point_root (a
+         stable xmlid across versions) rather than the Configuration submenu,
+         whose id has varied between releases, so the module always installs. -->
+    <menuitem id="menu_pos_invoice_settings"
+              name="Invoice Settings"
+              parent="point_of_sale.menu_point_root"
+              action="action_pos_invoice_settings"
+              sequence="90"/>
+
+</odoo>
