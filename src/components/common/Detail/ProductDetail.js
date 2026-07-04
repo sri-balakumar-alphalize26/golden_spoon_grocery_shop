@@ -134,6 +134,8 @@ const ProductDetail = ({ navigation, route }) => {
             // Carry the POS category through — the app's picker sets this, and the
             // Category row displays it. Without it the merge dropped it -> "—".
             pos_category: od?.pos_category || detail.pos_category || null,
+            // Full list for multi-select display (product can have several).
+            pos_categories: od?.pos_categories || detail.pos_categories || [],
             available_in_pos: od?.available_in_pos ?? detail.available_in_pos ?? false,
             product_description: od?.product_description || '',
           });
@@ -263,7 +265,10 @@ const ProductDetail = ({ navigation, route }) => {
   };
 
   const categoryDisplay =
-    // The app's category picker sets the POS category, so show that first.
+    // Product can have several POS categories — show them all, comma-separated.
+    (Array.isArray(details?.pos_categories) && details.pos_categories.length
+      ? details.pos_categories.map((c) => c.name).join(', ')
+      : null) ||
     details?.pos_category?.name ||
     details?.category?.category_name ||
     details?.category_name ||

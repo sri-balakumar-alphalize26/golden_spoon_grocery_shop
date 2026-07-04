@@ -9,7 +9,7 @@ import { formatFloat } from "@web/views/fields/formatters";
 import { parseFloat } from "@web/views/fields/parsers";
 import { _t } from "@web/core/l10n/translation";
 
-// One "dozen" is 12 single pieces (kept in sync with the Python side).
+// Fallback pack size when a product has no explicit value (kept in sync with Python).
 const PIECES_PER_DOZEN = 12;
 
 /**
@@ -64,8 +64,9 @@ export class DozenOnhandField extends Component {
             return;
         }
 
+        const pack = record.data.dozen_pack_size || PIECES_PER_DOZEN;
         const oldOnHand = this._round(record.data.qty_available || 0);
-        const newOnHand = this._round(newDozens * PIECES_PER_DOZEN);
+        const newOnHand = this._round(newDozens * pack);
 
         // No real change to the on-hand quantity -> commit silently, no popup.
         if (oldOnHand === newOnHand) {
@@ -76,8 +77,8 @@ export class DozenOnhandField extends Component {
         this.dialog.add(ConfirmationDialog, {
             title: _t("Change On Hand?"),
             body: _t(
-                "This will change the On Hand quantity from %(old)s to %(new)s (%(dozens)s Dozen × 12).",
-                { old: oldOnHand, new: newOnHand, dozens: this._round(newDozens) }
+                "This will change the On Hand quantity from %(old)s to %(new)s (%(dozens)s Dozen × %(pack)s).",
+                { old: oldOnHand, new: newOnHand, dozens: this._round(newDozens), pack: pack }
             ),
             confirmLabel: _t("Confirm"),
             cancelLabel: _t("Cancel"),

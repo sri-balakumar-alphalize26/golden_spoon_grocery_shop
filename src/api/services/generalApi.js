@@ -2824,7 +2824,7 @@ export const updateUomOdoo = async (uomId, { name, relativeUomId, relativeFactor
 // Create a product.product. Mirrors employee_attendance's payload shape but
 // online-only (no offline queue). Each optional field is omitted when empty
 // so Odoo applies defaults.
-export const createProductOdoo = async ({ name, categId, posCategoryId, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty } = {}) => {
+export const createProductOdoo = async ({ name, categId, posCategoryId, posCategoryIds, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty, trackInventory } = {}) => {
   if (!name || !String(name).trim()) {
     return { error: { message: 'Product name is required' } };
   }
@@ -2836,8 +2836,10 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
     purchase_ok: true,
   };
   if (categId) vals.categ_id = categId;
-  if (posCategoryId) {
-    vals.pos_categ_ids = [[6, 0, [posCategoryId]]];
+  const createPosIds = (Array.isArray(posCategoryIds) ? posCategoryIds : (posCategoryId ? [posCategoryId] : []))
+    .map(Number).filter(Boolean);
+  if (createPosIds.length) {
+    vals.pos_categ_ids = [[6, 0, createPosIds]];
     // Setting a POS category implies the product should show on the POS.
     // Auto-tick `available_in_pos` so the cashier screen picks it up.
     vals.available_in_pos = true;
@@ -2855,7 +2857,9 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, listPric
   // is_storable here piggybacks on the same create round-trip.
   const wantsStock =
     onHandQty !== undefined && onHandQty !== '' && onHandQty !== null;
-  if (wantsStock) {
+  if (trackInventory !== undefined) {
+    vals.is_storable = !!trackInventory;   // explicit "Track Inventory" checkbox
+  } else if (wantsStock) {
     vals.is_storable = true;
   }
 
@@ -3014,8 +3018,8 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   }
   const baseUrl = getOdooUrl();
   const {
-    name, categId, posCategoryId, listPrice, standardPrice,
-    barcode, defaultCode, uomId, image, descriptionSale, onHandQty,
+    name, categId, posCategoryId, posCategoryIds, listPrice, standardPrice,
+    barcode, defaultCode, uomId, image, descriptionSale, onHandQty, trackInventory,
   } = payload;
 
   // Resolve the template id (and the variant id, needed for the qty path).
@@ -3065,7 +3069,12 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   const vals = {};
   if (name !== undefined) vals.name = String(name).trim();
   if (categId !== undefined) vals.categ_id = categId || false;
-  if (posCategoryId !== undefined) {
+  if (posCategoryIds !== undefined) {
+    // Many2many replace: set the exact list (empty clears + hides from POS).
+    const ids = (Array.isArray(posCategoryIds) ? posCategoryIds : []).map(Number).filter(Boolean);
+    vals.pos_categ_ids = ids.length ? [[6, 0, ids]] : [[5, 0, 0]];
+    if (ids.length) vals.available_in_pos = true;
+  } else if (posCategoryId !== undefined) {
     vals.pos_categ_ids = posCategoryId ? [[6, 0, [posCategoryId]]] : [[5, 0, 0]];
     if (posCategoryId) vals.available_in_pos = true;
   }
@@ -3119,7 +3128,11 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   // surface a false "is_storable didn't save" toast.
   const wantsStock =
     onHandQty !== undefined && onHandQty !== '' && onHandQty !== null;
-  if (wantsStock) tmplVals.is_storable = true;
+  if (trackInventory !== undefined) {
+    tmplVals.is_storable = !!trackInventory;   // explicit "Track Inventory" checkbox
+  } else if (wantsStock) {
+    tmplVals.is_storable = true;
+  }
   let barcodeWriteVal = vals.barcode;
 
   // Try the safe (non-UoM) template write. If it fails, we don't fall back to a
@@ -4393,7 +4406,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
     const richFields = [
       'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode',
       'uom_id', 'image_128', 'description_sale', 'categ_id', 'pos_categ_ids',
-      'available_in_pos',
+      'available_in_pos', 'is_storable',
       'qty_available', 'virtual_available',
     ];
     const safeFields = [
@@ -4449,9 +4462,11 @@ export const fetchProductDetailsOdoo = async (productId) => {
     const hasBase64 = p.image_128 && typeof p.image_128 === 'string' && p.image_128.length > 0;
     const imageUrl = hasBase64 ? `data:image/png;base64,${p.image_128}` : '';
 
-    // Resolve pos.category id → name (search_read of pos_categ_ids returns
-    // just an array of ids). Best-effort; ignored on failure.
+    // Resolve pos.category ids → names (pos_categ_ids is many2many; search_read
+    // returns just ids). Return ALL of them for multi-select prefill, plus the
+    // first as `pos_category` for back-compat. Best-effort; ignored on failure.
     let pos_category = null;
+    let pos_categories = [];
     if (Array.isArray(p.pos_categ_ids) && p.pos_categ_ids.length > 0) {
       try {
         // Odoo 19 removed `name_get`; use search_read to resolve id -> name.
@@ -4462,11 +4477,11 @@ export const fetchProductDetailsOdoo = async (productId) => {
             model: 'pos.category',
             method: 'search_read',
             args: [[['id', 'in', p.pos_categ_ids]]],
-            kwargs: { fields: ['id', 'name'], limit: 1 },
+            kwargs: { fields: ['id', 'name'] },
           },
         }, { headers: { 'Content-Type': 'application/json' } });
-        const row = posResp.data?.result?.[0];
-        if (row) pos_category = { id: row.id, name: row.name };
+        pos_categories = (posResp.data?.result || []).map((r) => ({ id: r.id, name: r.name }));
+        if (pos_categories[0]) pos_category = pos_categories[0];
       } catch (_) {}
     }
 
@@ -4486,7 +4501,9 @@ export const fetchProductDetailsOdoo = async (productId) => {
       uom: p.uom_id ? { uom_id: p.uom_id[0], uom_name: p.uom_id[1] } : null,
       categ_id: p.categ_id || null,
       pos_category,
+      pos_categories,
       available_in_pos: !!p.available_in_pos,
+      is_storable: !!p.is_storable,
       product_description: p.description_sale || null,
     };
   } catch (error) {

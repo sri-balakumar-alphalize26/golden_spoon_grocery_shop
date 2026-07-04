@@ -17,6 +17,12 @@
                     <field name="use_dozen_display"/>
                     <span class="text-muted ms-2">Show &amp; edit on-hand in dozens</span>
                 </div>
+                <label for="dozen_pack_size" string="Pieces per Dozen" class="oe_inline"
+                       invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager"/>
+                <div class="o_row" invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager">
+                    <field name="dozen_pack_size"/>
+                    <span class="text-muted ms-2">pieces = 1 Dozen</span>
+                </div>
                 <label for="dozen_qty_onhand" string="On Hand (Dozens)" class="oe_inline"
                        invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager"/>
                 <div class="o_row" invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager">
@@ -30,7 +36,7 @@
                 <div class="alert alert-danger mt-2 mb-0" role="alert"
                      invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager">
                     First fill the <b>On Hand (Dozens)</b> field - the
-                    <b>Quantity On Hand</b> gets auto-calculated (Dozens x 12).
+                    <b>Quantity On Hand</b> gets auto-calculated (Dozens x Pieces per Dozen).
                 </div>
             </xpath>
         </field>

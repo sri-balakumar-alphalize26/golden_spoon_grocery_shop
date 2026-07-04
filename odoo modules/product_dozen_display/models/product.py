@@ -1,16 +1,22 @@
 from odoo import api, fields, models
 
-# How many single pieces make one "dozen".
+# Fallback pack size when a product has no explicit value (1 Dozen = 12 pieces).
 PIECES_PER_DOZEN = 12
 
 
-def _format_dozen(pieces):
-    """Turn a piece count into a "X Dozen Y Pcs" label (pack size 12).
+def _pack_size(record):
+    """Pieces that make one "dozen" for this product (per-product, default 12)."""
+    return int(record.dozen_pack_size) or PIECES_PER_DOZEN
 
-    108 -> "9 Dozen", 115 -> "9 Dozen 7 Pcs", 7 -> "7 Pcs", 0 -> "0 Pcs".
+
+def _format_dozen(pieces, pack):
+    """Turn a piece count into a "X Dozen Y Pcs" label for the given pack size.
+
+    pack=12: 108 -> "9 Dozen", 115 -> "9 Dozen 7 Pcs", 7 -> "7 Pcs", 0 -> "0 Pcs".
     """
     pieces = int(round(pieces or 0))
-    dozens, loose = divmod(pieces, PIECES_PER_DOZEN)
+    pack = pack or PIECES_PER_DOZEN
+    dozens, loose = divmod(pieces, pack)
     parts = []
     if dozens:
         parts.append("%d Dozen" % dozens)
@@ -51,14 +57,14 @@ def _compute_displays(records):
             rec.dozen_display = False
             rec.piece_display = False
         else:
-            rec.dozen_display = _format_dozen(pieces)
+            rec.dozen_display = _format_dozen(pieces, _pack_size(rec))
             rec.piece_display = "%d Pcs" % pieces
 
 
 def _compute_onhand_dozens(records):
     for rec in records:
         pieces = _pieces_for(rec)
-        rec.dozen_qty_onhand = (pieces / PIECES_PER_DOZEN) if pieces is not None else 0.0
+        rec.dozen_qty_onhand = (pieces / _pack_size(rec)) if pieces is not None else 0.0
 
 
 def _push_dozens_to_qty(records):
@@ -67,7 +73,7 @@ def _push_dozens_to_qty(records):
     # for a single record (onchange) or a recordset (inverse on save).
     for record in records:
         if record.use_dozen_display and _is_dozen_countable(record) and record.uom_id.factor:
-            pieces = record.dozen_qty_onhand * PIECES_PER_DOZEN
+            pieces = record.dozen_qty_onhand * _pack_size(record)
             record.qty_available = pieces / record.uom_id.factor
 
 
@@ -77,7 +83,12 @@ class ProductTemplate(models.Model):
     use_dozen_display = fields.Boolean(
         string='Dozen Display',
         help='When enabled, show and allow editing the on-hand quantity in '
-             'dozens (1 Dozen = 12) for this product.',
+             'dozens for this product.',
+    )
+    dozen_pack_size = fields.Integer(
+        string='Pieces per Dozen', default=PIECES_PER_DOZEN,
+        help='How many single pieces make one "dozen" for this product '
+             '(default 12). Used for all the dozen conversions.',
     )
     dozen_display = fields.Char(
         string='On Hand (Dozen + Pcs)', compute='_compute_dozen_display',
@@ -95,11 +106,11 @@ class ProductTemplate(models.Model):
              'dozens x 12 (saved as an inventory adjustment).',
     )
 
-    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display', 'dozen_pack_size')
     def _compute_dozen_display(self):
         _compute_displays(self)
 
-    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display', 'dozen_pack_size')
     def _compute_dozen_qty_onhand(self):
         _compute_onhand_dozens(self)
 
@@ -130,11 +141,11 @@ class ProductProduct(models.Model):
              'dozens x 12 (saved as an inventory adjustment).',
     )
 
-    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display', 'dozen_pack_size')
     def _compute_dozen_display(self):
         _compute_displays(self)
 
-    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display', 'dozen_pack_size')
     def _compute_dozen_qty_onhand(self):
         _compute_onhand_dozens(self)
 

@@ -15,6 +15,7 @@ import {
   FlatList,
   Dimensions,
 } from 'react-native';
+import RNModal from 'react-native-modal';
 import { SafeAreaView } from '@components/containers';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -59,11 +60,21 @@ const ProductCreationForm = ({ navigation, route }) => {
   // failure-prone part of the save and we don't want it firing on every save.
   const originalOnHandRef = useRef(null);
   const originalUomRef = useRef(null);
+  // Original factor/reference of the unit being edited — so we only write the
+  // ratio when it actually changed (Odoo blocks re-writing the ratio of a unit
+  // used by moved/reserved products).
+  const originalUomFactorRef = useRef('');
+  const originalUomRefIdRef = useRef(null);
+  // Snapshot of the prefilled form (edit mode) so the Save button only enables
+  // once at least one field has actually changed.
+  const originalFormRef = useRef(null);
 
   const [productName, setProductName] = useState('');
   const [salesPrice, setSalesPrice] = useState('');
   const [cost, setCost] = useState('');
   const [onHandQty, setOnHandQty] = useState('');
+  const [trackInventory, setTrackInventory] = useState(false); // is_storable
+  const [trackConfirmVisible, setTrackConfirmVisible] = useState(false);
   const [barcode, setBarcode] = useState('');
   const [internalRef, setInternalRef] = useState('');
 
@@ -74,7 +85,9 @@ const ProductCreationForm = ({ navigation, route }) => {
   const [uoms, setUoms] = useState([]);
   // category state holds {id, name, kind: 'internal' | 'pos'} so we know which
   // Odoo field to write on save.
-  const [category, setCategory] = useState(null);
+  // POS categories are many2many in Odoo (pos_categ_ids), so the product can
+  // belong to several — hold the selection as an array of { id, name }.
+  const [selectedCats, setSelectedCats] = useState([]);
   const [uom, setUom] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(null); // 'category' | 'uom' | null
   const [pickerSearch, setPickerSearch] = useState('');
@@ -130,18 +143,30 @@ const ProductCreationForm = ({ navigation, route }) => {
         setBarcode(od.barcode || '');
         setInternalRef(od.product_code || '');
         if (od.image_url) setImageUri(od.image_url);
-        // Prefer POS category when one is set on the product (it implies the
-        // product is meant for POS, which is the more meaningful pick here).
-        // Otherwise fall back to the internal accounting category.
-        if (od.pos_category?.id) {
-          setCategory({ id: od.pos_category.id, name: od.pos_category.name, kind: 'pos' });
-        } else if (Array.isArray(od.categ_id) && od.categ_id.length > 1) {
-          setCategory({ id: od.categ_id[0], name: od.categ_id[1], kind: 'internal' });
+        // Prefill the product's POS categories (many2many). fetchProductDetailsOdoo
+        // returns pos_categories (all); fall back to the single pos_category.
+        if (Array.isArray(od.pos_categories) && od.pos_categories.length) {
+          setSelectedCats(od.pos_categories.map((c) => ({ id: c.id, name: c.name })));
+        } else if (od.pos_category?.id) {
+          setSelectedCats([{ id: od.pos_category.id, name: od.pos_category.name }]);
         }
         if (od.uom?.uom_id) {
           setUom({ id: od.uom.uom_id, name: od.uom.uom_name });
           originalUomRef.current = od.uom.uom_id;
         }
+        const track = !!od.is_storable;
+        setTrackInventory(track);
+        // Snapshot the prefilled values so we can detect edits (dirty state).
+        originalFormRef.current = {
+          name: (od.product_name || '').trim(),
+          salesPrice: od.sale_price != null ? String(od.sale_price) : '',
+          cost: od.cost != null ? String(od.cost) : '',
+          barcode: od.barcode || '',
+          internalRef: od.product_code || '',
+          catIds: (Array.isArray(od.pos_categories) ? od.pos_categories.map((c) => c.id)
+            : (od.pos_category?.id ? [od.pos_category.id] : [])).slice().sort().join(','),
+          trackInventory: track,
+        };
       })
       .catch(() => {
         Toast.show({ type: 'error', text1: 'Failed to load product', position: 'bottom' });
@@ -192,11 +217,8 @@ const ProductCreationForm = ({ navigation, route }) => {
 
       const payload = {
         name: productName.trim(),
-        // Picker stores both Internal and POS categories — branch on `kind`
-        // so we only write the matching Odoo field. The other field is left
-        // untouched (undefined → omitted from the write payload).
-        categId: category?.kind === 'internal' ? category.id : undefined,
-        posCategoryId: category?.kind === 'pos' ? category.id : undefined,
+        // Multi-select POS categories -> pos_categ_ids (many2many).
+        posCategoryIds: selectedCats.map((c) => c.id),
         listPrice: salesPrice,
         standardPrice: cost,
         barcode: barcode || (isEdit ? '' : undefined),
@@ -211,6 +233,7 @@ const ProductCreationForm = ({ navigation, route }) => {
         // (imageBase64 is null when they kept the existing photo).
         image: imageBase64 || undefined,
         onHandQty: qtyChanged ? (onHandQty || '0') : undefined,
+        trackInventory,
       };
       const resp = isEdit
         ? await updateProductOdoo(editId, payload)
@@ -301,8 +324,15 @@ const ProductCreationForm = ({ navigation, route }) => {
   const closePicker = () => setPickerOpen(null);
   const onPickerSelect = (item, kind) => {
     if (pickerOpen === 'category') {
-      setCategory({ ...item, kind: kind || 'internal' });
-    } else if (pickerOpen === 'uom') {
+      // Toggle multi-select — keep the picker open so several can be chosen.
+      setSelectedCats((prev) => (
+        prev.some((c) => c.id === item.id)
+          ? prev.filter((c) => c.id !== item.id)
+          : [...prev, { id: item.id, name: item.name }]
+      ));
+      return;
+    }
+    if (pickerOpen === 'uom') {
       setUom(item);
     }
     setPickerOpen(null);
@@ -360,11 +390,14 @@ const ProductCreationForm = ({ navigation, route }) => {
       const targetId = isEditCat ? editingCatId : resp.result;
       const updated = (cats || []).find((c) => c.id === targetId)
         || { id: targetId, name: trimmed, color: newCatColor };
-      // Preselect the (newly-created or just-edited) category — but only if
-      // we're editing the same one currently picked, or creating fresh.
-      if (!isEditCat || category?.id === targetId) {
-        setCategory({ id: updated.id, name: updated.name, kind: 'pos' });
-      }
+      // Reflect the change in the multi-selection: rename it if already picked,
+      // or add a freshly-created one to the selection.
+      setSelectedCats((prev) => {
+        if (prev.some((c) => c.id === updated.id)) {
+          return prev.map((c) => (c.id === updated.id ? { id: updated.id, name: updated.name } : c));
+        }
+        return isEditCat ? prev : [...prev, { id: updated.id, name: updated.name }];
+      });
       setAddCatModalVisible(false);
       setEditingCatId(null);
       setNewCatName('');
@@ -402,6 +435,8 @@ const ProductCreationForm = ({ navigation, route }) => {
     setNewUomRef(Array.isArray(item.relative_uom_id)
       ? { id: item.relative_uom_id[0], name: item.relative_uom_id[1] }
       : null);
+    originalUomFactorRef.current = item.relative_factor != null ? String(item.relative_factor) : '';
+    originalUomRefIdRef.current = Array.isArray(item.relative_uom_id) ? item.relative_uom_id[0] : null;
     setPickerOpen(null);
     setAddUomModalVisible(true);
   };
@@ -415,19 +450,22 @@ const ProductCreationForm = ({ navigation, route }) => {
     setCreatingUom(true);
     try {
       console.log('[UOM] handleSaveNewUom ->', { editingUomId, name: trimmed, ref: newUomRef, factor: newUomFactor });
-      const resp = editingUomId
-        ? await updateUomOdoo(editingUomId, {
-            name: trimmed,
-            relativeUomId: newUomRef?.id,
-            relativeFactor: newUomFactor,
-            isPosGroupable: newUomGroupPos,
-          })
-        : await createUomOdoo({
-            name: trimmed,
-            relativeUomId: newUomRef?.id,
-            relativeFactor: newUomFactor,
-            isPosGroupable: newUomGroupPos,
-          });
+      let resp;
+      if (editingUomId) {
+        // Only send the ratio fields when they actually changed — writing the
+        // ratio of a unit used by moved/reserved products is rejected by Odoo.
+        const editVals = { name: trimmed, isPosGroupable: newUomGroupPos };
+        if ((newUomRef?.id || null) !== originalUomRefIdRef.current) editVals.relativeUomId = newUomRef?.id;
+        if (newUomFactor !== originalUomFactorRef.current) editVals.relativeFactor = newUomFactor;
+        resp = await updateUomOdoo(editingUomId, editVals);
+      } else {
+        resp = await createUomOdoo({
+          name: trimmed,
+          relativeUomId: newUomRef?.id,
+          relativeFactor: newUomFactor,
+          isPosGroupable: newUomGroupPos,
+        });
+      }
       console.log('[UOM] handleSaveNewUom resp:', resp);
       if (resp?.error) {
         Toast.show({
@@ -496,6 +534,34 @@ const ProductCreationForm = ({ navigation, route }) => {
     }
   };
 
+  // Track Inventory toggle — confirm before turning OFF when the product still
+  // has on-hand stock (>0); no prompt when on-hand is 0/empty or turning ON.
+  const toggleTrackInventory = () => {
+    if (!trackInventory) { setTrackInventory(true); return; }
+    const qty = Number(onHandQty) || 0;
+    if (qty > 0) {
+      setTrackConfirmVisible(true); // confirm via the styled popup below
+      return;
+    }
+    setTrackInventory(false);
+  };
+
+  // Edit mode: the Save button stays disabled/dim until at least one field
+  // differs from the prefilled snapshot. Create mode is always enabled.
+  const isDirty = !isEdit || !originalFormRef.current || (
+    productName.trim() !== originalFormRef.current.name ||
+    (salesPrice != null ? String(salesPrice) : '') !== originalFormRef.current.salesPrice ||
+    (cost != null ? String(cost) : '') !== originalFormRef.current.cost ||
+    (barcode || '') !== originalFormRef.current.barcode ||
+    (internalRef || '') !== originalFormRef.current.internalRef ||
+    selectedCats.map((c) => c.id).slice().sort().join(',') !== originalFormRef.current.catIds ||
+    trackInventory !== originalFormRef.current.trackInventory ||
+    String(onHandQty || '').trim() !== String(originalOnHandRef.current ?? '').trim() ||
+    (uom?.id ?? null) !== (originalUomRef.current ?? null) ||
+    imageBase64 != null
+  );
+  const saveDisabled = saving || (isEdit && !isDirty);
+
   return (
     <SafeAreaView backgroundColor="#F5F6FA">
       <StatusBar barStyle="light-content" backgroundColor={NAVY} />
@@ -511,8 +577,8 @@ const ProductCreationForm = ({ navigation, route }) => {
         {isOpHidden ? (
           <View style={{ width: 40 }} />
         ) : (
-          <TouchableOpacity onPress={handleSubmit} disabled={saving} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Text style={s.headerBtn}>{saving ? 'Saving…' : 'Save'}</Text>
+          <TouchableOpacity onPress={handleSubmit} disabled={saveDisabled} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Text style={[s.headerBtn, saveDisabled && { opacity: 0.4 }]}>{saving ? 'Saving…' : 'Save'}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -536,8 +602,8 @@ const ProductCreationForm = ({ navigation, route }) => {
 
             <PickerField
               label="Category *"
-              value={category?.name || ''}
-              placeholder="Select category"
+              value={selectedCats.map((c) => c.name).join(', ')}
+              placeholder="Select categories"
               onPress={() => openPicker('category')}
             />
 
@@ -552,7 +618,24 @@ const ProductCreationForm = ({ navigation, route }) => {
               onPress={() => openPicker('uom')}
             />
 
-            <Field label="On Hand Quantity" value={onHandQty} onChangeText={setOnHandQty} placeholder="0" keyboardType="numeric" />
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}
+              activeOpacity={0.7}
+              onPress={toggleTrackInventory}
+            >
+              <MaterialIcons
+                name={trackInventory ? 'check-box' : 'check-box-outline-blank'}
+                size={22}
+                color={trackInventory ? NAVY : MUTED}
+              />
+              <Text style={{ marginLeft: 8, color: '#1a1a2e', fontFamily: FONT_FAMILY.urbanistSemiBold }}>
+                Track Inventory
+              </Text>
+            </TouchableOpacity>
+
+            {trackInventory ? (
+              <Field label="On Hand Quantity" value={onHandQty} onChangeText={setOnHandQty} placeholder="0" keyboardType="numeric" />
+            ) : null}
 
             <Field
               label="Barcode"
@@ -573,9 +656,9 @@ const ProductCreationForm = ({ navigation, route }) => {
           </View>
 
           <TouchableOpacity
-            style={[s.saveBtn, saving && { opacity: 0.6 }]}
+            style={[s.saveBtn, saveDisabled && { opacity: 0.4 }]}
             onPress={handleSubmit}
-            disabled={saving}
+            disabled={saveDisabled}
             activeOpacity={0.85}
           >
             {saving ? (
@@ -628,6 +711,12 @@ const ProductCreationForm = ({ navigation, route }) => {
                             activeOpacity={0.7}
                             onPress={() => onPickerSelect(item, 'pos')}
                           >
+                            <MaterialIcons
+                              name={selectedCats.some((c) => c.id === item.id) ? 'check-box' : 'check-box-outline-blank'}
+                              size={20}
+                              color={selectedCats.some((c) => c.id === item.id) ? NAVY : MUTED}
+                              style={{ marginRight: 6 }}
+                            />
                             <View style={[s.colorDot, { backgroundColor: ODOO_COLORS[item.color || 0] || '#FFFFFF' }]} />
                             <Text style={s.pickerRowText} numberOfLines={1}>{item.name}</Text>
                           </TouchableOpacity>
@@ -1034,6 +1123,40 @@ const ProductCreationForm = ({ navigation, route }) => {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      {/* Disable Track Inventory confirmation — styled like the logout popup. */}
+      <RNModal
+        isVisible={trackConfirmVisible}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.7}
+        animationInTiming={400}
+        animationOutTiming={300}
+        backdropTransitionInTiming={400}
+        backdropTransitionOutTiming={300}
+        onBackButtonPress={() => setTrackConfirmVisible(false)}
+        onBackdropPress={() => setTrackConfirmVisible(false)}
+      >
+        <View style={s.confirmContainer}>
+          <Text style={s.confirmText}>
+            This product still has {onHandQty} on hand. Disable Track Inventory?
+          </Text>
+          <View style={s.confirmButtonRow}>
+            <TouchableOpacity
+              style={[s.confirmButton, { flex: 1 }]}
+              onPress={() => { setTrackInventory(false); setTrackConfirmVisible(false); }}
+            >
+              <Text style={s.confirmButtonText}>YES</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.confirmButton, { flex: 1 }]}
+              onPress={() => setTrackConfirmVisible(false)}
+            >
+              <Text style={s.confirmButtonText}>NO</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
     </SafeAreaView>
   );
 };
@@ -1177,6 +1300,40 @@ const s = StyleSheet.create({
     }),
   },
   saveBtnText: { color: '#fff', fontSize: 15, fontFamily: FONT_FAMILY.urbanistBold, letterSpacing: 0.4 },
+
+  // Track-Inventory confirmation popup — mirrors LogoutModal's look.
+  confirmContainer: {
+    backgroundColor: COLORS.white,
+    borderRadius: 10,
+    borderColor: COLORS.primaryThemeColor,
+    borderWidth: 2,
+    paddingVertical: 22,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  confirmText: {
+    marginVertical: 18,
+    fontSize: 16,
+    textAlign: 'center',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  confirmButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignSelf: 'stretch',
+  },
+  confirmButton: {
+    backgroundColor: COLORS.primaryThemeColor,
+    borderRadius: 10,
+    padding: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  confirmButtonText: {
+    color: 'white',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
 
   pickerBackdrop: {
     flex: 1,
