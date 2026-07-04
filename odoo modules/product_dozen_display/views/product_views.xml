@@ -11,18 +11,24 @@
         <field name="inherit_id" ref="stock.view_template_property_form"/>
         <field name="arch" type="xml">
             <xpath expr="//div[@class='o_row' and field[@name='qty_available']]" position="after">
-                <label for="dozen_qty_onhand" string="On Hand (Dozens)" class="oe_inline"
+                <label for="use_dozen_display" string="Dozen Display" class="oe_inline"
                        invisible="not is_storable" groups="stock.group_stock_manager"/>
                 <div class="o_row" invisible="not is_storable" groups="stock.group_stock_manager">
+                    <field name="use_dozen_display"/>
+                    <span class="text-muted ms-2">Show &amp; edit on-hand in dozens</span>
+                </div>
+                <label for="dozen_qty_onhand" string="On Hand (Dozens)" class="oe_inline"
+                       invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager"/>
+                <div class="o_row" invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager">
                     <field name="dozen_qty_onhand"/>
                 </div>
                 <label for="dozen_display" string="On Hand (Dozen + Pcs)" class="oe_inline"
-                       invisible="not is_storable" groups="stock.group_stock_user"/>
-                <div class="o_row" invisible="not is_storable" groups="stock.group_stock_user">
+                       invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_user"/>
+                <div class="o_row" invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_user">
                     <field name="dozen_display"/>
                 </div>
                 <div class="alert alert-danger mt-2 mb-0" role="alert"
-                     invisible="not is_storable" groups="stock.group_stock_manager">
+                     invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager">
                     First fill the <b>On Hand (Dozens)</b> field - the
                     <b>Quantity On Hand</b> gets auto-calculated (Dozens x 12).
                 </div>

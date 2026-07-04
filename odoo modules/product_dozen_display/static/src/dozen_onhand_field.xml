@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="product_dozen_display.DozenOnhandField">
+        <span t-if="props.readonly" t-esc="formattedValue"/>
+        <input t-else=""
+               t-ref="input"
+               t-att-id="props.id"
+               type="text"
+               inputmode="decimal"
+               class="o_input"
+               autocomplete="off"
+               t-on-focus="onFocus"
+               t-on-change="onChange"/>
+    </t>
+
+</templates>

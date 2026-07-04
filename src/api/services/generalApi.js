@@ -2722,7 +2722,8 @@ export const fetchPosCategoryCountsOdoo = async (categoryIds = [], { posOnly = f
   return counts;
 };
 
-// Fetch uom.uom for the form unit-of-measure picker.
+// Fetch uom.uom for the form unit-of-measure picker. Includes the relative
+// factor + reference unit (Odoo 19 schema) so the picker can show "Contains".
 export const fetchUomsOdoo = async () => {
   try {
     const response = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
@@ -2732,14 +2733,91 @@ export const fetchUomsOdoo = async () => {
         model: 'uom.uom',
         method: 'search_read',
         args: [[]],
-        kwargs: { fields: ['id', 'name'], order: 'name asc', limit: 100 },
+        kwargs: {
+          fields: ['id', 'name', 'relative_factor', 'relative_uom_id', 'is_pos_groupable'],
+          order: 'name asc', limit: 200,
+        },
       },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (response.data && response.data.error) return [];
-    return (response.data.result || []).map((u) => ({ id: u.id, name: u.name }));
+    return (response.data.result || []).map((u) => ({
+      id: u.id,
+      name: u.name,
+      relative_factor: u.relative_factor,
+      relative_uom_id: Array.isArray(u.relative_uom_id) ? u.relative_uom_id : null,
+      is_pos_groupable: !!u.is_pos_groupable,
+    }));
   } catch (e) {
     console.warn('fetchUomsOdoo error:', e?.message);
     return [];
+  }
+};
+
+// Create a uom.uom. Odoo 19 units relate to a reference unit via
+// relative_uom_id + relative_factor (e.g. Dozens: relative_uom_id=Units,
+// relative_factor=12). Returns { result: <newId> } or { error }.
+export const createUomOdoo = async ({ name, relativeUomId, relativeFactor, isPosGroupable } = {}) => {
+  if (!name || !String(name).trim()) {
+    return { error: { message: 'Unit name is required' } };
+  }
+  const baseUrl = getOdooUrl();
+  const vals = { name: String(name).trim() };
+  if (relativeUomId) vals.relative_uom_id = Number(relativeUomId);
+  const f = Number(relativeFactor);
+  vals.relative_factor = Number.isFinite(f) && f > 0 ? f : 1;
+  if (isPosGroupable !== undefined) vals.is_pos_groupable = !!isPosGroupable;
+  console.log('[UOM] createUomOdoo vals:', vals);
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'uom.uom', method: 'create', args: [vals], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const err = resp.data.error;
+      console.log('[UOM] createUomOdoo Odoo error:',
+        err?.data?.name || '', '|', err?.data?.message || err?.message, '|', JSON.stringify(err));
+      return { error: err };
+    }
+    console.log('[UOM] createUomOdoo new id:', resp.data.result);
+    return { result: resp.data.result };
+  } catch (e) {
+    console.error('[UOM] createUomOdoo error:', e?.payload || e?.message);
+    return { error: { message: e?.message || 'Create failed' } };
+  }
+};
+
+// Update an existing uom.uom (name / reference unit / factor). Same rights as
+// create — restricted to UoM managers. Returns { result: id } or { error }.
+export const updateUomOdoo = async (uomId, { name, relativeUomId, relativeFactor, isPosGroupable } = {}) => {
+  if (!uomId) return { error: { message: 'uomId is required' } };
+  const baseUrl = getOdooUrl();
+  const vals = {};
+  if (name !== undefined) vals.name = String(name).trim();
+  if (relativeUomId !== undefined) vals.relative_uom_id = relativeUomId ? Number(relativeUomId) : false;
+  if (relativeFactor !== undefined && relativeFactor !== null && relativeFactor !== '') {
+    const f = Number(relativeFactor);
+    if (Number.isFinite(f) && f > 0) vals.relative_factor = f;
+  }
+  if (isPosGroupable !== undefined) vals.is_pos_groupable = !!isPosGroupable;
+  if (Object.keys(vals).length === 0) return { result: uomId };
+  console.log('[UOM] updateUomOdoo', uomId, vals);
+  try {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { model: 'uom.uom', method: 'write', args: [[Number(uomId)], vals], kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const err = resp.data.error;
+      console.log('[UOM] updateUomOdoo Odoo error:',
+        err?.data?.name || '', '|', err?.data?.message || err?.message, '|', JSON.stringify(err));
+      return { error: err };
+    }
+    return { result: uomId };
+  } catch (e) {
+    console.error('[UOM] updateUomOdoo error:', e?.payload || e?.message);
+    return { error: { message: e?.message || 'Update failed' } };
   }
 };
 

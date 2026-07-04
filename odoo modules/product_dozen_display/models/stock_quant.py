@@ -15,13 +15,16 @@ class StockQuant(models.Model):
     )
 
     def _dozen_countable(self):
-        """True when this quant's product is measured in the Units tree."""
+        """True when this quant's product opts into dozens and is measured in
+        the Units tree."""
         self.ensure_one()
+        if not self.product_id.use_dozen_display:
+            return False
         unit = self.env.ref('uom.product_uom_unit', raise_if_not_found=False)
         uom = self.product_uom_id
         return bool(unit and uom and _root_uom(uom) == unit)
 
-    @api.depends('inventory_quantity', 'product_uom_id')
+    @api.depends('inventory_quantity', 'product_uom_id', 'product_id.use_dozen_display')
     def _compute_dozen_inventory_quantity(self):
         for quant in self:
             if quant._dozen_countable():

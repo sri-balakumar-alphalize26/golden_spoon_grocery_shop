@@ -28,6 +28,8 @@ import {
   fetchProductDetailsOdoo,
   createPosCategoryOdoo,
   updatePosCategoryOdoo,
+  createUomOdoo,
+  updateUomOdoo,
 } from '@api/services/generalApi';
 import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
@@ -83,6 +85,20 @@ const ProductCreationForm = ({ navigation, route }) => {
   const [newCatColor, setNewCatColor] = useState(0);
   const [creatingCat, setCreatingCat] = useState(false);
   const [editingCatId, setEditingCatId] = useState(null); // null = create mode
+
+  // Inline "New Unit of Measure" mini-form (Odoo 19: name + reference unit + factor).
+  const [addUomModalVisible, setAddUomModalVisible] = useState(false);
+  const [editingUomId, setEditingUomId] = useState(null); // null = create, id = edit
+  const [newUomName, setNewUomName] = useState('');
+  const [newUomFactor, setNewUomFactor] = useState('');
+  const [newUomGroupPos, setNewUomGroupPos] = useState(false); // is_pos_groupable
+  const [newUomRef, setNewUomRef] = useState(null);       // { id, name } reference unit
+  const [uomRefPickerVisible, setUomRefPickerVisible] = useState(false);
+  const [creatingUom, setCreatingUom] = useState(false);
+  const [refSearch, setRefSearch] = useState('');         // search text in the ref picker
+  const [refCreateMode, setRefCreateMode] = useState(false); // show "Create Reference Unit" form
+  const [newRefName, setNewRefName] = useState('');       // name typed in the create form
+  const [creatingRef, setCreatingRef] = useState(false);
 
   // Load POS-category + UoM lists once.
   useEffect(() => {
@@ -300,6 +316,22 @@ const ProductCreationForm = ({ navigation, route }) => {
     !pickerSearch || (it.name || '').toLowerCase().includes(pickerSearch.toLowerCase());
   const filteredPosCategories = posCategories.filter(matchSearch);
   const filteredUoms = uoms.filter(matchSearch);
+  // When editing a unit, a reference unit may NOT be the unit itself or any of
+  // its descendants — that would make a cycle in Odoo's uom hierarchy
+  // (relative_uom_id / parent_store) and raise "Recursion Detected."
+  const uomRefDisallowed = (u) => {
+    if (!editingUomId) return false;            // only relevant while editing
+    if (u.id === editingUomId) return true;     // a unit can't reference itself
+    let cur = u;
+    let guard = 0;
+    while (cur && Array.isArray(cur.relative_uom_id) && guard < 100) {
+      const pid = cur.relative_uom_id[0];
+      if (pid === editingUomId) return true;    // ...nor any of its descendants
+      cur = uoms.find((x) => x.id === pid);
+      guard += 1;
+    }
+    return false;
+  };
 
   const handleSaveNewCategory = async () => {
     const trimmed = newCatName.trim();
@@ -346,6 +378,121 @@ const ProductCreationForm = ({ navigation, route }) => {
       Toast.show({ type: 'error', text1: 'Save failed', text2: e?.message || '', position: 'bottom' });
     } finally {
       setCreatingCat(false);
+    }
+  };
+
+  const openAddUomModal = () => {
+    // Default the reference unit to "Units" when available.
+    const unitsUom = uoms.find((u) => (u.name || '').toLowerCase() === 'units') || uoms[0] || null;
+    setEditingUomId(null);
+    setNewUomName(pickerSearch || '');
+    setNewUomFactor('');
+    setNewUomGroupPos(false);
+    setNewUomRef(unitsUom ? { id: unitsUom.id, name: unitsUom.name } : null);
+    setPickerOpen(null);
+    setAddUomModalVisible(true);
+  };
+
+  // Open the same modal in EDIT mode, prefilled from the tapped unit.
+  const openEditUomModal = (item) => {
+    setEditingUomId(item.id);
+    setNewUomName(item.name || '');
+    setNewUomFactor(item.relative_factor != null ? String(item.relative_factor) : '');
+    setNewUomGroupPos(!!item.is_pos_groupable);
+    setNewUomRef(Array.isArray(item.relative_uom_id)
+      ? { id: item.relative_uom_id[0], name: item.relative_uom_id[1] }
+      : null);
+    setPickerOpen(null);
+    setAddUomModalVisible(true);
+  };
+
+  const handleSaveNewUom = async () => {
+    const trimmed = newUomName.trim();
+    if (!trimmed) {
+      Toast.show({ type: 'error', text1: 'Unit name is required', position: 'bottom' });
+      return;
+    }
+    setCreatingUom(true);
+    try {
+      console.log('[UOM] handleSaveNewUom ->', { editingUomId, name: trimmed, ref: newUomRef, factor: newUomFactor });
+      const resp = editingUomId
+        ? await updateUomOdoo(editingUomId, {
+            name: trimmed,
+            relativeUomId: newUomRef?.id,
+            relativeFactor: newUomFactor,
+            isPosGroupable: newUomGroupPos,
+          })
+        : await createUomOdoo({
+            name: trimmed,
+            relativeUomId: newUomRef?.id,
+            relativeFactor: newUomFactor,
+            isPosGroupable: newUomGroupPos,
+          });
+      console.log('[UOM] handleSaveNewUom resp:', resp);
+      if (resp?.error) {
+        Toast.show({
+          type: 'error',
+          text1: editingUomId ? 'Could not update unit' : 'Could not create unit',
+          text2: resp.error.message || resp.error.data?.message || '',
+          position: 'bottom',
+        });
+        return;
+      }
+      // Refetch units so the change appears, then preselect it on the product.
+      const us = await fetchUomsOdoo();
+      setUoms(us || []);
+      const targetId = editingUomId || resp.result;
+      const saved = (us || []).find((u) => u.id === targetId) || { id: targetId, name: trimmed };
+      setUom({ id: saved.id, name: saved.name });
+      setAddUomModalVisible(false);
+      setEditingUomId(null);
+      setNewUomName('');
+      setNewUomFactor('');
+      Toast.show({ type: 'success', text1: editingUomId ? 'Unit updated' : 'Unit created', position: 'bottom' });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Save failed', text2: e?.message || '', position: 'bottom' });
+    } finally {
+      setCreatingUom(false);
+    }
+  };
+
+  // Create a NEW reference (base) unit inline from the ref picker — same as
+  // Odoo's "Create" on the Reference Unit field. A base unit has no parent.
+  const handleCreateRefUnit = async () => {
+    const trimmed = newRefName.trim();
+    console.log('[UOM] handleCreateRefUnit (create form), name =', JSON.stringify(trimmed));
+    if (!trimmed) {
+      Toast.show({ type: 'error', text1: 'Unit name is required', position: 'bottom' });
+      return;
+    }
+    setCreatingRef(true);
+    try {
+      const resp = await createUomOdoo({ name: trimmed }); // no parent -> base unit (factor 1)
+      console.log('[UOM] create reference unit resp:', resp);
+      if (resp?.error) {
+        Toast.show({
+          type: 'error',
+          text1: 'Could not create reference unit',
+          text2: resp.error.message || resp.error.data?.message || '',
+          position: 'bottom',
+        });
+        return;
+      }
+      const us = await fetchUomsOdoo();
+      setUoms(us || []);
+      const newId = resp.result;
+      const created = (us || []).find((u) => u.id === newId) || { id: newId, name: trimmed };
+      // Select it as the reference and return all the way to the New Unit form.
+      setNewUomRef({ id: created.id, name: created.name });
+      setNewRefName('');
+      setRefSearch('');
+      setRefCreateMode(false);
+      setUomRefPickerVisible(false);
+      Toast.show({ type: 'success', text1: 'Reference unit created', position: 'bottom' });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Save failed', text2: e?.message || '', position: 'bottom' });
+    } finally {
+      setCreatingRef(false);
     }
   };
 
@@ -522,21 +669,45 @@ const ProductCreationForm = ({ navigation, route }) => {
                     </TouchableOpacity>
                   </>
                 ) : (
-                  <FlatList
-                    data={filteredUoms}
-                    keyExtractor={(item, idx) => `${item.id}-${idx}`}
-                    keyboardShouldPersistTaps="handled"
-                    renderItem={({ item }) => (
-                      <TouchableOpacity style={s.pickerRow} activeOpacity={0.7} onPress={() => onPickerSelect(item)}>
-                        <Text style={s.pickerRowText}>{item.name}</Text>
-                      </TouchableOpacity>
-                    )}
-                    ListEmptyComponent={(
-                      <View style={{ padding: 24, alignItems: 'center' }}>
-                        <Text style={{ color: MUTED }}>No results</Text>
-                      </View>
-                    )}
-                  />
+                  <>
+                    <FlatList
+                      data={filteredUoms}
+                      keyExtractor={(item, idx) => `${item.id}-${idx}`}
+                      keyboardShouldPersistTaps="handled"
+                      renderItem={({ item }) => (
+                        <View style={s.pickerRowWrap}>
+                          <TouchableOpacity
+                            style={s.pickerRowMain}
+                            activeOpacity={0.7}
+                            onPress={() => onPickerSelect(item)}
+                          >
+                            <Text style={s.pickerRowText} numberOfLines={1}>{item.name}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={s.pickerEditBtn}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            onPress={() => openEditUomModal(item)}
+                          >
+                            <MaterialIcons name="edit" size={16} color={NAVY} />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      ListEmptyComponent={(
+                        <View style={{ padding: 24, alignItems: 'center' }}>
+                          <Text style={{ color: MUTED }}>No results</Text>
+                        </View>
+                      )}
+                    />
+                    <TouchableOpacity
+                      style={s.addCatRow}
+                      activeOpacity={0.85}
+                      onPress={openAddUomModal}
+                    >
+                      <MaterialIcons name="add-circle" size={20} color={NAVY} />
+                      <Text style={s.addCatRowText}>Add Unit</Text>
+                    </TouchableOpacity>
+                  </>
                 )}
               </View>
             </TouchableWithoutFeedback>
@@ -629,6 +800,235 @@ const ProductCreationForm = ({ navigation, route }) => {
                     )}
                   </TouchableOpacity>
                 </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
+      {/* New Unit of Measure Modal — form, or an INLINE reference-unit picker in
+          the SAME modal. Stacking two RN <Modal>s breaks touches on Android, so
+          the reference list is toggled inside this one modal via uomRefPickerVisible. */}
+      <Modal
+        visible={addUomModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => {
+          if (creatingUom || creatingRef) return;
+          if (refCreateMode) { setRefCreateMode(false); return; }
+          if (uomRefPickerVisible) { setUomRefPickerVisible(false); return; }
+          setAddUomModalVisible(false);
+        }}
+      >
+        <TouchableWithoutFeedback
+          onPress={() => {
+            if (creatingUom || creatingRef) return;
+            if (refCreateMode) { setRefCreateMode(false); return; }
+            if (uomRefPickerVisible) { setUomRefPickerVisible(false); return; }
+            setAddUomModalVisible(false);
+          }}
+        >
+          <View style={s.pickerBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={[s.pickerCard, { maxWidth: 420, maxHeight: undefined }]}>
+                {refCreateMode ? (
+                  <>
+                    <View style={s.pickerCardHeader}>
+                      <TouchableOpacity
+                        onPress={() => !creatingRef && setRefCreateMode(false)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={{ marginRight: 8 }}
+                      >
+                        <MaterialIcons name="arrow-back" size={20} color="#1a1a2e" />
+                      </TouchableOpacity>
+                      <Text style={[s.pickerHeaderTitle, { flex: 1 }]}>Create Reference Unit</Text>
+                    </View>
+                    <View style={{ paddingHorizontal: 14, paddingTop: 12 }}>
+                      <Text style={s.fieldLabel}>Unit Name *</Text>
+                      <TextInput
+                        style={s.fieldInput}
+                        placeholder="e.g. Bun"
+                        placeholderTextColor="#aaa"
+                        value={newRefName}
+                        onChangeText={setNewRefName}
+                        autoFocus
+                      />
+                      <Text style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>
+                        Creates a new base unit that other units can reference.
+                      </Text>
+                    </View>
+                    <View style={s.addCatActions}>
+                      <TouchableOpacity
+                        style={s.addCatCancelBtn}
+                        activeOpacity={0.7}
+                        disabled={creatingRef}
+                        onPress={() => setRefCreateMode(false)}
+                      >
+                        <Text style={s.addCatCancelText}>Discard</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[s.addCatSaveBtn, creatingRef && { opacity: 0.6 }]}
+                        activeOpacity={0.85}
+                        disabled={creatingRef}
+                        onPress={handleCreateRefUnit}
+                      >
+                        {creatingRef ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={s.addCatSaveText}>Save</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : uomRefPickerVisible ? (
+                  <>
+                    <View style={s.pickerCardHeader}>
+                      <TouchableOpacity
+                        onPress={() => setUomRefPickerVisible(false)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={{ marginRight: 8 }}
+                      >
+                        <MaterialIcons name="arrow-back" size={20} color="#1a1a2e" />
+                      </TouchableOpacity>
+                      <Text style={[s.pickerHeaderTitle, { flex: 1 }]}>Select Reference Unit</Text>
+                    </View>
+                    <View style={{ paddingHorizontal: 14, paddingTop: 8, paddingBottom: 6 }}>
+                      <TextInput
+                        style={s.pickerSearch}
+                        placeholder="Type a name to search or create…"
+                        placeholderTextColor={MUTED}
+                        value={refSearch}
+                        onChangeText={setRefSearch}
+                        autoFocus
+                      />
+                      <Text style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>
+                        Pick an existing unit below, or tap “Create Reference Unit”.
+                      </Text>
+                    </View>
+                    <FlatList
+                      data={uoms.filter((u) => {
+                        if (uomRefDisallowed(u)) return false;
+                        return !refSearch || (u.name || '').toLowerCase().includes(refSearch.toLowerCase());
+                      })}
+                      keyExtractor={(item, idx) => `ref-${item.id}-${idx}`}
+                      keyboardShouldPersistTaps="handled"
+                      style={{ maxHeight: 240 }}
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          style={s.pickerRow}
+                          activeOpacity={0.7}
+                          onPress={() => {
+                            setNewUomRef({ id: item.id, name: item.name });
+                            setRefSearch('');
+                            setUomRefPickerVisible(false);
+                          }}
+                        >
+                          <Text style={s.pickerRowText}>{item.name}</Text>
+                        </TouchableOpacity>
+                      )}
+                      ListEmptyComponent={(
+                        <View style={{ padding: 24, alignItems: 'center' }}>
+                          <Text style={{ color: MUTED }}>No units</Text>
+                        </View>
+                      )}
+                    />
+                    <TouchableOpacity
+                      style={s.addCatRow}
+                      activeOpacity={0.85}
+                      onPress={() => { setNewRefName(refSearch.trim()); setRefCreateMode(true); }}
+                    >
+                      <MaterialIcons name="add-circle" size={20} color={NAVY} />
+                      <Text style={s.addCatRowText}>Create Reference Unit</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <View style={s.pickerCardHeader}>
+                      <Text style={s.pickerHeaderTitle}>{editingUomId ? 'Edit Unit of Measure' : 'New Unit of Measure'}</Text>
+                      <TouchableOpacity
+                        onPress={() => !creatingUom && setAddUomModalVisible(false)}
+                        style={s.pickerCloseBtn}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <MaterialIcons name="close" size={20} color="#1a1a2e" />
+                      </TouchableOpacity>
+                    </View>
+                    <View style={{ paddingHorizontal: 14, paddingTop: 12 }}>
+                      <Text style={s.fieldLabel}>Unit Name *</Text>
+                      <TextInput
+                        style={s.fieldInput}
+                        placeholder="e.g. Pack of 20"
+                        placeholderTextColor="#aaa"
+                        value={newUomName}
+                        onChangeText={setNewUomName}
+                        autoFocus
+                      />
+
+                      <Text style={[s.fieldLabel, { marginTop: 12 }]}>Reference Unit</Text>
+                      <TouchableOpacity
+                        style={[s.fieldInput, { justifyContent: 'center' }]}
+                        activeOpacity={0.7}
+                        onPress={() => { setRefSearch(''); setUomRefPickerVisible(true); }}
+                      >
+                        <Text style={{ color: newUomRef ? '#1a1a2e' : '#aaa' }}>
+                          {newUomRef?.name || 'Select reference unit'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <Text style={[s.fieldLabel, { marginTop: 12 }]}>
+                        Contains (how many {newUomRef?.name || 'reference units'})
+                      </Text>
+                      <TextInput
+                        style={s.fieldInput}
+                        placeholder="e.g. 20"
+                        placeholderTextColor="#aaa"
+                        value={newUomFactor}
+                        onChangeText={setNewUomFactor}
+                        keyboardType="numeric"
+                        selectTextOnFocus
+                      />
+                      <Text style={{ color: MUTED, fontSize: 12, marginTop: 6 }}>
+                        1 {newUomName || 'unit'} = {newUomFactor || '?'} {newUomRef?.name || 'reference units'}
+                      </Text>
+
+                      <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', marginTop: 14 }}
+                        activeOpacity={0.7}
+                        onPress={() => setNewUomGroupPos((v) => !v)}
+                      >
+                        <MaterialIcons
+                          name={newUomGroupPos ? 'check-box' : 'check-box-outline-blank'}
+                          size={22}
+                          color={newUomGroupPos ? NAVY : MUTED}
+                        />
+                        <Text style={{ marginLeft: 8, color: '#1a1a2e' }}>Group Products in POS</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={s.addCatActions}>
+                      <TouchableOpacity
+                        style={s.addCatCancelBtn}
+                        activeOpacity={0.7}
+                        disabled={creatingUom}
+                        onPress={() => setAddUomModalVisible(false)}
+                      >
+                        <Text style={s.addCatCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[s.addCatSaveBtn, creatingUom && { opacity: 0.6 }]}
+                        activeOpacity={0.85}
+                        disabled={creatingUom}
+                        onPress={handleSaveNewUom}
+                      >
+                        {creatingUom ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={s.addCatSaveText}>Save</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
               </View>
             </TouchableWithoutFeedback>
           </View>

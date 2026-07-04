@@ -36,9 +36,10 @@ def _is_dozen_countable(record):
 def _pieces_for(record):
     """On-hand count in single pieces, or None if not a count-based product.
 
-    qty_available is in the product's own UoM; convert via uom.factor.
+    qty_available is in the product's own UoM; convert via uom.factor. Returns
+    None when the per-product Dozen toggle is off, so the dozen fields stay blank.
     """
-    if _is_dozen_countable(record):
+    if record.use_dozen_display and _is_dozen_countable(record):
         return int(round(record.qty_available * record.uom_id.factor))
     return None
 
@@ -65,7 +66,7 @@ def _push_dozens_to_qty(records):
     # qty_available's own inverse records the inventory adjustment on save. Works
     # for a single record (onchange) or a recordset (inverse on save).
     for record in records:
-        if _is_dozen_countable(record) and record.uom_id.factor:
+        if record.use_dozen_display and _is_dozen_countable(record) and record.uom_id.factor:
             pieces = record.dozen_qty_onhand * PIECES_PER_DOZEN
             record.qty_available = pieces / record.uom_id.factor
 
@@ -73,6 +74,11 @@ def _push_dozens_to_qty(records):
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
 
+    use_dozen_display = fields.Boolean(
+        string='Dozen Display',
+        help='When enabled, show and allow editing the on-hand quantity in '
+             'dozens (1 Dozen = 12) for this product.',
+    )
     dozen_display = fields.Char(
         string='On Hand (Dozen + Pcs)', compute='_compute_dozen_display',
         help='On-hand quantity shown as full dozens plus the loose remainder '
@@ -89,11 +95,11 @@ class ProductTemplate(models.Model):
              'dozens x 12 (saved as an inventory adjustment).',
     )
 
-    @api.depends('qty_available', 'uom_id')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
     def _compute_dozen_display(self):
         _compute_displays(self)
 
-    @api.depends('qty_available', 'uom_id')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
     def _compute_dozen_qty_onhand(self):
         _compute_onhand_dozens(self)
 
@@ -124,11 +130,11 @@ class ProductProduct(models.Model):
              'dozens x 12 (saved as an inventory adjustment).',
     )
 
-    @api.depends('qty_available', 'uom_id')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
     def _compute_dozen_display(self):
         _compute_displays(self)
 
-    @api.depends('qty_available', 'uom_id')
+    @api.depends('qty_available', 'uom_id', 'use_dozen_display')
     def _compute_dozen_qty_onhand(self):
         _compute_onhand_dozens(self)
 
