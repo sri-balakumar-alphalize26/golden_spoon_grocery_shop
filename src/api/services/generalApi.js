@@ -3014,11 +3014,26 @@ export const updateProductOdoo = async (arg, opts = {}) => {
     return resp.data.result;
   };
 
+  // Human-readable message out of an Odoo JSON-RPC error payload.
+  const extractMsg = (payload) =>
+    payload?.data?.message ||
+    payload?.message ||
+    (typeof payload === 'string' ? payload : null);
+  // Per-field failure reasons surfaced to the UI (e.g. why UoM couldn't change).
+  const reasons = {};
+
   // Most fields live on product.template; barcode is variant-only on
   // multi-variant templates so we split it off if the template write rejects
   // it.
   const tmplVals = { ...vals };
   delete tmplVals.barcode;
+  // `uom_id` is written on its OWN so its failure can't roll back the rest.
+  // Odoo 19 hard-blocks a UoM change when the product has stock (_update_uom
+  // raises UserError); bundled into one atomic write that rollback also dropped
+  // Cost/etc. Isolate it so the safe fields still persist.
+  const hasUom = 'uom_id' in tmplVals;
+  const uomWriteVal = tmplVals.uom_id;
+  delete tmplVals.uom_id;
   // When the user submitted an on-hand qty, flip the product to storable in
   // the same template write so the stock.quant path below can land. Added to
   // tmplVals (not vals) so it's not in the post-write verification list —
@@ -3029,9 +3044,8 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   if (wantsStock) tmplVals.is_storable = true;
   let barcodeWriteVal = vals.barcode;
 
-  // Try the template write. If it fails, we don't fall back to a stripped
-  // safe-set anymore (that's what was silently losing fields). Instead we
-  // surface the failure in `notSaved` via the verify step.
+  // Try the safe (non-UoM) template write. If it fails, we don't fall back to a
+  // stripped set — we surface the failure in `notSaved` via the verify step.
   let writeFatalError = null;
   if (Object.keys(tmplVals).length > 0) {
     try {
@@ -3039,6 +3053,18 @@ export const updateProductOdoo = async (arg, opts = {}) => {
     } catch (err) {
       console.warn('updateProductOdoo template write failed:', err?.payload || err?.message);
       writeFatalError = err?.payload || { message: err?.message || 'Save failed' };
+    }
+  }
+
+  // Separate UoM write — a rejection here (e.g. product has stock) is isolated
+  // to uom_id and never drops Cost or the other safe fields above.
+  if (hasUom) {
+    try {
+      await callWrite('product.template', [productTmplId], { uom_id: uomWriteVal });
+    } catch (err) {
+      console.warn('updateProductOdoo uom write failed:', err?.payload || err?.message);
+      reasons.uom_id =
+        extractMsg(err?.payload) || err?.message || 'Could not change Unit of Measure';
     }
   }
 
@@ -3119,9 +3145,17 @@ export const updateProductOdoo = async (arg, opts = {}) => {
     return { error: writeFatalError };
   }
 
+  // Attach the Odoo error message to any safe field that rolled back, so the
+  // UI can explain the failure rather than just naming the field.
+  if (writeFatalError) {
+    const msg = extractMsg(writeFatalError);
+    for (const k of notSaved) if (msg && !(k in reasons)) reasons[k] = msg;
+  }
+
   // On-hand qty path — modern stock.quant flow, works on Odoo 13–18.
   // qtySaved: null = not attempted, true = saved, false = failed.
   let qtySaved = null;
+  let qtyError = null;
   if (onHandQty !== undefined && onHandQty !== '' && onHandQty !== null && resolvedVariantId) {
     qtySaved = false;
     try {
@@ -3189,11 +3223,12 @@ export const updateProductOdoo = async (arg, opts = {}) => {
     } catch (qtyErr) {
       console.warn('updateProductOdoo qty write failed:', qtyErr?.payload || qtyErr?.message);
       qtySaved = false;
+      qtyError = extractMsg(qtyErr?.payload) || qtyErr?.message || 'On-hand quantity could not be saved';
     }
   }
 
   const partial = notSaved.length > 0 || qtySaved === false;
-  return { result: productTmplId, partial, notSaved, qtySaved };
+  return { result: productTmplId, partial, notSaved, reasons, qtySaved, qtyError };
 };
 
 // Compare a value we wrote against the value Odoo read back. Handles the
@@ -4341,20 +4376,19 @@ export const fetchProductDetailsOdoo = async (productId) => {
     let pos_category = null;
     if (Array.isArray(p.pos_categ_ids) && p.pos_categ_ids.length > 0) {
       try {
+        // Odoo 19 removed `name_get`; use search_read to resolve id -> name.
         const posResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
           jsonrpc: '2.0',
           method: 'call',
           params: {
             model: 'pos.category',
-            method: 'name_get',
-            args: [p.pos_categ_ids],
-            kwargs: {},
+            method: 'search_read',
+            args: [[['id', 'in', p.pos_categ_ids]]],
+            kwargs: { fields: ['id', 'name'], limit: 1 },
           },
         }, { headers: { 'Content-Type': 'application/json' } });
-        if (posResp.data && Array.isArray(posResp.data.result) && posResp.data.result[0]) {
-          const [pid, pname] = posResp.data.result[0];
-          pos_category = { id: pid, name: pname };
-        }
+        const row = posResp.data?.result?.[0];
+        if (row) pos_category = { id: row.id, name: row.name };
       } catch (_) {}
     }
 

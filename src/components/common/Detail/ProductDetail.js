@@ -131,6 +131,10 @@ const ProductDetail = ({ navigation, route }) => {
             uom: od?.uom || detail.uom || null,
             categ_id: od?.categ_id || detail.categ_id || null,
             category_name: od?.category_name || (Array.isArray(od?.categ_id) ? od.categ_id[1] : null) || (Array.isArray(detail?.categ_id) ? detail.categ_id[1] : null),
+            // Carry the POS category through — the app's picker sets this, and the
+            // Category row displays it. Without it the merge dropped it -> "—".
+            pos_category: od?.pos_category || detail.pos_category || null,
+            available_in_pos: od?.available_in_pos ?? detail.available_in_pos ?? false,
             product_description: od?.product_description || '',
           });
         } catch (e) {
@@ -259,6 +263,8 @@ const ProductDetail = ({ navigation, route }) => {
   };
 
   const categoryDisplay =
+    // The app's category picker sets the POS category, so show that first.
+    details?.pos_category?.name ||
     details?.category?.category_name ||
     details?.category_name ||
     (Array.isArray(details?.categ_id) ? details.categ_id[1] : null) ||

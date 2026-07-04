@@ -56,6 +56,7 @@ const ProductCreationForm = ({ navigation, route }) => {
   // when the user didn't actually change it. The qty path is the most
   // failure-prone part of the save and we don't want it firing on every save.
   const originalOnHandRef = useRef(null);
+  const originalUomRef = useRef(null);
 
   const [productName, setProductName] = useState('');
   const [salesPrice, setSalesPrice] = useState('');
@@ -123,6 +124,7 @@ const ProductCreationForm = ({ navigation, route }) => {
         }
         if (od.uom?.uom_id) {
           setUom({ id: od.uom.uom_id, name: od.uom.uom_name });
+          originalUomRef.current = od.uom.uom_id;
         }
       })
       .catch(() => {
@@ -183,7 +185,12 @@ const ProductCreationForm = ({ navigation, route }) => {
         standardPrice: cost,
         barcode: barcode || (isEdit ? '' : undefined),
         defaultCode: internalRef || (isEdit ? '' : undefined),
-        uomId: uom?.id,
+        // In edit mode only send uom_id when it actually changed — writing the
+        // same value is a no-op, and writing a changed one on a stocked product
+        // is rejected by Odoo (now isolated so it can't drop Cost).
+        uomId: isEdit
+          ? (uom?.id !== originalUomRef.current ? uom?.id : undefined)
+          : uom?.id,
         // In edit mode only send a fresh image when the user picked one
         // (imageBase64 is null when they kept the existing photo).
         image: imageBase64 || undefined,
@@ -223,12 +230,20 @@ const ProductCreationForm = ({ navigation, route }) => {
           image_1920: 'Image',
           description_sale: 'Description',
         };
+        const reasons = resp?.reasons || {};
         const failed = notSaved.map((k) => labels[k] || k);
         if (qtyFailed) failed.push('On-Hand Qty');
+        // Prefer the specific Odoo reason when we have one (e.g. "Unit of
+        // Measure can't change — product has stock"); otherwise list the fields.
+        const reasonMsgs = [];
+        notSaved.forEach((k) => {
+          if (reasons[k]) reasonMsgs.push(`${labels[k] || k}: ${reasons[k]}`);
+        });
+        if (qtyFailed && resp?.qtyError) reasonMsgs.push(`On-Hand Qty: ${resp.qtyError}`);
         Toast.show({
           type: 'error',
           text1: 'Some changes did not save',
-          text2: failed.join(', '),
+          text2: reasonMsgs.length ? reasonMsgs.join('\n') : failed.join(', '),
           position: 'bottom',
           visibilityTime: 6000,
         });
