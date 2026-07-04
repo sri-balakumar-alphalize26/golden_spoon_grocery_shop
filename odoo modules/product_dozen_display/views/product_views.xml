@@ -26,7 +26,7 @@
                 <label for="dozen_qty_onhand" string="On Hand (Dozens)" class="oe_inline"
                        invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager"/>
                 <div class="o_row" invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_manager">
-                    <field name="dozen_qty_onhand"/>
+                    <field name="dozen_qty_onhand" widget="dozen_onhand"/>
                 </div>
                 <label for="dozen_display" string="On Hand (Dozen + Pcs)" class="oe_inline"
                        invisible="not is_storable or not use_dozen_display" groups="stock.group_stock_user"/>

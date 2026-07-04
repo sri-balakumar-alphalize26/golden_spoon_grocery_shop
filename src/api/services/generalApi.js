@@ -2821,6 +2821,80 @@ export const updateUomOdoo = async (uomId, { name, relativeUomId, relativeFactor
   }
 };
 
+// Delete a product (from a product.product / variant id). Deletes the whole
+// product.template so it's fully removed from Odoo. Surfaces Odoo's own error
+// (e.g. "make sure all point of sale are closed"). Returns { result: true } or
+// { error: { message } }.
+export const deleteProductOdoo = async (productId) => {
+  if (!productId) return { error: { message: 'productId is required' } };
+  const baseUrl = getOdooUrl();
+  const call = async (model, method, args) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model, method, args, kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const err = resp.data.error;
+      const e = new Error('Odoo error');
+      e.payload = err;
+      throw e;
+    }
+    return resp.data.result;
+  };
+  try {
+    // Resolve the template id — deleting it removes the product entirely.
+    let tmplId = null;
+    try {
+      const rows = await call('product.product', 'read', [[Number(productId)], ['product_tmpl_id']]);
+      const r = rows?.[0];
+      tmplId = Array.isArray(r?.product_tmpl_id) ? r.product_tmpl_id[0] : null;
+    } catch (_) { /* fall back to deleting the variant */ }
+    const model = tmplId ? 'product.template' : 'product.product';
+    const ids = tmplId ? [tmplId] : [Number(productId)];
+    console.log('[DELETE] unlink', model, ids);
+    await call(model, 'unlink', [ids]);
+    return { result: true };
+  } catch (e) {
+    const err = e?.payload;
+    const message = err?.data?.message || err?.message || e?.message || 'Delete failed';
+    console.log('[DELETE] error:', message);
+    return { error: { message } };
+  }
+};
+
+// Archive a product (active=false) — the safe fallback when Odoo refuses a
+// delete because the product is referenced elsewhere. Removes it from the
+// default (active) product lists while keeping history intact.
+export const archiveProductOdoo = async (productId) => {
+  if (!productId) return { error: { message: 'productId is required' } };
+  const baseUrl = getOdooUrl();
+  const call = async (model, method, args) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model, method, args, kwargs: {} },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo error'); e.payload = resp.data.error; throw e;
+    }
+    return resp.data.result;
+  };
+  try {
+    let tmplId = null;
+    try {
+      const rows = await call('product.product', 'read', [[Number(productId)], ['product_tmpl_id']]);
+      tmplId = Array.isArray(rows?.[0]?.product_tmpl_id) ? rows[0].product_tmpl_id[0] : null;
+    } catch (_) { /* fall back to the variant */ }
+    const model = tmplId ? 'product.template' : 'product.product';
+    const ids = tmplId ? [tmplId] : [Number(productId)];
+    console.log('[ARCHIVE] write active=false', model, ids);
+    await call(model, 'write', [ids, { active: false }]);
+    return { result: true };
+  } catch (e) {
+    const err = e?.payload;
+    return { error: { message: err?.data?.message || err?.message || e?.message || 'Archive failed' } };
+  }
+};
+
 // Create a product.product. Mirrors employee_attendance's payload shape but
 // online-only (no offline queue). Each optional field is omitted when empty
 // so Odoo applies defaults.

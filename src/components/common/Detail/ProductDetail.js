@@ -6,7 +6,8 @@ import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchInventoryDetailsByName, fetchProductDetails } from '@api/details/detailApi';
-import { fetchProductDetailsOdoo } from '@api/services/generalApi';
+import { fetchProductDetailsOdoo, deleteProductOdoo, archiveProductOdoo } from '@api/services/generalApi';
+import RNModal from 'react-native-modal';
 import { showToastMessage } from '@components/Toast';
 import Toast from 'react-native-toast-message';
 import { useAuthStore } from '@stores/auth';
@@ -32,6 +33,11 @@ const ProductDetail = ({ navigation, route }) => {
   const [isVisibleEmployeeListModal, setIsVisibleEmployeeListModal] = useState(false);
   const [employee, setEmployee] = useState([]);
   const [isImageModalVisible, setImageModalVisible] = useState(false);
+  // Delete flow: confirm popup -> Odoo unlink -> error popup (e.g. POS open).
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [deleteErrorVisible, setDeleteErrorVisible] = useState(false);
+  const [deleteErrorMsg, setDeleteErrorMsg] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const currentUser = useAuthStore((state) => state.user);
   const currency = useAuthStore((state) => state.currency);
   const decimalAccuracy = useAuthStore((state) => state.decimalAccuracy);
@@ -264,6 +270,49 @@ const ProductDetail = ({ navigation, route }) => {
     navigation.goBack();
   };
 
+  const handleConfirmDelete = async () => {
+    setDeleting(true);
+    try {
+      const resp = await deleteProductOdoo(details.id ?? detail.id);
+      setDeleteConfirmVisible(false);
+      if (resp?.error) {
+        setDeleteErrorMsg(resp.error.message || 'Could not delete this product.');
+        setDeleteErrorVisible(true);
+        return;
+      }
+      Toast.show({ type: 'success', text1: 'Product deleted', position: 'bottom' });
+      // Back to Products and refresh the list.
+      navigation.navigate({ name: 'Products', params: { refreshAt: Date.now() }, merge: true });
+    } catch (e) {
+      setDeleteConfirmVisible(false);
+      setDeleteErrorMsg(e?.message || 'Could not delete this product.');
+      setDeleteErrorVisible(true);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Fallback when delete is refused (product referenced elsewhere): archive it.
+  const handleArchive = async () => {
+    setDeleting(true);
+    try {
+      const resp = await archiveProductOdoo(details.id ?? detail.id);
+      setDeleteErrorVisible(false);
+      if (resp?.error) {
+        setDeleteErrorMsg(resp.error.message || 'Could not archive this product.');
+        setDeleteErrorVisible(true);
+        return;
+      }
+      Toast.show({ type: 'success', text1: 'Product archived', position: 'bottom' });
+      navigation.navigate({ name: 'Products', params: { refreshAt: Date.now() }, merge: true });
+    } catch (e) {
+      setDeleteErrorMsg(e?.message || 'Could not archive this product.');
+      setDeleteErrorVisible(true);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const categoryDisplay =
     // Product can have several POS categories — show them all, comma-separated.
     (Array.isArray(details?.pos_categories) && details.pos_categories.length
@@ -369,6 +418,14 @@ const ProductDetail = ({ navigation, route }) => {
                     <MaterialIcons name="edit" size={18} color="#fff" />
                     <Text style={s.editProductBtnText}>Edit Product</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={s.deleteProductBtn}
+                    activeOpacity={0.85}
+                    onPress={() => setDeleteConfirmVisible(true)}
+                  >
+                    <MaterialIcons name="delete" size={18} color="#fff" />
+                    <Text style={s.editProductBtnText}>Delete Product</Text>
+                  </TouchableOpacity>
                 </FeatureGate>
               ) : null}
             </View>
@@ -430,6 +487,71 @@ const ProductDetail = ({ navigation, route }) => {
       />
 
       {loading && <OverlayLoader visible={true} backgroundColor={true} />}
+
+      {/* Delete confirmation — logout-style popup. */}
+      <RNModal
+        isVisible={deleteConfirmVisible}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.7}
+        animationInTiming={400}
+        animationOutTiming={300}
+        onBackButtonPress={() => !deleting && setDeleteConfirmVisible(false)}
+        onBackdropPress={() => !deleting && setDeleteConfirmVisible(false)}
+      >
+        <View style={s.confirmContainer}>
+          <Text style={s.confirmText}>Delete this product?</Text>
+          <View style={s.confirmButtonRow}>
+            <TouchableOpacity
+              style={[s.confirmButton, { flex: 1 }]}
+              disabled={deleting}
+              onPress={handleConfirmDelete}
+            >
+              <Text style={s.confirmButtonText}>{deleting ? 'DELETING…' : 'OK'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.confirmButton, { flex: 1 }]}
+              disabled={deleting}
+              onPress={() => setDeleteConfirmVisible(false)}
+            >
+              <Text style={s.confirmButtonText}>CANCEL</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
+
+      {/* Delete error (e.g. open POS session) — Odoo's message, app-styled. */}
+      <RNModal
+        isVisible={deleteErrorVisible}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.7}
+        animationInTiming={400}
+        animationOutTiming={300}
+        onBackButtonPress={() => setDeleteErrorVisible(false)}
+        onBackdropPress={() => setDeleteErrorVisible(false)}
+      >
+        <View style={s.confirmContainer}>
+          <Text style={s.confirmTitle}>Can't Delete Product</Text>
+          <Text style={s.confirmText}>{deleteErrorMsg}</Text>
+          <View style={s.confirmButtonRow}>
+            <TouchableOpacity
+              style={[s.confirmButton, { flex: 1 }]}
+              disabled={deleting}
+              onPress={handleArchive}
+            >
+              <Text style={s.confirmButtonText}>{deleting ? 'ARCHIVING…' : 'ARCHIVE INSTEAD'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.confirmButton, { flex: 1 }]}
+              disabled={deleting}
+              onPress={() => setDeleteErrorVisible(false)}
+            >
+              <Text style={s.confirmButtonText}>CLOSE</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
     </SafeAreaView>
   );
 };
@@ -625,5 +747,61 @@ const s = StyleSheet.create({
     fontSize: 15,
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.4,
+  },
+  deleteProductBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D64545',
+    marginTop: 10,
+    marginBottom: 4,
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#D64545', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 4 },
+    }),
+  },
+
+  // Delete confirmation / error popups — mirror the logout popup look.
+  confirmContainer: {
+    backgroundColor: COLORS.white,
+    borderRadius: 10,
+    borderColor: COLORS.primaryThemeColor,
+    borderWidth: 2,
+    paddingVertical: 22,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  confirmTitle: {
+    fontSize: 18,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: COLORS.primaryThemeColor,
+    marginBottom: 6,
+    alignSelf: 'flex-start',
+  },
+  confirmText: {
+    marginVertical: 16,
+    fontSize: 16,
+    textAlign: 'center',
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  confirmButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignSelf: 'stretch',
+  },
+  confirmButton: {
+    backgroundColor: COLORS.primaryThemeColor,
+    borderRadius: 10,
+    padding: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  confirmButtonText: {
+    color: 'white',
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
 });
