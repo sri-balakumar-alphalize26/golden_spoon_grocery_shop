@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Image, TouchableOpacity, Modal, StyleSheet, Dimensions, Platform } from 'react-native';
+import { View, Image, TouchableOpacity, Modal, StyleSheet, Dimensions, Platform, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Text from '@components/Text';
 import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
@@ -118,9 +118,7 @@ const ProductDetail = ({ navigation, route }) => {
           const seedTmplId = Array.isArray(detail.product_tmpl_id)
             ? detail.product_tmpl_id[0]
             : (detail.template_id ?? null);
-          console.log('[DETAIL] fetch detail.id=', detail.id, '| tmplId=', seedTmplId, '| seed name=', detail.product_name || detail.name);
           const od = await fetchProductDetailsOdoo(detail.id, seedTmplId);
-          console.log('[DETAIL] fetched id=', od?.id, '| tmpl=', od?.template_id, '| name=', od?.product_name, '| is_active=', od?.is_active);
           setDetails({
             ...detail,
             id: detail.id,
@@ -153,6 +151,9 @@ const ProductDetail = ({ navigation, route }) => {
             template_id: od?.template_id
               ?? (Array.isArray(detail.product_tmpl_id) ? detail.product_tmpl_id[0] : detail.template_id)
               ?? null,
+            // Dozen Display (product_dozen_display module).
+            use_dozen_display: !!od?.use_dozen_display,
+            dozen_display: od?.dozen_display || null,
             available_in_pos: od?.available_in_pos ?? detail.available_in_pos ?? false,
             product_description: od?.product_description || '',
           });
@@ -284,9 +285,7 @@ const ProductDetail = ({ navigation, route }) => {
   const handleConfirmDelete = async () => {
     setDeleting(true);
     try {
-      console.log('[DELETE] handleConfirmDelete id=', details.id ?? detail.id, '| tmpl=', details.template_id);
       const resp = await deleteProductOdoo(details.id ?? detail.id, details.template_id);
-      console.log('[DELETE] resp:', JSON.stringify(resp));
       setDeleteConfirmVisible(false);
       if (resp?.error) {
         setDeleteErrorMsg(resp.error.message || 'Could not delete this product.');
@@ -309,9 +308,7 @@ const ProductDetail = ({ navigation, route }) => {
   const handleArchive = async () => {
     setDeleting(true);
     try {
-      console.log('[ARCHIVE] handleArchive id=', details.id ?? detail.id, '| tmpl=', details.template_id);
       const resp = await archiveProductOdoo(details.id ?? detail.id, details.template_id);
-      console.log('[ARCHIVE] resp:', JSON.stringify(resp));
       setDeleteErrorVisible(false);
       if (resp?.error) {
         setDeleteErrorMsg(resp.error.message || 'Could not archive this product.');
@@ -331,9 +328,7 @@ const ProductDetail = ({ navigation, route }) => {
   const handleRestore = async () => {
     setDeleting(true);
     try {
-      console.log('[RESTORE] handleRestore id=', details.id ?? detail.id, '| tmpl=', details.template_id);
       const resp = await unarchiveProductOdoo(details.id ?? detail.id, details.template_id);
-      console.log('[RESTORE] resp:', JSON.stringify(resp));
       if (resp?.error) {
         Toast.show({ type: 'error', text1: 'Could not restore', text2: resp.error.message || '', position: 'bottom' });
         return;
@@ -432,6 +427,9 @@ const ProductDetail = ({ navigation, route }) => {
               {!route?.params?.fromPOS && (
                 <DetailRow icon="inventory-2" label="On Hand Quantity" value={onHandDisplay} />
               )}
+              {!route?.params?.fromPOS && details.use_dozen_display && details.dozen_display ? (
+                <DetailRow icon="grid-view" label="On Hand (Dozen + Pcs)" value={details.dozen_display} />
+              ) : null}
               <DetailRow
                 icon="straighten"
                 label="Unit of Measure"
@@ -445,15 +443,27 @@ const ProductDetail = ({ navigation, route }) => {
               {isOdooProduct && !route?.params?.fromPOS ? (
                 <FeatureGate featureKey="products.edit">
                   {details.is_active === false ? (
-                    <TouchableOpacity
-                      style={s.restoreProductBtn}
-                      activeOpacity={0.85}
-                      disabled={deleting}
-                      onPress={handleRestore}
-                    >
-                      <MaterialIcons name="unarchive" size={18} color="#fff" />
-                      <Text style={s.editProductBtnText}>{deleting ? 'Restoring…' : 'Restore Product'}</Text>
-                    </TouchableOpacity>
+                    <View style={{ marginTop: 14 }}>
+                      <View style={s.archivedBanner}>
+                        <MaterialIcons name="archive" size={16} color="#9A6700" />
+                        <Text style={s.archivedBannerText}>This product is archived</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={s.restoreProductBtn}
+                        activeOpacity={0.85}
+                        disabled={deleting}
+                        onPress={handleRestore}
+                      >
+                        {deleting ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <>
+                            <MaterialIcons name="unarchive" size={18} color="#fff" />
+                            <Text style={s.editProductBtnText}>Restore Product</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   ) : (
                     <>
                       <TouchableOpacity
@@ -816,7 +826,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#1F9D55',
-    marginTop: 12,
+    marginTop: 0,
     marginBottom: 4,
     paddingVertical: 14,
     borderRadius: 12,
@@ -825,6 +835,23 @@ const s = StyleSheet.create({
       ios: { shadowColor: '#1F9D55', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
       android: { elevation: 4 },
     }),
+  },
+  archivedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFF6DC',
+    borderColor: '#F1D48A',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  archivedBannerText: {
+    color: '#8A6100',
+    fontSize: 13,
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
 
   // Delete confirmation / error popups — mirror the logout popup look.

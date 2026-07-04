@@ -2964,7 +2964,7 @@ export const unarchiveProductOdoo = async (productId, templateId = null) => {
 // Create a product.product. Mirrors employee_attendance's payload shape but
 // online-only (no offline queue). Each optional field is omitted when empty
 // so Odoo applies defaults.
-export const createProductOdoo = async ({ name, categId, posCategoryId, posCategoryIds, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty, trackInventory } = {}) => {
+export const createProductOdoo = async ({ name, categId, posCategoryId, posCategoryIds, listPrice, standardPrice, barcode, defaultCode, uomId, image, descriptionSale, onHandQty, trackInventory, useDozenDisplay, dozenPackSize } = {}) => {
   if (!name || !String(name).trim()) {
     return { error: { message: 'Product name is required' } };
   }
@@ -2989,6 +2989,10 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, posCateg
   if (barcode) vals.barcode = String(barcode).trim();
   if (defaultCode) vals.default_code = String(defaultCode).trim();
   if (uomId) { vals.uom_id = uomId; }
+  if (useDozenDisplay !== undefined) vals.use_dozen_display = !!useDozenDisplay;
+  if (dozenPackSize !== undefined && dozenPackSize !== '' && dozenPackSize !== null) {
+    vals.dozen_pack_size = Math.max(1, parseInt(dozenPackSize, 10) || 12);
+  }
   if (descriptionSale) vals.description_sale = String(descriptionSale).trim();
   if (image) vals.image_1920 = image;
 
@@ -3160,6 +3164,7 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   const {
     name, categId, posCategoryId, posCategoryIds, listPrice, standardPrice,
     barcode, defaultCode, uomId, image, descriptionSale, onHandQty, trackInventory,
+    useDozenDisplay, dozenPackSize,
   } = payload;
 
   // Resolve the template id (and the variant id, needed for the qty path).
@@ -3223,6 +3228,10 @@ export const updateProductOdoo = async (arg, opts = {}) => {
   if (barcode !== undefined) vals.barcode = barcode ? String(barcode).trim() : false;
   if (defaultCode !== undefined) vals.default_code = defaultCode ? String(defaultCode).trim() : false;
   if (uomId !== undefined) { vals.uom_id = uomId; }
+  if (useDozenDisplay !== undefined) vals.use_dozen_display = !!useDozenDisplay;
+  if (dozenPackSize !== undefined && dozenPackSize !== '' && dozenPackSize !== null) {
+    vals.dozen_pack_size = Math.max(1, parseInt(dozenPackSize, 10) || 12);
+  }
   if (descriptionSale !== undefined) vals.description_sale = descriptionSale ? String(descriptionSale).trim() : false;
   if (image) vals.image_1920 = image;
 
@@ -4547,6 +4556,7 @@ export const fetchProductDetailsOdoo = async (productId, templateId = null) => {
       'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode',
       'uom_id', 'image_128', 'description_sale', 'categ_id', 'pos_categ_ids',
       'available_in_pos', 'is_storable', 'active', 'product_tmpl_id',
+      'use_dozen_display', 'dozen_pack_size', 'dozen_display',
       'qty_available', 'virtual_available',
     ];
     const safeFields = [
@@ -4558,6 +4568,7 @@ export const fetchProductDetailsOdoo = async (productId, templateId = null) => {
       'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode',
       'uom_id', 'image_128', 'description_sale', 'categ_id', 'pos_categ_ids',
       'available_in_pos', 'is_storable', 'active', 'product_variant_id',
+      'use_dozen_display', 'dozen_pack_size', 'dozen_display',
       'qty_available', 'virtual_available',
     ];
 
@@ -4671,6 +4682,9 @@ export const fetchProductDetailsOdoo = async (productId, templateId = null) => {
       available_in_pos: !!p.available_in_pos,
       is_storable: !!p.is_storable,
       is_active: p.active !== false,
+      use_dozen_display: !!p.use_dozen_display,
+      dozen_pack_size: Number(p.dozen_pack_size) || 12,
+      dozen_display: p.dozen_display || null,
       product_description: p.description_sale || null,
     };
   } catch (error) {

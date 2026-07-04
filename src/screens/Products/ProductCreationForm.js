@@ -36,6 +36,18 @@ import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
 
 const NAVY = COLORS.primaryThemeColor;
+
+// "X Dozen Y Pcs" label for a piece count + pack size (mirrors the Odoo module).
+const formatDozenLabel = (pieces, pack) => {
+  pieces = Math.round(pieces || 0);
+  pack = pack || 12;
+  const dozens = Math.floor(pieces / pack);
+  const loose = pieces % pack;
+  const parts = [];
+  if (dozens) parts.push(`${dozens} Dozen`);
+  if (loose || !dozens) parts.push(`${loose} Pcs`);
+  return parts.join(' ');
+};
 const ORANGE = '#F47B20';
 const MUTED = '#9CA3AF';
 
@@ -75,6 +87,12 @@ const ProductCreationForm = ({ navigation, route }) => {
   const [onHandQty, setOnHandQty] = useState('');
   const [trackInventory, setTrackInventory] = useState(false); // is_storable
   const [trackConfirmVisible, setTrackConfirmVisible] = useState(false);
+  // Dozen Display (product_dozen_display module): show/enter on-hand in dozens.
+  const [dozenDisplay, setDozenDisplay] = useState(false);   // use_dozen_display
+  const [dozenPackSize, setDozenPackSize] = useState('12');  // dozen_pack_size
+  const [dozensInput, setDozensInput] = useState('');        // typed dozens -> onHandQty
+  const [dozenConfirmVisible, setDozenConfirmVisible] = useState(false);
+  const [dozenPending, setDozenPending] = useState({ old: 0, next: 0 });
   const [barcode, setBarcode] = useState('');
   const [internalRef, setInternalRef] = useState('');
 
@@ -156,6 +174,14 @@ const ProductCreationForm = ({ navigation, route }) => {
         }
         const track = !!od.is_storable;
         setTrackInventory(track);
+        const dz = !!od.use_dozen_display;
+        const pack = String(od.dozen_pack_size || 12);
+        setDozenDisplay(dz);
+        setDozenPackSize(pack);
+        // On Hand (Dozens) input = pieces / pack (products here are Units, factor 1).
+        const packN = parseInt(pack, 10) || 12;
+        const initQtyN = Number(od.total_product_quantity ?? 0);
+        setDozensInput(dz && initQtyN ? String(initQtyN / packN) : '');
         // Snapshot the prefilled values so we can detect edits (dirty state).
         originalFormRef.current = {
           name: (od.product_name || '').trim(),
@@ -166,6 +192,8 @@ const ProductCreationForm = ({ navigation, route }) => {
           catIds: (Array.isArray(od.pos_categories) ? od.pos_categories.map((c) => c.id)
             : (od.pos_category?.id ? [od.pos_category.id] : [])).slice().sort().join(','),
           trackInventory: track,
+          dozenDisplay: dz,
+          dozenPackSize: pack,
         };
       })
       .catch(() => {
@@ -234,6 +262,8 @@ const ProductCreationForm = ({ navigation, route }) => {
         image: imageBase64 || undefined,
         onHandQty: qtyChanged ? (onHandQty || '0') : undefined,
         trackInventory,
+        useDozenDisplay: dozenDisplay,
+        dozenPackSize: dozenDisplay ? dozenPackSize : undefined,
       };
       const resp = isEdit
         ? await updateProductOdoo(editId, payload)
@@ -546,6 +576,30 @@ const ProductCreationForm = ({ navigation, route }) => {
     setTrackInventory(false);
   };
 
+  // On Hand (Dozens): confirm before applying the change to Quantity On Hand
+  // (mirrors the web module's "Change On Hand from X to Y?" dialog).
+  const handleDozensBlur = () => {
+    const pack = parseInt(dozenPackSize, 10) || 12;
+    const nextPieces = Math.round((parseFloat(dozensInput) || 0) * pack);
+    const oldPieces = Math.round(Number(onHandQty) || 0);
+    console.log('[DOZEN] blur dozens=', dozensInput, '| next=', nextPieces, '| old=', oldPieces);
+    if (nextPieces === oldPieces) return;
+    setDozenPending({ old: oldPieces, next: nextPieces });
+    setDozenConfirmVisible(true);
+  };
+  const confirmDozenChange = () => {
+    console.log('[DOZEN] confirmed -> onHandQty =', dozenPending.next);
+    setOnHandQty(String(dozenPending.next));
+    setDozenConfirmVisible(false);
+  };
+  const cancelDozenChange = () => {
+    const pack = parseInt(dozenPackSize, 10) || 12;
+    const oldPieces = Math.round(Number(onHandQty) || 0);
+    setDozensInput(oldPieces ? String(oldPieces / pack) : '');
+    setDozenConfirmVisible(false);
+    console.log('[DOZEN] cancelled, reverted to', oldPieces / pack);
+  };
+
   // Edit mode: the Save button stays disabled/dim until at least one field
   // differs from the prefilled snapshot. Create mode is always enabled.
   const isDirty = !isEdit || !originalFormRef.current || (
@@ -556,6 +610,8 @@ const ProductCreationForm = ({ navigation, route }) => {
     (internalRef || '') !== originalFormRef.current.internalRef ||
     selectedCats.map((c) => c.id).slice().sort().join(',') !== originalFormRef.current.catIds ||
     trackInventory !== originalFormRef.current.trackInventory ||
+    dozenDisplay !== originalFormRef.current.dozenDisplay ||
+    dozenPackSize !== originalFormRef.current.dozenPackSize ||
     String(onHandQty || '').trim() !== String(originalOnHandRef.current ?? '').trim() ||
     (uom?.id ?? null) !== (originalUomRef.current ?? null) ||
     imageBase64 != null
@@ -634,7 +690,47 @@ const ProductCreationForm = ({ navigation, route }) => {
             </TouchableOpacity>
 
             {trackInventory ? (
-              <Field label="On Hand Quantity" value={onHandQty} onChangeText={setOnHandQty} placeholder="0" keyboardType="numeric" />
+              <>
+                <Field label="On Hand Quantity" value={onHandQty} onChangeText={setOnHandQty} placeholder="0" keyboardType="numeric" />
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}
+                  activeOpacity={0.7}
+                  onPress={() => setDozenDisplay((v) => !v)}
+                >
+                  <MaterialIcons
+                    name={dozenDisplay ? 'check-box' : 'check-box-outline-blank'}
+                    size={22}
+                    color={dozenDisplay ? NAVY : MUTED}
+                  />
+                  <Text style={{ marginLeft: 8, color: '#1a1a2e', fontFamily: FONT_FAMILY.urbanistSemiBold }}>
+                    Dozen Display
+                  </Text>
+                </TouchableOpacity>
+
+                {dozenDisplay ? (
+                  <>
+                    <Field
+                      label="Pieces per Dozen"
+                      value={dozenPackSize}
+                      onChangeText={setDozenPackSize}
+                      placeholder="12"
+                      keyboardType="numeric"
+                    />
+                    <Field
+                      label="On Hand (Dozens)"
+                      value={dozensInput}
+                      onChangeText={setDozensInput}
+                      onBlur={handleDozensBlur}
+                      placeholder="0"
+                      keyboardType="numeric"
+                    />
+                    <Text style={{ color: MUTED, fontSize: 12, marginTop: -6, marginBottom: 10 }}>
+                      = {formatDozenLabel(Math.round((parseFloat(dozensInput) || 0) * (parseInt(dozenPackSize, 10) || 12)), parseInt(dozenPackSize, 10) || 12)}
+                    </Text>
+                  </>
+                ) : null}
+              </>
             ) : null}
 
             <Field
@@ -1157,11 +1253,37 @@ const ProductCreationForm = ({ navigation, route }) => {
           </View>
         </View>
       </RNModal>
+
+      {/* On Hand (Dozens) change confirmation — logout-style popup. */}
+      <RNModal
+        isVisible={dozenConfirmVisible}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.7}
+        animationInTiming={400}
+        animationOutTiming={300}
+        onBackButtonPress={cancelDozenChange}
+        onBackdropPress={cancelDozenChange}
+      >
+        <View style={s.confirmContainer}>
+          <Text style={s.confirmText}>
+            Change On Hand from {dozenPending.old} to {dozenPending.next} pieces?
+          </Text>
+          <View style={s.confirmButtonRow}>
+            <TouchableOpacity style={[s.confirmButton, { flex: 1 }]} onPress={confirmDozenChange}>
+              <Text style={s.confirmButtonText}>YES</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.confirmButton, { flex: 1 }]} onPress={cancelDozenChange}>
+              <Text style={s.confirmButtonText}>NO</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </RNModal>
     </SafeAreaView>
   );
 };
 
-const Field = ({ label, value, onChangeText, placeholder, keyboardType, multiline, onScanPress }) => {
+const Field = ({ label, value, onChangeText, placeholder, keyboardType, multiline, onScanPress, onBlur }) => {
   // Numeric / phone inputs auto-select on tap so the user can overwrite the
   // existing value with a fresh number in one tap.
   const isNumeric = keyboardType === 'numeric' || keyboardType === 'phone-pad' || keyboardType === 'decimal-pad';
@@ -1174,6 +1296,7 @@ const Field = ({ label, value, onChangeText, placeholder, keyboardType, multilin
             style={[s.fieldInput, { flex: 1 }]}
             value={value}
             onChangeText={onChangeText}
+            onBlur={onBlur}
             placeholder={placeholder}
             placeholderTextColor="#aaa"
             keyboardType={keyboardType || 'default'}
@@ -1193,6 +1316,7 @@ const Field = ({ label, value, onChangeText, placeholder, keyboardType, multilin
           style={[s.fieldInput, multiline && { minHeight: 70, textAlignVertical: 'top' }]}
           value={value}
           onChangeText={onChangeText}
+          onBlur={onBlur}
           placeholder={placeholder}
           placeholderTextColor="#aaa"
           keyboardType={keyboardType || 'default'}

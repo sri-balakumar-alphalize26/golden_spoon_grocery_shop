@@ -155,10 +155,7 @@ const ProductsScreen = ({ navigation, route }) => {
     return (
       <ProductsList
         item={item}
-        onPress={() => {
-          console.log('[LIST] tap id=', item.id, '| name=', item.product_name || item.name, '| archived=', archived);
-          navigation.navigate('ProductDetail', { detail: item, fromCustomerDetails, fromPOS: route?.params?.fromPOS });
-        }}
+        onPress={() => navigation.navigate('ProductDetail', { detail: item, fromCustomerDetails, fromPOS: route?.params?.fromPOS })}
         showQuickAdd={!!route?.params?.fromPOS}
         onQuickAdd={handleQuickAdd}
       />
