@@ -78,9 +78,10 @@ const ProductsScreen = ({ navigation, route }) => {
   const [categoryCounts, setCategoryCounts] = useState({ all: 0 });
   const [selectedPosCategory, setSelectedPosCategory] = useState(null);
   const [totalCount, setTotalCount] = useState(0);
+  const [archived, setArchived] = useState(false); // show archived products
 
   const { searchText, handleSearchTextChange } = useDebouncedSearch(
-    (text) => fetchData({ searchText: text, categoryId, posCategoryId: selectedPosCategory }),
+    (text) => fetchData({ searchText: text, categoryId, posCategoryId: selectedPosCategory, archived }),
     500
   );
 
@@ -91,9 +92,9 @@ const ProductsScreen = ({ navigation, route }) => {
   useFocusEffect(
     useCallback(() => {
       hasAttemptedFetchRef.current = true;
-      fetchData({ searchText, categoryId, posCategoryId: selectedPosCategory });
+      fetchData({ searchText, categoryId, posCategoryId: selectedPosCategory, archived });
       // Total templates matching the current filter — drives "Showing X / Y".
-      fetchProductTemplateCountOdoo({ searchText, categoryId, posCategoryId: selectedPosCategory })
+      fetchProductTemplateCountOdoo({ searchText, categoryId, posCategoryId: selectedPosCategory, archived })
         .then((total) => setTotalCount(total));
       // Re-pull categories + counts so freshly-created products bump their chip count.
       (async () => {
@@ -107,7 +108,7 @@ const ProductsScreen = ({ navigation, route }) => {
           // best-effort; chip bar simply shows "All (0)" if it fails
         }
       })();
-    }, [categoryId, searchText, selectedPosCategory])
+    }, [categoryId, searchText, selectedPosCategory, archived])
   );
 
   useEffect(() => {
@@ -127,8 +128,8 @@ const ProductsScreen = ({ navigation, route }) => {
   }, [route?.params?.fromPOS, fromCustomerDetails]);
 
   const handleLoadMore = useCallback(() => {
-    fetchMoreData({ searchText, categoryId, posCategoryId: selectedPosCategory });
-  }, [searchText, categoryId, selectedPosCategory, fetchMoreData]);
+    fetchMoreData({ searchText, categoryId, posCategoryId: selectedPosCategory, archived });
+  }, [searchText, categoryId, selectedPosCategory, archived, fetchMoreData]);
 
   // Memoize the renderItem function to prevent unnecessary re-renders
   const renderItem = useCallback(({ item }) => {
@@ -154,12 +155,15 @@ const ProductsScreen = ({ navigation, route }) => {
     return (
       <ProductsList
         item={item}
-        onPress={() => navigation.navigate('ProductDetail', { detail: item, fromCustomerDetails, fromPOS: route?.params?.fromPOS })}
+        onPress={() => {
+          console.log('[LIST] tap id=', item.id, '| name=', item.product_name || item.name, '| archived=', archived);
+          navigation.navigate('ProductDetail', { detail: item, fromCustomerDetails, fromPOS: route?.params?.fromPOS });
+        }}
         showQuickAdd={!!route?.params?.fromPOS}
         onQuickAdd={handleQuickAdd}
       />
     );
-  }, [navigation, fromCustomerDetails, route?.params?.fromPOS, addProduct]);
+  }, [navigation, fromCustomerDetails, route?.params?.fromPOS, addProduct, archived]);
 
   // Memoize formatted data to prevent recalculation on every render
   const formattedData = useMemo(() => formatData(data, 3), [data]);
@@ -246,9 +250,18 @@ const ProductsScreen = ({ navigation, route }) => {
       />
       {renderCategoryBar()}
       <View style={countStripStyles.strip}>
-        <Text style={countStripStyles.text}>
-          {`Showing ${data.length}${totalCount ? ` of ${totalCount}` : ''}${loading ? ' · loading…' : ''}`}
+        <Text style={countStripStyles.text} numberOfLines={1}>
+          {`${archived ? 'Archived · ' : ''}Showing ${data.length}${totalCount ? ` of ${totalCount}` : ''}${loading ? ' · loading…' : ''}`}
         </Text>
+        <TouchableOpacity
+          style={[countStripStyles.toggle, archived && countStripStyles.toggleActive]}
+          activeOpacity={0.7}
+          onPress={() => setArchived((v) => !v)}
+        >
+          <Text style={[countStripStyles.toggleText, archived && countStripStyles.toggleTextActive]}>
+            {archived ? 'Show Active' : 'Show Archived'}
+          </Text>
+        </TouchableOpacity>
       </View>
       <RoundedContainer>
         {renderProducts()}
@@ -335,12 +348,34 @@ const countStripStyles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     backgroundColor: '#F3F4F6',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   text: {
     fontSize: 12,
     color: COLORS.primaryThemeColor,
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.3,
+    flexShrink: 1,
+  },
+  toggle: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.primaryThemeColor,
+  },
+  toggleActive: {
+    backgroundColor: COLORS.primaryThemeColor,
+  },
+  toggleText: {
+    fontSize: 12,
+    color: COLORS.primaryThemeColor,
+    fontFamily: FONT_FAMILY.urbanistBold,
+  },
+  toggleTextActive: {
+    color: '#fff',
   },
 });
 

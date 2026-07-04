@@ -2413,6 +2413,7 @@ export const fetchProductsByTemplateOdoo = async ({
   // pos.config.iface_available_categ_ids when the active register has
   // limit_categories = True.
   allowedCategoryIds = null,
+  archived = false,
 } = {}) => {
   try {
     let domain = [];
@@ -2420,6 +2421,7 @@ export const fetchProductsByTemplateOdoo = async ({
       const term = String(searchText).trim();
       domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
     }
+    if (archived) domain = domain.concat([['active', '=', false]]);
     if (posCategoryId) {
       domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
     } else if (categoryId) {
@@ -2446,11 +2448,14 @@ export const fetchProductsByTemplateOdoo = async ({
           kwargs: {
             fields: [
               'id', 'name', 'default_code', 'list_price', 'qty_available',
-              'categ_id', 'available_in_pos',
+              'categ_id', 'available_in_pos', 'active',
               'product_variant_id',
               'image_128',
             ],
             offset, limit, order: 'name asc',
+            // Archived rows are excluded by default — disable that filter so the
+            // explicit ['active','=',false] domain above can return them.
+            ...(archived ? { context: { active_test: false } } : {}),
           },
         },
       },
@@ -2497,6 +2502,7 @@ export const fetchProductTemplateCountOdoo = async ({
   posCategoryId = null,
   posOnly = false,
   allowedCategoryIds = null,
+  archived = false,
 } = {}) => {
   const baseUrl = getOdooUrl();
   let domain = [];
@@ -2504,6 +2510,7 @@ export const fetchProductTemplateCountOdoo = async ({
     const term = String(searchText).trim();
     domain = ['|', ['name', 'ilike', term], ['default_code', 'ilike', term]];
   }
+  if (archived) domain = domain.concat([['active', '=', false]]);
   if (posCategoryId) {
     domain = domain.concat([['pos_categ_ids', 'in', [Number(posCategoryId)]]]);
   } else if (categoryId) {
@@ -2521,7 +2528,10 @@ export const fetchProductTemplateCountOdoo = async ({
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
-      params: { model: 'product.template', method: 'search_count', args: [domain], kwargs: {} },
+      params: {
+        model: 'product.template', method: 'search_count', args: [domain],
+        kwargs: archived ? { context: { active_test: false } } : {},
+      },
     }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
     if (resp.data && resp.data.error) return 0;
     return Number(resp.data.result) || 0;
@@ -2825,8 +2835,8 @@ export const updateUomOdoo = async (uomId, { name, relativeUomId, relativeFactor
 // product.template so it's fully removed from Odoo. Surfaces Odoo's own error
 // (e.g. "make sure all point of sale are closed"). Returns { result: true } or
 // { error: { message } }.
-export const deleteProductOdoo = async (productId) => {
-  if (!productId) return { error: { message: 'productId is required' } };
+export const deleteProductOdoo = async (productId, templateId = null) => {
+  if (!productId && !templateId) return { error: { message: 'id is required' } };
   const baseUrl = getOdooUrl();
   const call = async (model, method, args) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
@@ -2842,13 +2852,15 @@ export const deleteProductOdoo = async (productId) => {
     return resp.data.result;
   };
   try {
-    // Resolve the template id — deleting it removes the product entirely.
-    let tmplId = null;
-    try {
-      const rows = await call('product.product', 'read', [[Number(productId)], ['product_tmpl_id']]);
-      const r = rows?.[0];
-      tmplId = Array.isArray(r?.product_tmpl_id) ? r.product_tmpl_id[0] : null;
-    } catch (_) { /* fall back to deleting the variant */ }
+    // Prefer the passed template id (unambiguous). Else resolve from the variant.
+    let tmplId = templateId != null ? Number(templateId) : null;
+    if (!tmplId && productId) {
+      try {
+        const rows = await call('product.product', 'read', [[Number(productId)], ['product_tmpl_id']]);
+        const r = rows?.[0];
+        tmplId = Array.isArray(r?.product_tmpl_id) ? r.product_tmpl_id[0] : null;
+      } catch (_) { /* fall back to deleting the variant */ }
+    }
     const model = tmplId ? 'product.template' : 'product.product';
     const ids = tmplId ? [tmplId] : [Number(productId)];
     console.log('[DELETE] unlink', model, ids);
@@ -2865,8 +2877,8 @@ export const deleteProductOdoo = async (productId) => {
 // Archive a product (active=false) — the safe fallback when Odoo refuses a
 // delete because the product is referenced elsewhere. Removes it from the
 // default (active) product lists while keeping history intact.
-export const archiveProductOdoo = async (productId) => {
-  if (!productId) return { error: { message: 'productId is required' } };
+export const archiveProductOdoo = async (productId, templateId = null) => {
+  if (!productId && !templateId) return { error: { message: 'id is required' } };
   const baseUrl = getOdooUrl();
   const call = async (model, method, args) => {
     const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
@@ -2879,11 +2891,13 @@ export const archiveProductOdoo = async (productId) => {
     return resp.data.result;
   };
   try {
-    let tmplId = null;
-    try {
-      const rows = await call('product.product', 'read', [[Number(productId)], ['product_tmpl_id']]);
-      tmplId = Array.isArray(rows?.[0]?.product_tmpl_id) ? rows[0].product_tmpl_id[0] : null;
-    } catch (_) { /* fall back to the variant */ }
+    let tmplId = templateId != null ? Number(templateId) : null;
+    if (!tmplId && productId) {
+      try {
+        const rows = await call('product.product', 'read', [[Number(productId)], ['product_tmpl_id']]);
+        tmplId = Array.isArray(rows?.[0]?.product_tmpl_id) ? rows[0].product_tmpl_id[0] : null;
+      } catch (_) { /* fall back to the variant */ }
+    }
     const model = tmplId ? 'product.template' : 'product.product';
     const ids = tmplId ? [tmplId] : [Number(productId)];
     console.log('[ARCHIVE] write active=false', model, ids);
@@ -2892,6 +2906,58 @@ export const archiveProductOdoo = async (productId) => {
   } catch (e) {
     const err = e?.payload;
     return { error: { message: err?.data?.message || err?.message || e?.message || 'Archive failed' } };
+  }
+};
+
+// Restore (un-archive) a product — active=true. Uses active_test:false when
+// resolving the template so it works on an already-archived record.
+export const unarchiveProductOdoo = async (productId, templateId = null) => {
+  if (!productId && !templateId) return { error: { message: 'id is required' } };
+  const baseUrl = getOdooUrl();
+  const call = async (model, method, args, kwargs = {}) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model, method, args, kwargs },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo error'); e.payload = resp.data.error; throw e;
+    }
+    return resp.data.result;
+  };
+  try {
+    let tmplId = templateId != null ? Number(templateId) : null;
+    if (!tmplId && productId) {
+      try {
+        const rows = await call('product.product', 'read',
+          [[Number(productId)], ['product_tmpl_id']], { context: { active_test: false } });
+        tmplId = Array.isArray(rows?.[0]?.product_tmpl_id) ? rows[0].product_tmpl_id[0] : null;
+      } catch (_) { /* fall back to the variant */ }
+    }
+    const model = tmplId ? 'product.template' : 'product.product';
+    const ids = tmplId ? [tmplId] : [Number(productId)];
+    console.log('[ARCHIVE] restore active=true', model, ids);
+    await call(model, 'write', [ids, { active: true }], { context: { active_test: false } });
+    // Odoo cascades archiving to the variants but NOT reactivation — so
+    // reactivate the variants explicitly, otherwise the "restored" product has
+    // an archived variant (breaks POS/cart/quantities).
+    if (tmplId) {
+      try {
+        const vrows = await call('product.template', 'read',
+          [[tmplId], ['product_variant_ids']], { context: { active_test: false } });
+        const variantIds = vrows?.[0]?.product_variant_ids || [];
+        console.log('[ARCHIVE] restore variants', variantIds);
+        if (variantIds.length) {
+          await call('product.product', 'write',
+            [variantIds, { active: true }], { context: { active_test: false } });
+        }
+      } catch (ve) {
+        console.log('[ARCHIVE] variant reactivation warning:', ve?.payload?.data?.message || ve?.message);
+      }
+    }
+    return { result: true };
+  } catch (e) {
+    const err = e?.payload;
+    return { error: { message: err?.data?.message || err?.message || e?.message || 'Restore failed' } };
   }
 };
 
@@ -4446,25 +4512,25 @@ export const fetchCategoriesOdoo = async ({ offset = 0, limit = 50, searchText =
   }
 };
 
-// Fetch detailed product information for a single Odoo product id
-export const fetchProductDetailsOdoo = async (productId) => {
+// Fetch detailed product information. Pass the TEMPLATE id (from the list row's
+// product_tmpl_id) as the 2nd arg — product ids and template ids are separate
+// sequences, so a variant-less/archived template's id can collide with an
+// unrelated product.product. When that happens (or no variant) we read the
+// product.template directly so the correct product is shown.
+export const fetchProductDetailsOdoo = async (productId, templateId = null) => {
   try {
-    if (!productId) return null;
+    if (!productId && !templateId) return null;
 
-    // 1. Fetch product details — try a rich field set first, fall back to a
-    // safe core set if any field is rejected by this Odoo db (some builds
-    // don't have `available_in_pos`, `pos_categ_ids`, etc.).
-    const callRead = async (fields) => {
+    const callRead = async (model, domain, fields) => {
       const resp = await axios.post(
         `${getOdooUrl()}/web/dataset/call_kw`,
         {
           jsonrpc: '2.0',
           method: 'call',
           params: {
-            model: 'product.product',
-            method: 'search_read',
-            args: [[['id', '=', productId]]],
-            kwargs: { fields, limit: 1 },
+            model, method: 'search_read', args: [domain],
+            // active_test:false so ARCHIVED products can still be opened.
+            kwargs: { fields, limit: 1, context: { active_test: false } },
           },
         },
         { headers: { 'Content-Type': 'application/json' } }
@@ -4480,31 +4546,53 @@ export const fetchProductDetailsOdoo = async (productId) => {
     const richFields = [
       'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode',
       'uom_id', 'image_128', 'description_sale', 'categ_id', 'pos_categ_ids',
-      'available_in_pos', 'is_storable',
+      'available_in_pos', 'is_storable', 'active', 'product_tmpl_id',
       'qty_available', 'virtual_available',
     ];
     const safeFields = [
       'id', 'name', 'list_price', 'default_code',
-      'uom_id', 'image_128', 'categ_id', 'qty_available',
+      'uom_id', 'image_128', 'categ_id', 'qty_available', 'active', 'product_tmpl_id',
+    ];
+    // Template fields mirror the variant ones the return below reads.
+    const tmplFields = [
+      'id', 'name', 'list_price', 'standard_price', 'default_code', 'barcode',
+      'uom_id', 'image_128', 'description_sale', 'categ_id', 'pos_categ_ids',
+      'available_in_pos', 'is_storable', 'active', 'product_variant_id',
+      'qty_available', 'virtual_available',
     ];
 
-    let productResults;
-    try {
-      productResults = await callRead(richFields);
-    } catch (err) {
-      console.warn(
-        'fetchProductDetailsOdoo rich fetch failed, retrying with safe fields:',
-        err?.payload?.data?.message || err?.payload?.message || err?.message
-      );
-      productResults = await callRead(safeFields);
+    let results = [];
+    if (productId) {
+      try {
+        results = await callRead('product.product', [['id', '=', Number(productId)]], richFields);
+      } catch (err) {
+        console.warn('fetchProductDetailsOdoo rich fetch failed, retrying safe:',
+          err?.payload?.data?.message || err?.payload?.message || err?.message);
+        results = await callRead('product.product', [['id', '=', Number(productId)]], safeFields);
+      }
     }
-    const productResponse = { data: { result: productResults } };
-    const results = productResponse.data.result || [];
-    const p = results[0];
-    if (!p) return null;
+    let p = results[0];
+    let variantId = p ? p.id : null;
+    let fromTemplate = false;
 
-    // 2. Fetch warehouse/stock info
-    const quantResponse = await axios.post(
+    const wanted = templateId != null ? Number(templateId) : null;
+    const rowTmpl = Array.isArray(p?.product_tmpl_id) ? p.product_tmpl_id[0] : null;
+    if (wanted && (!p || rowTmpl !== wanted)) {
+      // Collision or no matching variant — read the template as source of truth.
+      console.log('[DETAIL] template fallback: productId', productId, 'tmpl', wanted, 'rowTmpl', rowTmpl);
+      let trows = [];
+      try { trows = await callRead('product.template', [['id', '=', wanted]], tmplFields); } catch (_) {}
+      if (trows[0]) {
+        p = trows[0];
+        fromTemplate = true;
+        variantId = Array.isArray(p.product_variant_id) ? p.product_variant_id[0] : null;
+      }
+    }
+    if (!p) return null;
+    const effectiveVariantId = variantId;
+
+    // 2. Fetch warehouse/stock info (by the resolved variant id, if any).
+    const quantResponse = effectiveVariantId ? await axios.post(
       `${getOdooUrl()}/web/dataset/call_kw`,
       {
         jsonrpc: '2.0',
@@ -4512,14 +4600,14 @@ export const fetchProductDetailsOdoo = async (productId) => {
         params: {
           model: 'stock.quant',
           method: 'search_read',
-          args: [[['product_id', '=', productId]]],
+          args: [[['product_id', '=', effectiveVariantId]]],
           kwargs: {
             fields: ['location_id', 'quantity'],
           },
         },
       },
       { headers: { 'Content-Type': 'application/json' } }
-    );
+    ) : { data: { result: [] } };
 
     let inventory_ledgers = [];
     if (quantResponse.data && quantResponse.data.result) {
@@ -4560,7 +4648,11 @@ export const fetchProductDetailsOdoo = async (productId) => {
     }
 
     return {
-      id: p.id,
+      // `id` is the product.product (variant) id — null for a variant-less
+      // template. `template_id` is the unambiguous product.template id used for
+      // archive/restore/delete.
+      id: effectiveVariantId,
+      template_id: wanted || rowTmpl || (fromTemplate ? p.id : null),
       product_name: p.name || '',
       image_url: imageUrl,
       price: p.list_price || 0,
@@ -4578,6 +4670,7 @@ export const fetchProductDetailsOdoo = async (productId) => {
       pos_categories,
       available_in_pos: !!p.available_in_pos,
       is_storable: !!p.is_storable,
+      is_active: p.active !== false,
       product_description: p.description_sale || null,
     };
   } catch (error) {

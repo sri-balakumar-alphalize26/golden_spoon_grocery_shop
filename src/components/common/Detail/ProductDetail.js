@@ -6,7 +6,7 @@ import { RoundedScrollContainer, SafeAreaView } from '@components/containers';
 import { NavigationHeader } from '@components/Header';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { fetchInventoryDetailsByName, fetchProductDetails } from '@api/details/detailApi';
-import { fetchProductDetailsOdoo, deleteProductOdoo, archiveProductOdoo } from '@api/services/generalApi';
+import { fetchProductDetailsOdoo, deleteProductOdoo, archiveProductOdoo, unarchiveProductOdoo } from '@api/services/generalApi';
 import RNModal from 'react-native-modal';
 import { showToastMessage } from '@components/Toast';
 import Toast from 'react-native-toast-message';
@@ -115,7 +115,12 @@ const ProductDetail = ({ navigation, route }) => {
     if (isOdooProduct) {
       const loadOdooDetails = async () => {
         try {
-          const od = await fetchProductDetailsOdoo(detail.id);
+          const seedTmplId = Array.isArray(detail.product_tmpl_id)
+            ? detail.product_tmpl_id[0]
+            : (detail.template_id ?? null);
+          console.log('[DETAIL] fetch detail.id=', detail.id, '| tmplId=', seedTmplId, '| seed name=', detail.product_name || detail.name);
+          const od = await fetchProductDetailsOdoo(detail.id, seedTmplId);
+          console.log('[DETAIL] fetched id=', od?.id, '| tmpl=', od?.template_id, '| name=', od?.product_name, '| is_active=', od?.is_active);
           setDetails({
             ...detail,
             id: detail.id,
@@ -142,6 +147,12 @@ const ProductDetail = ({ navigation, route }) => {
             pos_category: od?.pos_category || detail.pos_category || null,
             // Full list for multi-select display (product can have several).
             pos_categories: od?.pos_categories || detail.pos_categories || [],
+            // Archived state — drives Restore vs Delete.
+            is_active: od?.is_active !== undefined ? od.is_active : (detail.is_active !== false),
+            // Unambiguous template id for archive/restore/delete.
+            template_id: od?.template_id
+              ?? (Array.isArray(detail.product_tmpl_id) ? detail.product_tmpl_id[0] : detail.template_id)
+              ?? null,
             available_in_pos: od?.available_in_pos ?? detail.available_in_pos ?? false,
             product_description: od?.product_description || '',
           });
@@ -273,7 +284,9 @@ const ProductDetail = ({ navigation, route }) => {
   const handleConfirmDelete = async () => {
     setDeleting(true);
     try {
-      const resp = await deleteProductOdoo(details.id ?? detail.id);
+      console.log('[DELETE] handleConfirmDelete id=', details.id ?? detail.id, '| tmpl=', details.template_id);
+      const resp = await deleteProductOdoo(details.id ?? detail.id, details.template_id);
+      console.log('[DELETE] resp:', JSON.stringify(resp));
       setDeleteConfirmVisible(false);
       if (resp?.error) {
         setDeleteErrorMsg(resp.error.message || 'Could not delete this product.');
@@ -296,7 +309,9 @@ const ProductDetail = ({ navigation, route }) => {
   const handleArchive = async () => {
     setDeleting(true);
     try {
-      const resp = await archiveProductOdoo(details.id ?? detail.id);
+      console.log('[ARCHIVE] handleArchive id=', details.id ?? detail.id, '| tmpl=', details.template_id);
+      const resp = await archiveProductOdoo(details.id ?? detail.id, details.template_id);
+      console.log('[ARCHIVE] resp:', JSON.stringify(resp));
       setDeleteErrorVisible(false);
       if (resp?.error) {
         setDeleteErrorMsg(resp.error.message || 'Could not archive this product.');
@@ -308,6 +323,25 @@ const ProductDetail = ({ navigation, route }) => {
     } catch (e) {
       setDeleteErrorMsg(e?.message || 'Could not archive this product.');
       setDeleteErrorVisible(true);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    setDeleting(true);
+    try {
+      console.log('[RESTORE] handleRestore id=', details.id ?? detail.id, '| tmpl=', details.template_id);
+      const resp = await unarchiveProductOdoo(details.id ?? detail.id, details.template_id);
+      console.log('[RESTORE] resp:', JSON.stringify(resp));
+      if (resp?.error) {
+        Toast.show({ type: 'error', text1: 'Could not restore', text2: resp.error.message || '', position: 'bottom' });
+        return;
+      }
+      Toast.show({ type: 'success', text1: 'Product restored', position: 'bottom' });
+      navigation.navigate({ name: 'Products', params: { refreshAt: Date.now() }, merge: true });
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Restore failed', text2: e?.message || '', position: 'bottom' });
     } finally {
       setDeleting(false);
     }
@@ -410,22 +444,36 @@ const ProductDetail = ({ navigation, route }) => {
               <DetailRow icon="tag" label="Internal Reference" value={internalRefDisplay} />
               {isOdooProduct && !route?.params?.fromPOS ? (
                 <FeatureGate featureKey="products.edit">
-                  <TouchableOpacity
-                    style={s.editProductBtn}
-                    activeOpacity={0.85}
-                    onPress={() => navigation.navigate('ProductCreationForm', { productId: detail.id })}
-                  >
-                    <MaterialIcons name="edit" size={18} color="#fff" />
-                    <Text style={s.editProductBtnText}>Edit Product</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={s.deleteProductBtn}
-                    activeOpacity={0.85}
-                    onPress={() => setDeleteConfirmVisible(true)}
-                  >
-                    <MaterialIcons name="delete" size={18} color="#fff" />
-                    <Text style={s.editProductBtnText}>Delete Product</Text>
-                  </TouchableOpacity>
+                  {details.is_active === false ? (
+                    <TouchableOpacity
+                      style={s.restoreProductBtn}
+                      activeOpacity={0.85}
+                      disabled={deleting}
+                      onPress={handleRestore}
+                    >
+                      <MaterialIcons name="unarchive" size={18} color="#fff" />
+                      <Text style={s.editProductBtnText}>{deleting ? 'Restoring…' : 'Restore Product'}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={s.editProductBtn}
+                        activeOpacity={0.85}
+                        onPress={() => navigation.navigate('ProductCreationForm', { productId: detail.id })}
+                      >
+                        <MaterialIcons name="edit" size={18} color="#fff" />
+                        <Text style={s.editProductBtnText}>Edit Product</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={s.deleteProductBtn}
+                        activeOpacity={0.85}
+                        onPress={() => setDeleteConfirmVisible(true)}
+                      >
+                        <MaterialIcons name="delete" size={18} color="#fff" />
+                        <Text style={s.editProductBtnText}>Delete Product</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
                 </FeatureGate>
               ) : null}
             </View>
@@ -760,6 +808,21 @@ const s = StyleSheet.create({
     gap: 8,
     ...Platform.select({
       ios: { shadowColor: '#D64545', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+      android: { elevation: 4 },
+    }),
+  },
+  restoreProductBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1F9D55',
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#1F9D55', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
       android: { elevation: 4 },
     }),
   },
