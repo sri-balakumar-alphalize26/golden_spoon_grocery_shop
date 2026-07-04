@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Product form: add an editable "On Hand (Dozens)" box ABOVE the standard
+         "Quantity On Hand". Type dozens -> Quantity On Hand fills in as dozens x 12;
+         on save qty_available's inverse records the inventory adjustment. Same
+         visibility as the on-hand block (storable products, stock managers). -->
+    <record id="product_template_form_view_dozen_display" model="ir.ui.view">
+        <field name="name">product.template.form.dozen.display</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="stock.view_template_property_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@class='o_row' and field[@name='qty_available']]" position="after">
+                <label for="dozen_qty_onhand" string="On Hand (Dozens)" class="oe_inline"
+                       invisible="not is_storable" groups="stock.group_stock_manager"/>
+                <div class="o_row" invisible="not is_storable" groups="stock.group_stock_manager">
+                    <field name="dozen_qty_onhand"/>
+                </div>
+                <label for="dozen_display" string="On Hand (Dozen + Pcs)" class="oe_inline"
+                       invisible="not is_storable" groups="stock.group_stock_user"/>
+                <div class="o_row" invisible="not is_storable" groups="stock.group_stock_user">
+                    <field name="dozen_display"/>
+                </div>
+                <div class="alert alert-danger mt-2 mb-0" role="alert"
+                     invisible="not is_storable" groups="stock.group_stock_manager">
+                    First fill the <b>On Hand (Dozens)</b> field - the
+                    <b>Quantity On Hand</b> gets auto-calculated (Dozens x 12).
+                </div>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Products list: add a "Dozen + Pcs" column. -->
+    <record id="product_template_tree_view_dozen_display" model="ir.ui.view">
+        <field name="name">product.template.list.dozen.display</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_tree_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='name']" position="after">
+                <field name="dozen_display" string="Dozen + Pcs"/>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

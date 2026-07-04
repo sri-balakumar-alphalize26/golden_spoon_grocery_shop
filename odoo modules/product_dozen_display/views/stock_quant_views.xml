@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Inventory adjustment / "On Hand" screen: add a "Counted (Dozens)" box
+         BEFORE the standard Counted Quantity. Typing dozens fills the counted
+         quantity in pieces (1 Dozen = 12), then the built-in Apply records it. -->
+    <record id="view_stock_quant_tree_inventory_editable_dozen" model="ir.ui.view">
+        <field name="name">stock.quant.inventory.list.editable.dozen</field>
+        <field name="model">stock.quant</field>
+        <field name="inherit_id" ref="stock.view_stock_quant_tree_inventory_editable"/>
+        <field name="arch" type="xml">
+            <field name="inventory_quantity" position="before">
+                <field name="dozen_inventory_quantity" string="Counted (Dozens)"
+                       groups="stock.group_stock_manager"/>
+            </field>
+        </field>
+    </record>
+
+</odoo>

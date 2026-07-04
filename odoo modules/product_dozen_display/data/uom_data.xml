@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Auto-ensure the "Dozens" unit exists (1 Dozen = 12 Units). In Odoo 19 units
+         relate directly to a reference unit via relative_uom_id + relative_factor
+         (UoM categories were removed). We reference Odoo's standard Dozen record so
+         it is updated in place instead of creating a confusing duplicate. -->
+    <record id="uom.product_uom_dozen" model="uom.uom">
+        <field name="name">Dozens</field>
+        <field name="relative_uom_id" ref="uom.product_uom_unit"/>
+        <field name="relative_factor" eval="12"/>
+        <field name="active" eval="True"/>
+    </record>
+
+    <!-- Enable the "Units of Measure" feature for all internal users so that
+         Inventory -> Configuration -> Units of Measure is visible on install. -->
+    <record id="base.group_user" model="res.groups">
+        <field name="implied_ids" eval="[(4, ref('uom.group_uom'))]"/>
+    </record>
+
+</odoo>
