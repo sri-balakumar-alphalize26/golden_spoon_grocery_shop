@@ -120,14 +120,12 @@ const ProfileNewScreen = ({ navigation }) => {
 
         {/* Profile card */}
         <View style={styles.card}>
-          {/* Human round avatar — preserved per request (image, not initial) */}
+          {/* Round avatar showing the user's first initial. */}
           <View style={styles.avatarWrapper}>
             <View style={styles.avatarRing}>
-              <Image
-                source={require('@assets/images/Profile/user.png')}
-                style={styles.avatar}
-                resizeMode="contain"
-              />
+              <Text style={styles.avatarInitial}>
+                {(displayName || 'U').trim().charAt(0).toUpperCase()}
+              </Text>
             </View>
           </View>
 
@@ -324,14 +322,17 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#f5f6fa',
+    backgroundColor: NAVY,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  avatar: {
-    width: 76,
-    height: 76,
+  avatarInitial: {
+    fontSize: 36,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    color: '#FFFFFF',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   username: {
     fontSize: 22,
