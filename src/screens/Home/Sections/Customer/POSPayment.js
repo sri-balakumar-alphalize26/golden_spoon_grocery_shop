@@ -566,6 +566,7 @@ const POSPayment = ({ navigation, route }) => {
         // line's original tax rate regardless of the With Tax toggle.
         isReturnLine: !!p.isReturnLine,
         lockedTaxRate: p.lockedTaxRate,
+        lockedTaxIds: p.lockedTaxIds,
       }));
       const partnerId = customer?.id || customer?._id || null;
       const companyId = 1;
@@ -884,7 +885,9 @@ const POSPayment = ({ navigation, route }) => {
                 const lockedRate = Number(l.lockedTaxRate) || 0;
                 const returnHadTax = l.isReturnLine && Math.abs(lockedRate) > 0.0001;
                 const taxIdsForLine = l.isReturnLine
-                  ? (returnHadTax ? (taxInfo?.taxIds || []) : [])
+                  // Return line → the ORIGINAL tax ids (matches the locked rate),
+                  // not the product's current default. Empty if bought untaxed.
+                  ? (returnHadTax ? (Array.isArray(l.lockedTaxIds) && l.lockedTaxIds.length ? l.lockedTaxIds : (taxInfo?.taxIds || [])) : [])
                   : (withTaxMode ? (taxInfo?.taxIds || []) : []);
                 // Return lines: incl = subtotal × (1 + locked rate) for the
                 // current returned qty. New lines: recompute incl when tax is on.

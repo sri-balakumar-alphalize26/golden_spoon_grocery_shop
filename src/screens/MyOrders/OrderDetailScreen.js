@@ -205,6 +205,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
         // the CURRENT returned quantity, so tax scales if the qty is changed.
         lockedTaxRate: excl ? (incl - excl) / excl : 0,
         lockedTaxAmount: incl - excl,
+        // The ORIGINAL tax ids so Odoo books exactly the tax paid (not the
+        // product's current default, which may have changed since the sale).
+        lockedTaxIds: Array.isArray(l.tax_ids) ? l.tax_ids : [],
       });
       console.log('[RETURN TAX] return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
     });

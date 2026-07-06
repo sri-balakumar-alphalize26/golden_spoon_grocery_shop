@@ -214,6 +214,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
           // the current returned quantity so tax scales with qty.
           base.lockedTaxRate = excl ? (incl - excl) / excl : 0;
           base.lockedTaxAmount = incl - excl;
+          base.lockedTaxIds = Array.isArray(l.tax_ids) ? l.tax_ids : [];
           console.log('[RETURN TAX] (list) return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
         }
         addProduct(base);
