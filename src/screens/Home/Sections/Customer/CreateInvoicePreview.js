@@ -11,7 +11,7 @@ import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml, fetchAppPaperSize } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
@@ -74,6 +74,19 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // Download / Print chip. Holds the *pending action* until the picker
   // resolves to a width in mm; then the matching `runX(mm)` fires.
   const [sizePicker, setSizePicker] = useState(null);
+  // Default receipt-size config from Invoice Settings (pos.invoice.settings via
+  // RPC). When enabled, the action chips skip the picker and use `mm` directly.
+  // Re-read on focus so an admin change in Invoice Settings takes effect.
+  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null });
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    fetchAppPaperSize().then((cfg) => {
+      if (!alive) return;
+      console.log('[PAPER SIZE] CreateInvoicePreview loaded config =', cfg);
+      setPaperCfg(cfg);
+    });
+    return () => { alive = false; };
+  }, []));
 
   // Itemised pos.payment records pulled from Odoo for this order. When the
   // order was paid via the partial-payment popup this returns 2+ entries
@@ -407,6 +420,21 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     }
   };
 
+  // Entry point for the three action chips. When a default size is configured
+  // we run the action immediately; otherwise we open the size picker (which
+  // then dispatches to the same runX via `sizePicker`).
+  const startAction = (action) => {
+    if (paperCfg.enabled && paperCfg.mm) {
+      console.log(`[PAPER SIZE] ${action}: using default ${paperCfg.mm}mm (skipping picker)`);
+      if (action === 'preview') runPreview(paperCfg.mm);
+      else if (action === 'download') runDownload(paperCfg.mm);
+      else if (action === 'print') runPrint(paperCfg.mm);
+    } else {
+      console.log(`[PAPER SIZE] ${action}: no default set — opening size picker`);
+      setSizePicker(action);
+    }
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: NAVY }} edges={['top']}>
       <StatusBar barStyle="light-content" backgroundColor={NAVY} />
@@ -689,7 +717,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
         <View style={s.footer}>
           <View style={s.actionRow}>
             <TouchableOpacity
-              onPress={() => setSizePicker('preview')}
+              onPress={() => startAction('preview')}
               activeOpacity={0.85}
               style={[s.actionChip, s.previewChip]}
             >
@@ -721,7 +749,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             ) : null}
 
             <TouchableOpacity
-              onPress={() => setSizePicker('download')}
+              onPress={() => startAction('download')}
               disabled={downloading}
               activeOpacity={0.85}
               style={[s.actionChip, s.downloadChip, downloading && { opacity: 0.6 }]}
@@ -737,7 +765,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setSizePicker('print')}
+              onPress={() => startAction('print')}
               disabled={printing}
               activeOpacity={0.85}
               style={[s.actionChip, s.printChip, printing && { opacity: 0.6 }]}

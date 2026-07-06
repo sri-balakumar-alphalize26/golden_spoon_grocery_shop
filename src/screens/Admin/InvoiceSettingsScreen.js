@@ -18,6 +18,7 @@ import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
 import { fetchInvoiceSettings, saveInvoiceSettings, fetchInvoiceCompanies, fetchInvoiceLogo } from '@api/services/generalApi';
+import PaperSizeModal, { SIZES } from '@components/Modal/PaperSizeModal';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -53,6 +54,13 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [showCustomerSig, setShowCustomerSig] = useState(true);
   const [showCashierSig, setShowCashierSig] = useState(true);
   const [showFooter, setShowFooter] = useState(true);
+
+  // Default receipt size (per-company). Applies to BOTH the dynamic and the
+  // normal receipt: when on, the app skips its size prompt and prints at
+  // defaultSizeStr (mm as a string, matching the Odoo selection).
+  const [useDefaultSize, setUseDefaultSize] = useState(false);
+  const [defaultSizeStr, setDefaultSizeStr] = useState('80');
+  const [sizePickerVisible, setSizePickerVisible] = useState(false);
 
   // Logo edit state: pickedLogoUri (local preview) + logoBase64
   //   undefined = leave unchanged, false = clear, string = new base64.
@@ -111,6 +119,8 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setShowCustomerSig(s.show_customer_signature !== false);
         setShowCashierSig(s.show_shop_owner_signature !== false);
         setShowFooter(s.show_footer !== false);
+        setUseDefaultSize(!!s.use_default_paper_size);
+        setDefaultSizeStr(s.default_paper_size || '80');
       } catch (e) {
         console.error('[InvoiceSettings] bootstrap', e);
         showToastMessage(e?.message || 'Failed to load settings');
@@ -165,6 +175,8 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           show_customer_signature: !!showCustomerSig,
           show_shop_owner_signature: !!showCashierSig,
           show_footer: !!showFooter,
+          use_default_paper_size: !!useDefaultSize,
+          default_paper_size: defaultSizeStr || '80',
         },
         logoBase64, // undefined = unchanged, false = clear, string = new
       });
@@ -209,6 +221,12 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     ? { uri: pickedLogoUri }
     : (showExisting && existingLogoB64 ? { uri: `data:image/png;base64,${existingLogoB64}` } : null);
 
+  // Human label for the current default size, e.g. "A5 (148 mm)".
+  const sizeLabel = (val) => {
+    const found = SIZES.find((x) => String(x.mm) === String(val));
+    return found ? `${found.inch} (${found.mm} mm)` : `${val} mm`;
+  };
+
   const Row = ({ label, help, value, onValueChange }) => (
     <View style={styles.toggleRow}>
       <View style={{ flex: 1, paddingRight: 10 }}>
@@ -239,6 +257,31 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
             </View>
             <Switch value={useDynamic} onValueChange={setUseDynamic} trackColor={{ true: ORANGE }} />
           </View>
+        </View>
+
+        {/* Receipt Size — ALWAYS visible (applies to both the dynamic and the
+            normal receipt). When on, the app skips its size prompt on
+            Preview / Download / Print and prints at the chosen size. */}
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1, paddingRight: 10 }}>
+              <Text style={styles.sectionTitle}>Receipt Size</Text>
+              <Text style={styles.toggleHelp}>
+                On → Preview, Download and Print use the size below without asking each time.
+                Off → the app asks for a size each time.
+              </Text>
+            </View>
+            <Switch value={useDefaultSize} onValueChange={setUseDefaultSize} trackColor={{ true: ORANGE }} />
+          </View>
+          {useDefaultSize ? (
+            <>
+              <Text style={styles.label}>Default Size</Text>
+              <TouchableOpacity style={styles.picker} onPress={() => setSizePickerVisible(true)}>
+                <Text style={styles.pickerValue}>{sizeLabel(defaultSizeStr)}</Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color="#666" />
+              </TouchableOpacity>
+            </>
+          ) : null}
         </View>
 
         {!useDynamic ? (
@@ -348,6 +391,12 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      <PaperSizeModal
+        isVisible={sizePickerVisible}
+        onSelect={(mm) => { setDefaultSizeStr(String(mm)); setSizePickerVisible(false); }}
+        onCancel={() => setSizePickerVisible(false)}
+      />
 
       <Modal
         isVisible={companyPickerVisible}

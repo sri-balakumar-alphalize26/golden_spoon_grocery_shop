@@ -11,12 +11,11 @@ def compute_size_css(width):
     """
     width = int(width or 80)
     receipt_width = max(10, width - 8)  # 4mm margin x 2, like the app
-    if width == 210:
-        page_size_css = 'A4'
-    elif width == 148:
-        page_size_css = 'A5'
-    else:
-        page_size_css = '%dmm auto' % width
+    # Every size uses a fixed width + auto height so the receipt renders as ONE
+    # continuously-growing page. Named sheets (A4/A5) have a fixed physical
+    # height, which split a tall receipt across 2 pages on Download/Print — the
+    # `<width>mm auto` form avoids that for all sizes (matches the app Preview).
+    page_size_css = '%dmm auto' % width
     if width >= 148:
         sig_max_h = 70
     elif width <= 58:

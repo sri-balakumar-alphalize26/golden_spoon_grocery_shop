@@ -4208,6 +4208,47 @@ export const checkDynamicInvoiceInstalled = async () => {
   }
 };
 
+// The per-device... actually per-COMPANY default receipt size, read from
+// pos.invoice.settings.app_paper_size (company-scoped, POS-user readable like
+// app_dynamic_enabled). Returns { enabled, mm } — when enabled, the receipt
+// screens skip the size picker on Preview/Download/Print and render at `mm`.
+// Applies whether the app shows the dynamic or the normal receipt. Any failure
+// (module absent / offline) → { enabled:false, mm:null }, so the app falls back
+// to asking each time.
+export const fetchAppPaperSize = async () => {
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'pos.invoice.settings',
+          method: 'app_paper_size',
+          args: [],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 },
+    );
+    if (response.data?.error) {
+      console.warn('[PAPER SIZE] app_paper_size RPC error:', response.data.error?.data?.message || response.data.error?.message);
+      return { enabled: false, mm: null };
+    }
+    const res = response.data?.result || {};
+    const mm = Number(res.size);
+    const cfg = {
+      enabled: !!res.use_default && Number.isFinite(mm) && mm > 0,
+      mm: Number.isFinite(mm) && mm > 0 ? mm : null,
+    };
+    console.log('[PAPER SIZE] fetchAppPaperSize =', cfg);
+    return cfg;
+  } catch (err) {
+    console.warn('[PAPER SIZE] fetchAppPaperSize failed:', err?.message || err);
+    return { enabled: false, mm: null };
+  }
+};
+
 // Fetch the server-rendered dynamic receipt HTML for one order at a given paper
 // width (mm). Returns the HTML string, or null on any failure (module absent,
 // order not yet in Odoo, network) so the caller can fall back to the built-in
@@ -4288,6 +4329,7 @@ const INVOICE_SETTINGS_FIELDS = [
   'use_dynamic_invoice', 'address', 'phone', 'email', 'vat_number',
   'show_logo', 'header_title', 'footer_text', 'show_tax',
   'show_customer_signature', 'show_shop_owner_signature', 'show_footer',
+  'use_default_paper_size', 'default_paper_size',
 ];
 
 const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {

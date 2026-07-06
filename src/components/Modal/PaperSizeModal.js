@@ -7,10 +7,13 @@ import React from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
-const SIZES = [
+// Shared source of truth for the six supported receipt sizes. Also consumed by
+// InvoiceSettingsScreen (the "Receipt Size" default picker) so the config picker
+// and this ad-hoc picker stay in lockstep.
+export const SIZES = [
   { inch: '2 inch',   mm: 50,  sub: '50 mm' },
   { inch: '3 inch',   mm: 76,  sub: '76 mm' },
-  { inch: '3.5 inch', mm: 80,  sub: '80 mm', isDefault: true },
+  { inch: '3.5 inch', mm: 80,  sub: '80 mm' },
   { inch: '4 inch',   mm: 100, sub: '100 mm' },
   { inch: 'A5',       mm: 148, sub: '148 × 210 mm' },
   { inch: 'A4',       mm: 210, sub: '210 × 297 mm' },

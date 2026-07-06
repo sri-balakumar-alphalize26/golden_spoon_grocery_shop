@@ -25,8 +25,22 @@ class PosOrder(models.Model):
     # Backend button -> open the paper-size popup
     # ------------------------------------------------------------------
     def action_open_dynamic_receipt_preview(self):
-        """Open the 'choose receipt size' wizard as a modal for this order."""
+        """Preview the dynamic receipt for this order.
+
+        When the company has a default receipt size set (Invoice Settings →
+        Receipt Size), skip the 'choose size' popup and render straight at that
+        size — mirroring the app, which also skips its size prompt. Otherwise
+        open the size wizard as before.
+        """
         self.ensure_one()
+        settings = self.env['pos.invoice.settings'].get_for_company(
+            self.company_id or self.env.company)
+        if settings.use_default_paper_size:
+            wizard = self.env['pos.dynamic.invoice.wizard'].create({
+                'order_id': self.id,
+                'paper_size': settings.default_paper_size or '80',
+            })
+            return wizard.action_preview()
         return {
             'type': 'ir.actions.act_window',
             'name': 'Preview Receipt (Dynamic)',

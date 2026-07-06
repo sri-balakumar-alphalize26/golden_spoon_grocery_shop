@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -98,6 +98,18 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // Holds the pending action ('preview' | 'download' | 'print') while the
   // PaperSizeModal is open. Cleared when the user picks a size or cancels.
   const [sizePicker, setSizePicker] = useState(null);
+  // Default receipt-size config from Invoice Settings (pos.invoice.settings via
+  // RPC). When enabled, the action chips skip the picker and use `mm` directly.
+  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null });
+  useEffect(() => {
+    let alive = true;
+    fetchAppPaperSize().then((cfg) => {
+      if (!alive) return;
+      console.log('[PAPER SIZE] OrderDetail loaded config =', cfg);
+      setPaperCfg(cfg);
+    });
+    return () => { alive = false; };
+  }, []);
 
   // Return-Products button state — true while the pos.order.refund RPC is in
   // flight so the button can show a spinner and prevent double-taps. The
@@ -321,6 +333,20 @@ const OrderDetailScreen = ({ navigation, route }) => {
       }
     } finally {
       setPrinting(false);
+    }
+  };
+
+  // Entry point for the three action chips. When a default size is configured
+  // we run the action immediately; otherwise we open the size picker.
+  const startAction = (action) => {
+    if (paperCfg.enabled && paperCfg.mm) {
+      console.log(`[PAPER SIZE] ${action}: using default ${paperCfg.mm}mm (skipping picker)`);
+      if (action === 'preview') runPreview(paperCfg.mm);
+      else if (action === 'download') runDownload(paperCfg.mm);
+      else if (action === 'print') runPrint(paperCfg.mm);
+    } else {
+      console.log(`[PAPER SIZE] ${action}: no default set — opening size picker`);
+      setSizePicker(action);
     }
   };
 
@@ -568,7 +594,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
             re-exported from the orders list. */}
         <View style={s.invoiceActionRow}>
           <TouchableOpacity
-            onPress={() => setSizePicker('preview')}
+            onPress={() => startAction('preview')}
             activeOpacity={0.85}
             style={[s.invoiceChip, { borderColor: '#BFDBFE' }]}
           >
@@ -580,7 +606,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
 
           <FeatureGate featureKey="orders.export_pdf">
             <TouchableOpacity
-              onPress={() => setSizePicker('download')}
+              onPress={() => startAction('download')}
               disabled={downloading}
               activeOpacity={0.85}
               style={[s.invoiceChip, { borderColor: '#FED7AA' }, downloading && { opacity: 0.6 }]}
@@ -597,7 +623,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
           </FeatureGate>
 
           <TouchableOpacity
-            onPress={() => setSizePicker('print')}
+            onPress={() => startAction('print')}
             disabled={printing}
             activeOpacity={0.85}
             style={[s.invoiceChip, { borderColor: '#E9D5FF' }, printing && { opacity: 0.6 }]}

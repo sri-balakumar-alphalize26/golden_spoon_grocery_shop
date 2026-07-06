@@ -1,5 +1,9 @@
+import logging
+
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
+
+_logger = logging.getLogger(__name__)
 
 # Defaults used when a company's settings record is first auto-created. The
 # header title / footer text mirror the hardcoded strings the app's built-in
@@ -71,6 +75,26 @@ class PosInvoiceSettings(models.Model):
         help='When off, the footer text (e.g. "Thank you for your purchase!") is hidden.',
     )
 
+    # --- Default receipt size (applies to BOTH the dynamic and the normal
+    # receipt) ---
+    # When on, the app skips its paper-size prompt on Preview / Download / Print
+    # and renders at `default_paper_size` (mm). Independent of use_dynamic_invoice
+    # so it works even when the app is on its built-in receipt.
+    use_default_paper_size = fields.Boolean(
+        string='Use Default Receipt Size', default=False,
+        help='When on, the app prints at the size below without asking each time. '
+             'Applies whether the app shows the dynamic or the normal receipt.',
+    )
+    # Same six sizes as the app's PaperSizeModal / the wizard's paper_size.
+    default_paper_size = fields.Selection([
+        ('50', '2 inch (50 mm)'),
+        ('76', '3 inch (76 mm)'),
+        ('80', '3.5 inch (80 mm)'),
+        ('100', '4 inch (100 mm)'),
+        ('148', 'A5 (148 mm)'),
+        ('210', 'A4 (210 mm)'),
+    ], string='Default Receipt Size', default='80')
+
     _sql_constraints = [
         ('company_uniq', 'unique(company_id)',
          'There can only be one dynamic invoice settings record per company.'),
@@ -97,6 +121,25 @@ class PosInvoiceSettings(models.Model):
         not installed) makes the RPC error and the app falls back to False.
         """
         return bool(self.get_for_company(self.env.company).use_dynamic_invoice)
+
+    @api.model
+    def app_paper_size(self):
+        """Per-company default receipt size for the mobile app.
+
+        Returns {'use_default': bool, 'size': '80'}: when use_default is on the
+        app skips its paper-size prompt on Preview / Download / Print and renders
+        at `size` (mm). Company-scoped like app_dynamic_enabled, and independent
+        of use_dynamic_invoice so it applies to BOTH the dynamic and the normal
+        receipt. A missing model (module absent) makes the RPC error and the app
+        falls back to asking each time.
+        """
+        rec = self.get_for_company(self.env.company)
+        result = {
+            'use_default': bool(rec.use_default_paper_size),
+            'size': rec.default_paper_size or '80',
+        }
+        _logger.info('[PAPER SIZE] app_paper_size -> %s', result)
+        return result
 
     @api.constrains('company_id')
     def _check_one_per_company(self):

@@ -15,6 +15,12 @@
                     <group>
                         <field name="use_dynamic_invoice" widget="boolean_toggle"/>
                     </group>
+                    <!-- Default receipt size: always visible (applies to both the
+                         dynamic and the normal receipt). -->
+                    <group string="Receipt Size">
+                        <field name="use_default_paper_size" widget="boolean_toggle"/>
+                        <field name="default_paper_size" invisible="not use_default_paper_size"/>
+                    </group>
                     <group invisible="not use_dynamic_invoice">
                         <group string="Branding">
                             <field name="company_id"/>

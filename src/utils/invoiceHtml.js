@@ -77,12 +77,11 @@ export const generateInvoiceHtml = ({
   // always 100% of its half-column (object-fit:contain keeps the aspect
   // ratio), so it scales with every supported paper width.
   const sigMaxH = pageWidth >= 148 ? 70 : (pageWidth <= 58 ? 38 : 50);
-  // A4/A5 use the CSS named page size so printers paginate onto fixed-height
-  // sheets. Thermal widths keep `auto` height for one continuous strip.
-  const pageSizeCss =
-    pageWidth === 210 ? 'A4' :
-    pageWidth === 148 ? 'A5' :
-    `${pageWidth}mm auto`;
+  // Every size uses fixed width + `auto` height so the receipt is ONE
+  // continuously-growing page. Named sheets (A4/A5) have a fixed physical
+  // height, which splits a tall receipt onto a 2nd page on Download/Print;
+  // `<width>mm auto` keeps it to a single page for every size.
+  const pageSizeCss = `${pageWidth}mm auto`;
   const orderRef = extractOrderRef(orderName, orderId);
   // Use the active currency (set by post-login fetch and boot-time hydration
   // from AsyncStorage) and the active "Product Price" decimal precision pulled
