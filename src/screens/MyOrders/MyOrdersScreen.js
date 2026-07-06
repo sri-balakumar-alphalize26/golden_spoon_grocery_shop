@@ -188,9 +188,12 @@ const MyOrdersScreen = ({ navigation, route }) => {
         Toast.show({ type: 'error', text1: 'Failed to load order', position: 'bottom' });
         return;
       }
+      // A refund/return order (negative total or "… REFUND" name) → the register
+      // CTA should be "Payment" (pay out the return), like Odoo — not "Place Order".
+      const isRefundOrder = Number(item.amount_total) < 0 || /REFUND/i.test(item.name || detail.name || '');
       clearProducts();
       (detail.lines || []).forEach((l) => {
-        addProduct({
+        const base = {
           id: l.product_id,
           remoteId: l.product_id,
           name: l.name,
@@ -200,8 +203,25 @@ const MyOrdersScreen = ({ navigation, route }) => {
           qty: l.qty,
           image_url: l.image_url || null,
           discount_percent: l.discount,
-        });
+        };
+        if (isRefundOrder) {
+          // Lock this returned line's tax to what was originally paid (from the
+          // order details) so the pay screen keeps it regardless of With Tax.
+          const excl = Number(l.price_subtotal) || 0;
+          const incl = Number(l.price_subtotal_incl) || 0;
+          base.isReturnLine = true;
+          // Rate the original was taxed at (0 = bought without tax); applied to
+          // the current returned quantity so tax scales with qty.
+          base.lockedTaxRate = excl ? (incl - excl) / excl : 0;
+          base.lockedTaxAmount = incl - excl;
+          console.log('[RETURN TAX] (list) return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
+        }
+        addProduct(base);
       });
+      if (isRefundOrder) {
+        const lockedTaxTotal = (detail.lines || []).reduce((s, l) => s + ((Number(l.price_subtotal_incl) || 0) - (Number(l.price_subtotal) || 0)), 0);
+        console.log('[RETURN TAX] (list) loaded', (detail.lines || []).length, 'return lines | locked tax total =', Math.round(lockedTaxTotal * 1000) / 1000);
+      }
       const sessionId = Array.isArray(item.session_id) ? item.session_id[0] : null;
       const registerId = Array.isArray(item.config_id) ? item.config_id[0] : null;
       const registerName = Array.isArray(item.config_id) ? item.config_id[1] : '';
@@ -212,6 +232,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
         existingOrderId: item.id,
         existingOrderRef: item.pos_reference || detail.pos_reference || '',
         userName: detail.user?.name || '',
+        isRefund: isRefundOrder,
       });
     } catch (e) {
       Toast.show({ type: 'error', text1: 'Could not open order', text2: e?.message || '', position: 'bottom' });
@@ -241,10 +262,17 @@ const MyOrdersScreen = ({ navigation, route }) => {
           </View>
           <View style={styles.orderHeaderInfo}>
             <Text style={styles.orderName}>{item.name}</Text>
-            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.state) + '20' }]}>
-              <Text style={[styles.statusText, { color: getStatusColor(item.state) }]}>
-                {getStatusLabel(item.state)}
-              </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.state) + '20' }]}>
+                <Text style={[styles.statusText, { color: getStatusColor(item.state) }]}>
+                  {getStatusLabel(item.state)}
+                </Text>
+              </View>
+              {(/REFUND/i.test(item.name || '') || Number(item.amount_total) < 0) ? (
+                <View style={[styles.statusBadge, { backgroundColor: '#FEE2E2' }]}>
+                  <Text style={[styles.statusText, { color: '#B91C1C' }]}>REFUND</Text>
+                </View>
+              ) : null}
             </View>
           </View>
           <Text style={styles.orderAmount}>{formatCurrency(item.amount_total, currency || { symbol: '', name: '', position: 'before' })}</Text>

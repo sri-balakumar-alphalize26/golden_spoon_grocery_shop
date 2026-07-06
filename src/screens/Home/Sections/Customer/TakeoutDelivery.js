@@ -54,6 +54,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
   // and it navigates here with this param. We treat it the same as a
   // just-created draft.
   const existingOrderId = route?.params?.existingOrderId || null;
+  // Refund flow (from Return Products): the order already exists, so the CTA is
+  // "Payment" (pay out the return), not "Place Order".
+  const isRefundFlow = route?.params?.isRefund || false;
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [customDiscountInput, setCustomDiscountInput] = useState('');
@@ -856,8 +859,8 @@ const TakeoutDelivery = ({ navigation, route }) => {
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <MaterialIcons name="check-circle" size={20} color="#fff" style={{ marginRight: 6 }} />
-                <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>Place Order</Text>
+                <MaterialIcons name={isRefundFlow ? 'payments' : 'check-circle'} size={20} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={{ fontWeight: '900', fontSize: 16, color: '#fff', letterSpacing: 0.3 }}>{isRefundFlow ? 'Payment' : 'Place Order'}</Text>
               </>
             )}
           </TouchableOpacity>

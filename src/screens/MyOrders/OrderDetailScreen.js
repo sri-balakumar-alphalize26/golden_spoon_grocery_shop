@@ -20,10 +20,11 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
+import { useProductStore } from '@stores/product';
 import Toast from 'react-native-toast-message';
 import { FeatureGate } from '@components/FeatureGate';
 import LocationModal from '@components/Modal/LocationModal';
@@ -117,6 +118,10 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // the app's popups (LogoutModal / Close Register).
   const [refunding, setRefunding] = useState(false);
   const [returnConfirmVisible, setReturnConfirmVisible] = useState(false);
+  // "Invalid Operation" popup (like Odoo) shown when the POS session is closed
+  // and a return is attempted.
+  const [invalidOpMsg, setInvalidOpMsg] = useState('');
+  const { addProduct, clearProducts } = useProductStore();
   // Force-hide flag for the Return Products button on already-refunded
   // orders. Three signals feed into it:
   //  1. Local AsyncStorage marker — instant truth if we created the refund
@@ -167,8 +172,80 @@ const OrderDetailScreen = ({ navigation, route }) => {
     && (Number(order.refund_orders_count) || 0) === 0
     && ['paid', 'done', 'invoiced'].includes(order.state);
 
-  const handleReturnProducts = () => {
+  // Refund orders are created as unpaid drafts. "Payment" loads the refund
+  // lines into the cart and opens the pay flow (same path as resuming a draft
+  // order from the Orders list), so the cashier can pay out the return.
+  const isUnpaidRefund = isRefund && order?.state === 'draft';
+
+  // Load an order's lines into the cart and open the register/pay screen
+  // (same path as resuming a draft from the Orders list). Used both by the
+  // refund-order Payment button and right after a return is created.
+  const openPayFlowForOrder = (ord) => {
+    if (!ord) return;
+    clearProducts();
+    (ord.lines || []).forEach((l) => {
+      // For a return, lock this line's tax to what was ORIGINALLY paid, read
+      // straight from the order details: (tax-incl − tax-excl) per line. This
+      // survives into POSPayment so the return line's tax is fixed and the
+      // With Tax toggle can't change it. (Values are negative for a refund.)
+      const excl = Number(l.price_subtotal) || 0;
+      const incl = Number(l.price_subtotal_incl) || 0;
+      addProduct({
+        id: l.product_id,
+        remoteId: l.product_id,
+        name: l.name,
+        price: l.price_unit,
+        price_unit: l.price_unit,
+        quantity: l.qty,
+        qty: l.qty,
+        image_url: l.image_url || null,
+        discount_percent: l.discount,
+        isReturnLine: true,
+        // Rate the original was taxed at (0 = bought without tax). Applied to
+        // the CURRENT returned quantity, so tax scales if the qty is changed.
+        lockedTaxRate: excl ? (incl - excl) / excl : 0,
+        lockedTaxAmount: incl - excl,
+      });
+      console.log('[RETURN TAX] return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
+    });
+    const lockedTaxTotal = (ord.lines || []).reduce((s, l) => s + ((Number(l.price_subtotal_incl) || 0) - (Number(l.price_subtotal) || 0)), 0);
+    console.log('[RETURN TAX] loaded', (ord.lines || []).length, 'return lines | locked tax total =', Math.round(lockedTaxTotal * 1000) / 1000);
+    // fetchPosOrderDetailOdoo returns session/config as {id,name} objects; the
+    // list fetch returns session_id/config_id as [id,name] arrays. Support both.
+    const sessionId = ord.session?.id ?? (Array.isArray(ord.session_id) ? ord.session_id[0] : null);
+    const registerId = ord.config?.id ?? (Array.isArray(ord.config_id) ? ord.config_id[0] : null);
+    const registerName = ord.config?.name ?? (Array.isArray(ord.config_id) ? ord.config_id[1] : '');
+    console.log('[Refund] → register/pay flow | existingOrderId', ord.id, '| lines', (ord.lines || []).length, '| sessionId', sessionId, '| registerId', registerId);
+    navigation.navigate('TakeoutDelivery', {
+      sessionId,
+      registerId,
+      registerName,
+      existingOrderId: ord.id,
+      existingOrderRef: ord.pos_reference || '',
+      userName: ord.user?.name || '',
+      isRefund: true,   // so the register shows Payment (not Place Order)
+    });
+  };
+
+  const handlePayRefund = () => {
+    console.log('[Refund] pay refund tapped — order', order?.id, '| state', order?.state);
+    openPayFlowForOrder(order);
+  };
+
+  const handleReturnProducts = async () => {
     if (!order || !canRefund || refunding) return;
+    // Odoo requires an OPEN session on the order's POS to return products.
+    // Resolve the config server-side (the cached order may lack config_id) and
+    // show the same "Invalid Operation" popup when it's closed.
+    setRefunding(true);
+    const { open, configName } = await isPosSessionOpenForOrder({ orderId: order.id });
+    setRefunding(false);
+    console.log('[Refund] return tapped — order', order.id, '| config', configName, '| sessionOpen', open);
+    if (!open) {
+      console.log('[Refund] session closed → showing Invalid Operation popup');
+      setInvalidOpMsg(`To return product(s), you need to open a session in the POS ${configName}`);
+      return;
+    }
     setReturnConfirmVisible(true);
   };
 
@@ -182,7 +259,13 @@ const OrderDetailScreen = ({ navigation, route }) => {
     try {
       const resp = await refundPosOrder({ orderId: order.id });
       if (resp?.error) {
-        Toast.show({ type: 'error', text1: 'Refund failed', text2: resp.error.message || 'Try again later', position: 'bottom' });
+        const msg = resp.error.message || '';
+        // Session-closed error → show Odoo's "Invalid Operation" popup, not a toast.
+        if (/open a session|need to open|session/i.test(msg)) {
+          setInvalidOpMsg(msg);
+        } else {
+          Toast.show({ type: 'error', text1: 'Refund failed', text2: msg || 'Try again later', position: 'bottom' });
+        }
         return;
       }
       // Persist that this order has been refunded so the next visit instantly
@@ -192,10 +275,25 @@ const OrderDetailScreen = ({ navigation, route }) => {
       Toast.show({
         type: 'success',
         text1: 'Products returned',
-        text2: 'A refund order has been created.',
+        text2: 'Refund order created — ready for payment.',
         position: 'bottom',
       });
-      navigation.goBack();
+      // The refund order now exists in the Orders list (a real pos.order). Take
+      // the cashier straight into the register/pay screen loaded with it (like
+      // Odoo), so they can pay out the return immediately.
+      console.log('[Refund] refund created for order', order.id, '→ newOrderId', resp.newOrderId);
+      if (resp.newOrderId) {
+        const newDetail = await fetchPosOrderDetailOdoo(resp.newOrderId);
+        if (newDetail && !newDetail.error) {
+          openPayFlowForOrder(newDetail);
+        } else {
+          console.log('[Refund] could not load refund order → going back to list');
+          navigation.goBack();
+        }
+      } else {
+        console.log('[Refund] no newOrderId returned → going back to list');
+        navigation.goBack();
+      }
     } catch (e) {
       Toast.show({ type: 'error', text1: 'Refund failed', text2: e?.message || 'Try again later', position: 'bottom' });
     } finally {
@@ -680,6 +778,21 @@ const OrderDetailScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           ) : null}
 
+          {/* Payment — shown on an unpaid refund order (like Odoo's refund
+              order form). Opens the pay flow so the cashier pays out the return. */}
+          {isUnpaidRefund ? (
+            <TouchableOpacity
+              onPress={handlePayRefund}
+              activeOpacity={0.85}
+              style={[s.invoiceChip, { borderColor: '#BBF7D0' }]}
+            >
+              <View style={s.invoiceChipIcon}>
+                <MaterialIcons name="payments" size={20} color="#166534" />
+              </View>
+              <Text style={s.invoiceChipText}>Payment</Text>
+            </TouchableOpacity>
+          ) : null}
+
           {/* Location chip — opens the same popup as the post-payment
               receipt. Disabled (greyed) when this order didn't capture
               GPS (placed before the feature shipped, or permission was
@@ -808,6 +921,37 @@ const OrderDetailScreen = ({ navigation, route }) => {
                 <Text style={s.returnConfirmBtnDangerText}>RETURN</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Invalid Operation — session closed. Mirrors Odoo's dialog: big
+          left-aligned title, X in the corner, message, and a Close button. */}
+      <Modal
+        visible={!!invalidOpMsg}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setInvalidOpMsg('')}
+      >
+        <View style={s.invalidOpBg}>
+          <View style={s.invalidOpCard}>
+            <View style={s.invalidOpHeader}>
+              <Text style={s.invalidOpTitle}>Invalid Operation</Text>
+              <TouchableOpacity
+                onPress={() => setInvalidOpMsg('')}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MaterialIcons name="close" size={22} color="#374151" />
+              </TouchableOpacity>
+            </View>
+            <Text style={s.invalidOpBody}>{invalidOpMsg}</Text>
+            <TouchableOpacity
+              onPress={() => setInvalidOpMsg('')}
+              style={s.invalidOpBtn}
+              activeOpacity={0.85}
+            >
+              <Text style={s.invalidOpBtnText}>Close</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1051,6 +1195,59 @@ const s = StyleSheet.create({
   },
 
   // ── Return Products confirmation modal — LogoutModal-style ───────────────
+  // Invalid Operation popup — Odoo-style dialog.
+  invalidOpBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  invalidOpCard: {
+    width: '100%',
+    maxWidth: 460,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingVertical: 20,
+    paddingHorizontal: 22,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  invalidOpHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  invalidOpTitle: {
+    flex: 1,
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111827',
+    paddingRight: 12,
+  },
+  invalidOpBody: {
+    fontSize: 14,
+    color: '#374151',
+    lineHeight: 20,
+    marginBottom: 22,
+  },
+  invalidOpBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: NAVY,
+    borderRadius: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+  },
+  invalidOpBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
   returnConfirmBg: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.55)',

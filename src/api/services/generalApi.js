@@ -648,7 +648,9 @@ export const submitPosOrderToOdoo = async ({
     // Odoo tax ids per line (empty when "Without Tax" was selected). We
     // never rely on Odoo's auto-fill from product.taxes_id because
     // sync_from_ui in 18+ leaves it empty otherwise.
-    const ids = withTax === false
+    // Lines flagged `lockTax` (return lines) keep their tax_ids even when the
+    // global "With Tax" toggle is off — the returned item's tax is fixed.
+    const ids = (withTax === false && !l.lockTax)
       ? []
       : (Array.isArray(l.taxIds) ? l.taxIds : []);
     vals.tax_ids = [[6, 0, ids]];
@@ -2341,6 +2343,50 @@ export const refundPosOrder = async ({ orderId } = {}) => {
     return { success: true, newOrderId, action };
   } catch (e) {
     return { error: { message: e?.message || 'Refund failed', original: e?.odoo || e } };
+  }
+};
+
+// True when the given POS config has an OPEN session — Odoo requires one to
+// return products (else it raises "To return product(s), you need to open a
+// session in the POS ..."). Fail-open (return true) when we can't determine, so
+// the refund RPC remains the final authority.
+export const isPosSessionOpen = async ({ configId } = {}) => {
+  if (!configId) return true;
+  try {
+    const cnt = await _closeCallKw(
+      'pos.session', 'search_count',
+      [[['config_id', '=', Number(configId)], ['state', '=', 'opened']]],
+    );
+    const open = Number(cnt) > 0;
+    console.log('[Refund] session open for config', configId, '→', open);
+    return open;
+  } catch (e) {
+    console.warn('[Refund] session check failed:', e?.message);
+    return true;
+  }
+};
+
+// Resolve the order's POS config SERVER-SIDE (the app's cached order object may
+// not carry config_id) and report whether that config has an open session, plus
+// the config name for the "Invalid Operation" message. Fail-open on any error.
+export const isPosSessionOpenForOrder = async ({ orderId } = {}) => {
+  if (!orderId) return { open: true, configName: 'POS' };
+  try {
+    const rows = await _closeCallKw('pos.order', 'read', [[Number(orderId)], ['config_id']]);
+    const cfg = rows && rows[0] && rows[0].config_id;
+    const configId = Array.isArray(cfg) ? cfg[0] : null;
+    const configName = Array.isArray(cfg) ? cfg[1] : 'POS';
+    if (!configId) return { open: true, configName };
+    const cnt = await _closeCallKw(
+      'pos.session', 'search_count',
+      [[['config_id', '=', Number(configId)], ['state', '=', 'opened']]],
+    );
+    const open = Number(cnt) > 0;
+    console.log('[Refund] session open for order', orderId, 'config', configId, configName, '→', open);
+    return { open, configName };
+  } catch (e) {
+    console.warn('[Refund] session check (order) failed:', e?.message);
+    return { open: true, configName: 'POS' };
   }
 };
 
@@ -8144,7 +8190,7 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
         method: 'read',
         args: [order.lines],
         kwargs: {
-          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name'],
+          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name', 'tax_ids'],
         },
       },
     }, { headers: { 'Content-Type': 'application/json' } });
@@ -8197,6 +8243,7 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           discount: Number(l.discount) || 0,
           price_subtotal: Number(l.price_subtotal) || 0,
           price_subtotal_incl: Number(l.price_subtotal_incl) || 0,
+          tax_ids: Array.isArray(l.tax_ids) ? l.tax_ids : [],
           // Prefer the embedded base64 (works offline / no auth header issues);
           // fall back to the Web URL if image_128 wasn't returned for this product.
           image_url: base64Url || (pid ? `${baseUrl}/web/image?model=product.product&id=${pid}&field=image_128` : null),

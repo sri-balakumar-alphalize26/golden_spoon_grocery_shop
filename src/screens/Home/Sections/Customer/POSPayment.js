@@ -109,6 +109,9 @@ const POSPayment = ({ navigation, route }) => {
   // per line, so Odoo books a zero-tax order (receipt/invoice/accounting
   // all stay aligned with what the cashier sees on screen).
   const [withTaxMode, setWithTaxMode] = useState(true);
+  // Optional Payment Reference (like Odoo's Register Payment popup). Stored as
+  // the pos.payment name so it shows on the payment record.
+  const [paymentReference, setPaymentReference] = useState('');
   // Map of product.product id → { rate, priceInclude } for the cart's
   // products. Hydrated lazily on mount via fetchProductTaxMap so we can
   // render a real tax row in the totals breakdown.
@@ -354,6 +357,19 @@ const POSPayment = ({ navigation, route }) => {
   // price_include products already carry the tax inside `price`, so the
   // visible tax = gross - gross / (1 + rate/100). Tax-exclusive: rate × gross.
   const computeLineTax = (p) => {
+    // Return lines carry LOCKED tax read from the original order details
+    // (incl − excl); it's fixed regardless of the With Tax toggle. When the
+    // item was bought without tax, lockedTaxAmount is 0 → stays normal.
+    if (p.isReturnLine) {
+      // Locked ORIGINAL tax rate applied to the CURRENT returned quantity, so
+      // the tax reflects only what's being returned (scales if qty changes).
+      const price = Number(p.price) || 0;
+      const qty = Number(p.quantity || p.qty || 0);
+      const gross = price * qty * (1 - (effectiveDiscountPercent || 0) / 100);
+      const rate = Number(p.lockedTaxRate) || 0;
+      const tax = gross * rate;
+      return { info: { rate: rate ? Math.round(rate * 100) : null, priceInclude: false, locked: true }, gross, tax, lineTotal: gross + tax };
+    }
     const info = productTaxMap[Number(p.remoteId || p.id)];
     if (!info || !info.rate) return { info, gross: 0, tax: 0, lineTotal: 0 };
     const price = Number(p.price) || 0;
@@ -369,10 +385,11 @@ const POSPayment = ({ navigation, route }) => {
   // Tax amount — sum across cart. Toggle off → 0, so it disappears from
   // the breakdown AND we ship tax_ids=[] to Odoo.
   const taxAmount = (() => {
-    if (!withTaxMode) return 0;
     let sum = 0;
     for (const p of products || []) {
-      sum += computeLineTax(p).tax;
+      // Return lines are always counted (locked); new lines only when the
+      // With Tax toggle is on. computeLineTax handles the return-line rate.
+      if (p.isReturnLine || withTaxMode) sum += computeLineTax(p).tax;
     }
     return Math.round(sum * 1000) / 1000;
   })();
@@ -381,13 +398,18 @@ const POSPayment = ({ navigation, route }) => {
   // Discount (15%) styling). Mixed-rate carts get a plain "Tax" label —
   // the per-line popup is where the full breakdown lives.
   const commonTaxRate = (() => {
-    if (!withTaxMode) return null;
     let r = null;
     for (const p of products || []) {
-      const info = productTaxMap[Number(p.remoteId || p.id)];
-      if (!info || !info.rate) continue;
-      if (r === null) { r = info.rate; continue; }
-      if (info.rate !== r) return null;
+      // Return lines always count; new lines only when With Tax is on.
+      let rate = null;
+      if (p.isReturnLine) {
+        rate = computeLineTax(p).info?.rate || null;
+      } else if (withTaxMode) {
+        rate = productTaxMap[Number(p.remoteId || p.id)]?.rate || null;
+      }
+      if (!rate) continue;
+      if (r === null) { r = rate; continue; }
+      if (rate !== r) return null;
     }
     return r;
   })();
@@ -540,6 +562,10 @@ const POSPayment = ({ navigation, route }) => {
         // amount input modes converge to the same payload here.
         discount: effectiveDiscountPercent || 0,
         customer_note: p.customer_note || '',
+        // Return-line tax lock — forwarded so the submit builder keeps this
+        // line's original tax rate regardless of the With Tax toggle.
+        isReturnLine: !!p.isReturnLine,
+        lockedTaxRate: p.lockedTaxRate,
       }));
       const partnerId = customer?.id || customer?._id || null;
       const companyId = 1;
@@ -830,6 +856,10 @@ const POSPayment = ({ navigation, route }) => {
             const authUser = useAuthStore.getState().user;
             const cashierUserId = (authUser && (authUser.id || authUser.uid)) || false;
             const orderUid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const returnLineCount = (products || []).filter((p) => p.isReturnLine).length;
+            console.log('[RETURN TAX] paying — withTax:', withTaxMode, '| returnLines:', returnLineCount,
+              '| taxAmount:', taxAmount, '| total:', total,
+              '| lines:', lines.map((l) => ({ name: l.name, ret: !!l.isReturnLine, rate: l.lockedTaxRate, qty: l.qty })));
             const submitResp = await submitPosOrderToOdoo({
               orderUid,
               sessionId,
@@ -848,17 +878,23 @@ const POSPayment = ({ navigation, route }) => {
                 // reliably on sync_from_ui).
                 const pid = Number(l.product_id);
                 const taxInfo = productTaxMap[pid];
-                const taxIdsForLine = withTaxMode
-                  ? (taxInfo?.taxIds || [])
-                  : [];
-                // Recompute line subtotal incl when tax is on so the totals
-                // shipped match what we display: tax-exclusive lines pick up
-                // the tax on top, price_include lines stay equal to gross.
-                const priceSubtotalIncl = (withTaxMode && taxInfo?.rate)
-                  ? (taxInfo.priceInclude
-                      ? lineSubtotal
-                      : lineSubtotal * (1 + taxInfo.rate / 100))
-                  : lineSubtotal;
+                // Return lines keep their ORIGINAL tax regardless of the toggle:
+                // taxed if the original was taxed (lockedTaxAmount≠0), else none.
+                // New lines follow the With Tax toggle.
+                const lockedRate = Number(l.lockedTaxRate) || 0;
+                const returnHadTax = l.isReturnLine && Math.abs(lockedRate) > 0.0001;
+                const taxIdsForLine = l.isReturnLine
+                  ? (returnHadTax ? (taxInfo?.taxIds || []) : [])
+                  : (withTaxMode ? (taxInfo?.taxIds || []) : []);
+                // Return lines: incl = subtotal × (1 + locked rate) for the
+                // current returned qty. New lines: recompute incl when tax is on.
+                const priceSubtotalIncl = l.isReturnLine
+                  ? lineSubtotal * (1 + lockedRate)
+                  : ((withTaxMode && taxInfo?.rate)
+                      ? (taxInfo.priceInclude
+                          ? lineSubtotal
+                          : lineSubtotal * (1 + taxInfo.rate / 100))
+                      : lineSubtotal);
                 return {
                   product_id: l.product_id,
                   qty: l.qty,
@@ -869,12 +905,14 @@ const POSPayment = ({ navigation, route }) => {
                   name: l.name,
                   customer_note: l.customer_note || '',
                   taxIds: taxIdsForLine,
+                  // Keep this line's tax_ids even when With Tax is globally off.
+                  lockTax: !!l.isReturnLine,
                 };
               }),
               payments: payments.map((p) => ({
                 amount: p.amount,
                 payment_method_id: p.paymentMethodId,
-                name: p.paymentMode || 'payment',
+                name: (paymentReference && paymentReference.trim()) || p.paymentMode || 'payment',
               })),
               amountTotal: total,
               amountTax: taxAmount,
@@ -1392,7 +1430,7 @@ const POSPayment = ({ navigation, route }) => {
 
         <Text style={styles.totalLabel}>TOTAL</Text>
         <Text style={styles.totalValue}>{displayNum(total)}</Text>
-        {(computedDiscountAmount > 0 || (withTaxMode && taxAmount > 0)) ? (
+        {(computedDiscountAmount > 0 || taxAmount !== 0) ? (
           <View style={styles.totalBreakdown}>
             {/* Every row reserves an 18px chevron slot at its right edge so
                 the price texts form a single straight column regardless of
@@ -1412,7 +1450,7 @@ const POSPayment = ({ navigation, route }) => {
                 <View style={styles.totalBreakdownChevronSlot} />
               </View>
             ) : null}
-            {withTaxMode && taxAmount > 0 ? (
+            {taxAmount !== 0 ? (
               <TouchableOpacity
                 onPress={() => setTaxDetailsModalVisible(true)}
                 activeOpacity={0.7}
@@ -1699,6 +1737,19 @@ const POSPayment = ({ navigation, route }) => {
               </TouchableOpacity>
             </View>
           ) : null}
+
+          {/* Payment Reference — optional, saved as the payment name (like
+              Odoo's Register Payment popup). */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginHorizontal: 12, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, backgroundColor: '#fff' }}>
+            <MaterialIcons name="sell" size={16} color={NAVY} />
+            <TextInput
+              style={{ flex: 1, fontSize: 14, color: '#111827', paddingVertical: 0 }}
+              value={paymentReference}
+              onChangeText={setPaymentReference}
+              placeholder="Payment Reference (optional)"
+              placeholderTextColor="#9ca3af"
+            />
+          </View>
 
           {/* Inline red hint when Credit (single or split slot) is selected
               but no customer has been picked yet — the cashier sees the
