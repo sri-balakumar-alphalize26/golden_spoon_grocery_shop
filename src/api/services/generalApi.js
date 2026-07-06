@@ -1146,34 +1146,96 @@ export const fetchJournalEntriesOdoo = async ({
 // view: every debit/credit movement against a partner with the running
 // balance the cashier can audit. Returns lines ordered by partner then
 // date so the screen can group them client-side.
+// Account-type groups behind the Partner Ledger "Accounts" filter.
+const _PL_ACCOUNT_TYPES = {
+  receivable: ['asset_receivable'],
+  payable: ['liability_payable'],
+  pl: ['income', 'income_other', 'expense', 'expense_other', 'expense_depreciation', 'expense_direct_cost'],
+};
+
+// Shared domain for the Partner Ledger — reused by the paginated line fetch AND
+// the read_group totals fetch so the two never disagree. `filters` mirrors
+// Odoo's Partner Ledger filter column (see PartnerLedgerFiltersModal):
+//   { posting[], toReview, reconcile[], journalTypes[], accountGroups[] }
+const _partnerLedgerDomain = ({ searchText = '', partnerId = null, filters = {} } = {}) => {
+  const f = filters || {};
+
+  const domain = [
+    // Scope to the active company — the context's allowed_company_ids alone
+    // lets an admin see other companies' duplicate lines, inflating counts.
+    ['company_id', '=', getActiveCompanyId()],
+  ];
+  // Posting status — restrict ONLY when explicitly selected. The screen seeds
+  // the default (Posted); clearing the Posted chip → empty → no restriction, so
+  // draft entries appear too (matches Odoo clearing its Posted filter).
+  if (f.posting && f.posting.length) {
+    domain.push(['parent_state', 'in', f.posting]);
+  }
+  // NB: no `partner_id != false` — Odoo's Partner Ledger includes a "None"
+  // group (lines with no partner) and counts it in the grand total.
+  // Account scope. Default = Odoo's Partner Ledger: reconcilable accounts
+  // (receivable, payable, Outstanding Receipts/Payments) — this keeps balances
+  // meaningful and excludes P&L + non-reconcilable cash. When the user picks
+  // Payable/Receivable/P&L, narrow by account_type instead.
+  const groups = (f.accountGroups && f.accountGroups.length) ? f.accountGroups : [];
+  if (groups.length) {
+    const acctTypes = [];
+    groups.forEach((g) => (_PL_ACCOUNT_TYPES[g] || []).forEach((t) => acctTypes.push(t)));
+    if (acctTypes.length) domain.push(['account_id.account_type', 'in', acctTypes]);
+  } else {
+    domain.push(['account_id.reconcile', '=', true]);
+  }
+  if (partnerId) {
+    domain.push(['partner_id', '=', Number(partnerId)]);
+  }
+  if (f.toReview) {
+    domain.push(['move_id.checked', '=', false]);
+  }
+  if (f.reconcile && f.reconcile.includes('unreconciled')) {
+    domain.push(['reconciled', '=', false]);
+  }
+  if (f.reconcile && f.reconcile.includes('with_residual')) {
+    domain.push(['amount_residual', '!=', 0]);
+  }
+  if (f.journalTypes && f.journalTypes.length) {
+    domain.push(['journal_id.type', 'in', f.journalTypes]);
+  }
+  // Date ranges — each { field, start, end } (field is 'date' or
+  // 'move_id.invoice_date'); the modal computes the range from the chosen
+  // month/quarter/year period.
+  if (Array.isArray(f.dateRanges)) {
+    f.dateRanges.forEach((dr) => {
+      if (dr && dr.field && dr.start && dr.end) {
+        domain.push([dr.field, '>=', dr.start], [dr.field, '<=', dr.end]);
+      }
+    });
+  }
+  if (searchText && String(searchText).trim()) {
+    const term = String(searchText).trim();
+    domain.push('|', '|',
+      ['partner_id.name', 'ilike', term],
+      ['move_id.name', 'ilike', term],
+      ['account_id.name', 'ilike', term],
+    );
+  }
+  // "See own data only" scope — restrict to lines whose parent move was
+  // authored by the logged-in user. Traversing via `move_id` works because
+  // every account.move.line has a move_id ref.
+  if (_ownDataOnly() && _currentUid()) {
+    domain.push(['move_id.invoice_user_id', '=', _currentUid()]);
+  }
+  return domain;
+};
+
 export const fetchPartnerLedgerOdoo = async ({
   offset = 0,
   limit = 80,
   searchText = '',
   partnerId = null,
+  filters = {},
 } = {}) => {
   try {
-    const domain = [
-      ['partner_id', '!=', false],
-      ['parent_state', '=', 'posted'],
-    ];
-    if (partnerId) {
-      domain.push(['partner_id', '=', Number(partnerId)]);
-    }
-    if (searchText && String(searchText).trim()) {
-      const term = String(searchText).trim();
-      domain.push('|', '|',
-        ['partner_id.name', 'ilike', term],
-        ['move_id.name', 'ilike', term],
-        ['account_id.name', 'ilike', term],
-      );
-    }
-    // "See own data only" scope — restrict to lines whose parent move
-    // was authored by the logged-in user. Traversing via `move_id` works
-    // because every account.move.line has a move_id ref.
-    if (_ownDataOnly() && _currentUid()) {
-      domain.push(['move_id.invoice_user_id', '=', _currentUid()]);
-    }
+    const domain = _partnerLedgerDomain({ searchText, partnerId, filters });
     const companyId = getActiveCompanyId();
     const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
@@ -1199,10 +1261,110 @@ export const fetchPartnerLedgerOdoo = async ({
       console.warn('[fetchPartnerLedgerOdoo] Odoo error:', resp.data.error);
       return [];
     }
-    return resp.data?.result || [];
+    const result = resp.data?.result || [];
+    console.log('[PARTNER LEDGER] lines fetched =', result.length, '| offset', offset, '| filters', JSON.stringify(filters || {}));
+    return result;
   } catch (e) {
     console.error('fetchPartnerLedgerOdoo exception:', e?.message || e);
     return [];
+  }
+};
+
+// Partner Ledger totals via read_group — accurate over the WHOLE dataset
+// regardless of the line pagination. Returns per-partner Debit/Credit/Balance
+// (+ line count) and the grand total (sum of all groups), matching Odoo's
+// group-header subtotals and the bottom total row.
+export const fetchPartnerLedgerTotalsOdoo = async ({ searchText = '', partnerId = null, filters = {} } = {}) => {
+  const empty = { perPartner: {}, grand: { debit: 0, credit: 0, balance: 0 } };
+  try {
+    const domain = _partnerLedgerDomain({ searchText, partnerId, filters });
+    const companyId = getActiveCompanyId();
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move.line',
+        method: 'read_group',
+        args: [domain, ['debit', 'credit', 'balance'], ['partner_id']],
+        kwargs: { lazy: false, context: { allowed_company_ids: [companyId] } },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      console.warn('[fetchPartnerLedgerTotalsOdoo] Odoo error:', resp.data.error);
+      return empty;
+    }
+    const groups = resp.data?.result || [];
+    const perPartner = {};
+    const grand = { debit: 0, credit: 0, balance: 0 };
+    for (const g of groups) {
+      // No-partner group → key 'none' (Odoo shows it as "None").
+      const pid = Array.isArray(g.partner_id) ? String(g.partner_id[0]) : 'none';
+      const debit = Number(g.debit) || 0;
+      const credit = Number(g.credit) || 0;
+      // Derive balance from debit-credit — some Odoo versions don't aggregate
+      // the `balance` field in read_group (returns 0), but debit-credit is the
+      // exact definition of an account.move.line's balance.
+      const balance = debit - credit;
+      const count = Number(g.__count) || 0;
+      perPartner[pid] = { debit, credit, balance, count };
+      grand.debit += debit;
+      grand.credit += credit;
+      grand.balance += balance;
+    }
+    console.log('[PARTNER LEDGER] totals — partners =', Object.keys(perPartner).length,
+      '| grand debit', grand.debit, 'credit', grand.credit, 'balance', grand.balance);
+    return { perPartner, grand };
+  } catch (e) {
+    console.error('fetchPartnerLedgerTotalsOdoo exception:', e?.message || e);
+    return empty;
+  }
+};
+
+// Distinct months/years that actually have data (for the Date filter's period
+// sub-options — like Odoo, which lists only used months). Derived from the
+// earliest and latest posting date under the current (non-date) filters.
+export const fetchPartnerLedgerPeriodsOdoo = async ({ filters = {} } = {}) => {
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  try {
+    // Discover the range over everything EXCEPT the date filter itself.
+    const domain = _partnerLedgerDomain({ filters: { ...(filters || {}), dateRanges: [] } });
+    const companyId = getActiveCompanyId();
+    const readEnd = async (order) => {
+      const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+        jsonrpc: '2.0', method: 'call',
+        params: {
+          model: 'account.move.line', method: 'search_read', args: [domain],
+          kwargs: { fields: ['date'], order, limit: 1, context: { allowed_company_ids: [companyId] } },
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
+      return resp.data?.result?.[0]?.date || null;
+    };
+    const [minDate, maxDate] = await Promise.all([readEnd('date asc'), readEnd('date desc')]);
+    if (!minDate || !maxDate) return { months: [], years: [] };
+    const [minY, minM] = minDate.split('-').map(Number);
+    const [maxY, maxM] = maxDate.split('-').map(Number);
+    const months = [];
+    const yearsSet = new Set();
+    let y = maxY, m = maxM;
+    while (y > minY || (y === minY && m >= minM)) {
+      yearsSet.add(y);
+      const mm = String(m).padStart(2, '0');
+      const last = String(new Date(y, m, 0).getDate()).padStart(2, '0');
+      months.push({
+        key: `mo:${y}-${mm}`,
+        label: y === maxY ? MONTHS[m - 1] : `${MONTHS[m - 1]} ${y}`,
+        start: `${y}-${mm}-01`, end: `${y}-${mm}-${last}`,
+      });
+      m -= 1; if (m === 0) { m = 12; y -= 1; }
+    }
+    const years = Array.from(yearsSet).sort((a, b) => b - a).map((yy) => ({
+      key: `yr:${yy}`, label: String(yy), start: `${yy}-01-01`, end: `${yy}-12-31`,
+    }));
+    console.log('[PARTNER LEDGER] periods — range', minDate, '→', maxDate, '| months', months.length, '| years', years.length);
+    return { months, years };
+  } catch (e) {
+    console.error('fetchPartnerLedgerPeriodsOdoo exception:', e?.message || e);
+    return { months: [], years: [] };
   }
 };
 
