@@ -34,7 +34,7 @@ import axios from 'axios';
 import { getOdooUrl, getOdooDb } from '@api/config/odooConfig';
 import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
-import { formatCurrency } from '@utils/currency';
+import { formatCurrency, getDigits } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 
 // The default export from odooConfig is an empty string (runtime URL is only
@@ -438,12 +438,23 @@ const POSPayment = ({ navigation, route }) => {
   const paidAmount = isRefund ? -Math.abs(paidAmountRaw) : paidAmountRaw;
   const remaining = total - paidAmount;
 
+  // Round to the displayed currency precision before any amount comparison.
+  // The cashier types the value they SEE (formatCurrency rounds to
+  // getDigits('Product Price')), but `total` carries un-rounded float residue
+  // (un-rounded subtotal + 3dp tax), so a bare `paidAmount < total` wrongly
+  // reads the correct amount as short. Comparing rounded values matches the
+  // on-screen number. Mirrors the tolerance the split/credit checks already use.
+  const roundMoney = (n) => {
+    const f = Math.pow(10, getDigits('Product Price', 2));
+    return Math.round((Number(n) || 0) * f) / f;
+  };
+
   const handleKeypad = (val) => {
     if (val === 'C') return setInputAmount('');
     if (val === '⌫') return setInputAmount(inputAmount.slice(0, -1));
-    if (val === '+10') return setInputAmount((parseFloat(inputAmount) || 0 + 10).toString());
-    if (val === '+20') return setInputAmount((parseFloat(inputAmount) || 0 + 20).toString());
-    if (val === '+50') return setInputAmount((parseFloat(inputAmount) || 0 + 50).toString());
+    if (val === '+10') return setInputAmount(((parseFloat(inputAmount) || 0) + 10).toString());
+    if (val === '+20') return setInputAmount(((parseFloat(inputAmount) || 0) + 20).toString());
+    if (val === '+50') return setInputAmount(((parseFloat(inputAmount) || 0) + 50).toString());
     if (val === '+/-') {
       if (inputAmount.startsWith('-')) setInputAmount(inputAmount.slice(1));
       else setInputAmount('-' + inputAmount);
@@ -812,7 +823,7 @@ const POSPayment = ({ navigation, route }) => {
           });
           const totalPaymentAmount = payments.reduce((sum, p) => sum + p.amount, 0);
           console.log('💰 Total payment amount:', totalPaymentAmount, 'Order total:', total);
-          if (totalPaymentAmount < total) {
+          if (roundMoney(totalPaymentAmount) < roundMoney(total)) {
             console.log('⚠️ Payment amount does not cover order total. Skipping submit.');
             Toast.show({
               type: 'error',
@@ -1324,7 +1335,8 @@ const POSPayment = ({ navigation, route }) => {
 
   const amountInsufficient =
     (paymentMode === 'cash' || paymentMode === 'card') &&
-    (isRefund ? paidAmount > total : paidAmount < total);
+    (isRefund ? roundMoney(paidAmount) > roundMoney(total)
+              : roundMoney(paidAmount) < roundMoney(total));
 
   // Credit (Customer Account) needs a customer — applies whether the
   // cashier picked Credit as the single payment mode or as one slot of a
