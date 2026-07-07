@@ -31,7 +31,7 @@ const DeviceQRScannerScreen = () => {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [statusMsg, setStatusMsg] = useState('Point camera at the QR code on the Odoo screen');
+  const [statusMsg, setStatusMsg] = useState('Point camera at the QR code on the admin screen');
   const [wrongDbInfo, setWrongDbInfo] = useState(null);
   // Generic slide-up dialog (logout popup style) — replaces native Alert.alert.
   // { title, message, confirmLabel, cancelLabel, onConfirm, onCancel }
@@ -44,7 +44,7 @@ const DeviceQRScannerScreen = () => {
   const resetScanner = () => {
     setScanned(false);
     setLoading(false);
-    setStatusMsg('Point camera at the QR code on the Odoo screen');
+    setStatusMsg('Point camera at the QR code on the admin screen');
   };
 
   const handleBarCodeScanned = async ({ data }) => {
@@ -113,7 +113,7 @@ const DeviceQRScannerScreen = () => {
         console.log('[DEVICE] QR scan rejected — already used');
         setDialog({
           title: 'QR Already Used',
-          message: 'This QR code has already been used. Tap New in Odoo to generate a fresh QR, then scan it.',
+          message: 'This QR code has already been used. Tap New in the admin panel to generate a fresh QR, then scan it.',
           confirmLabel: 'Try Again', cancelLabel: 'Cancel',
           onConfirm: resetScanner, onCancel: () => navigation.goBack(),
         });
@@ -190,7 +190,7 @@ const DeviceQRScannerScreen = () => {
           ) : null}
           <Text style={styles.statusText}>{statusMsg}</Text>
           <Text style={styles.subStatusText}>
-            Open Odoo → Device Registry → New Device — scan the QR shown there
+            Open the admin panel → Device Registry → New Device — scan the QR shown there
           </Text>
         </View>
       </View>

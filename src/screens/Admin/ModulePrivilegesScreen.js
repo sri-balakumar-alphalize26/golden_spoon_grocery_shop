@@ -445,7 +445,7 @@ const ModulePrivilegesScreen = ({ navigation }) => {
                   <Icon name="inbox" size={42} color="#cbd5e1" />
                   <Text style={styles.bigEmptyTitle}>No modules yet</Text>
                   <Text style={styles.bigEmptySub}>
-                    Tap "+ Add Module" above to grant this user CRUD on an installed Odoo app.
+                    Tap "+ Add Module" above to grant this user CRUD on an installed app module.
                   </Text>
                 </View>
               )

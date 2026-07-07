@@ -373,7 +373,7 @@ const LoginScreenOdoo = () => {
 
           navigation.navigate("AppNavigator");
         } else {
-          showToastMessage("Invalid Odoo credentials");
+          showToastMessage("Invalid credentials");
         }
       } else {
         // UAE admin fallback

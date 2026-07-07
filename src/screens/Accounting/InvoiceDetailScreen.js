@@ -166,7 +166,7 @@ const InvoiceDetailScreen = ({ navigation, route }) => {
     }
     const base = getOdooUrl();
     if (!base) {
-      showToastMessage('Odoo URL not set');
+      showToastMessage('Server URL not set');
       return;
     }
     setDownloading(true);

@@ -638,7 +638,7 @@ const AppFeaturesScreen = ({ navigation }) => {
                 This user is an administrator — privilege rules will NOT apply
               </Text>
               <Text style={styles.adminWarnBody}>
-                {selectedUser.name} is a member of Role / Administrator. Odoo
+                {selectedUser.name} is a member of Role / Administrator. The system
                 bypasses all access control checks for administrators at the
                 framework level, so toggles below will have no effect.
               </Text>
@@ -720,7 +720,7 @@ const AppFeaturesScreen = ({ navigation }) => {
                   <Icon name="inbox" size={42} color="#cbd5e1" />
                   <Text style={styles.bigEmptyTitle}>No features defined yet</Text>
                   <Text style={styles.bigEmptySub}>
-                    Create one in Odoo: Privilege Manager → App Features.
+                    Create one in the admin panel: Privilege Manager → App Features.
                   </Text>
                 </View>
               )

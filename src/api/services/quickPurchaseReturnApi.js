@@ -40,7 +40,7 @@ const callKw = async (model, method, args, kwargs = {}) => {
   const resp = await axios.post(url, payload, { headers: headers(), withCredentials: true });
   if (resp.data?.error) {
     const err = resp.data.error;
-    const msg = err?.data?.message || err?.message || 'Odoo error';
+    const msg = err?.data?.message || err?.message || 'Server error';
     const wrapped = new Error(msg);
     wrapped.odoo = err;
     throw wrapped;

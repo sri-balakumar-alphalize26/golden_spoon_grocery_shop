@@ -39,7 +39,7 @@
          render/print it instantly. Rendered directly for the app via
          get_dynamic_receipt_html, and wrapped by the backend report below.
          Expects d, receipt_width, page_size_css and sig_max_h in context. -->
-    <template id="report_pos_dynamic_invoice_doc">
+    <template id="report_pos_dynamic_invoice_standard_doc">
                     <div class="pos_dyn_inv_root">
                         <style>
                             @page { size: <t t-esc="page_size_css"/>; margin: 4mm; }
@@ -177,6 +177,134 @@
                             </t>
                         </div>
                     </div>
+    </template>
+
+    <!-- Dispatcher: the app RPC and the backend wrapper both t-call
+         report_pos_dynamic_invoice_doc; it picks the layout from the settings
+         template (Cash Memo vs the standard branded receipt). -->
+    <template id="report_pos_dynamic_invoice_doc">
+        <t t-if="d['invoice_template'] == 'cash_memo'">
+            <t t-call="pos_dynamic_invoice.report_pos_dynamic_invoice_cash_memo_doc"/>
+        </t>
+        <t t-else="">
+            <t t-call="pos_dynamic_invoice.report_pos_dynamic_invoice_standard_doc"/>
+        </t>
+    </template>
+
+    <!-- Cash Memo: bilingual (English/Arabic) Oman invoice, auto-filled from the
+         order. Self-contained inline style + base64 images, no /web/assets. -->
+    <template id="report_pos_dynamic_invoice_cash_memo_doc">
+        <div class="cm_root">
+            <style>
+                /* Cash Memo is a full-page A4 invoice — it always renders at A4,
+                   ignoring the thermal default receipt size (which would squeeze
+                   it into a strip and wrap every line). */
+                @page { size: A4 portrait; margin: 8mm; }
+                .cm_root { width:194mm; max-width:100%; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; }
+                .cm_root .cmhead { display:flex; justify-content:space-between; align-items:stretch; background:#eef0ef; border:1px solid #cfcfcf; padding:6px 10px; }
+                .cm_root .cmhead .col { font-size:11px; color:#1a7a3f; line-height:1.5; white-space:nowrap; }
+                .cm_root .cmhead .en { text-align:left; }
+                .cm_root .cmhead .ar { text-align:right; direction:rtl; }
+                .cm_root .cmhead .center { text-align:center; flex:1; padding:0 10px; display:flex; flex-direction:column; justify-content:center; }
+                .cm_root .cmhead .center .name-ar { font-size:20px; font-weight:700; color:#1a7a3f; line-height:1.2; }
+                .cm_root .cmhead .center .name-en { font-size:15px; font-weight:700; color:#1a7a3f; margin-top:3px; letter-spacing:0.3px; }
+                .cm_root .cmhead .logo { max-height:38px; margin:0 auto 3px; display:block; }
+                .cm_root .cmtitle { text-align:center; font-weight:700; font-size:16px; letter-spacing:1px; margin:14px 0 12px; }
+                .cm_root .field { font-size:13px; margin:9px 0; display:flex; align-items:flex-end; }
+                .cm_root .field .lbl { white-space:nowrap; }
+                .cm_root .field .dots { border-bottom:1px dotted #333; flex:1; margin-left:6px; min-height:16px; padding:0 4px 1px; }
+                .cm_root .row2 { display:flex; justify-content:space-between; gap:40px; }
+                .cm_root .row2 .field { flex:1; }
+                .cm_root table.items { width:100%; border-collapse:collapse; margin-top:6px; table-layout:fixed; }
+                .cm_root table.items th, .cm_root table.items td { border:1px solid #333; padding:5px 6px; font-size:12px; vertical-align:top; word-wrap:break-word; }
+                .cm_root table.items th { text-align:center; font-weight:700; background:#fff; }
+                .cm_root table.items td.c { text-align:center; }
+                .cm_root table.items td.r { text-align:right; }
+                /* Tall filler cell keeps the column rules running down the page,
+                   like the printed blank form. */
+                .cm_root table.items td.filler { height:300px; }
+                .cm_root .sl { width:8%; } .cm_root .desc { width:38%; } .cm_root .sz { width:10%; } .cm_root .qt { width:13%; } .cm_root .rt { width:14%; } .cm_root .am { width:17%; }
+                .cm_root .foot { display:flex; }
+                .cm_root .foot .words { flex:1; border:1px solid #333; border-top:0; padding:8px; font-size:12px; }
+                .cm_root .foot .totals { width:34%; }
+                .cm_root .foot .totals .trow { display:flex; border:1px solid #333; border-top:0; }
+                .cm_root .foot .totals .trow .k { width:45%; border-right:1px solid #333; padding:6px 8px; font-size:12px; font-weight:700; }
+                .cm_root .foot .totals .trow .v { flex:1; padding:6px 8px; text-align:right; font-size:12px; }
+                .cm_root .sign { display:flex; justify-content:space-between; margin-top:26px; font-size:13px; }
+            </style>
+
+            <div class="cmhead">
+                <div class="col en">
+                    <div>C.R. : <t t-esc="d['cr_number']"/></div>
+                    <div>P.O Box : <t t-esc="d['po_box']"/></div>
+                    <div>Postal Code : <t t-esc="d['postal_code']"/></div>
+                    <div>Sultanate of Oman</div>
+                    <div>GSM : <t t-esc="d['gsm_mobile']"/></div>
+                </div>
+                <div class="center">
+                    <t t-if="d['show_logo'] and d['logo']">
+                        <img class="logo" t-att-src="'data:image/png;base64,' + d['logo']"/>
+                    </t>
+                    <div class="name-ar"><t t-esc="d['company_name_ar']"/></div>
+                    <div class="name-en"><t t-esc="d['company_name_en'] or d['company']['name']"/></div>
+                </div>
+                <div class="col ar">
+                    <div>س.ت : <t t-esc="d['cr_number']"/></div>
+                    <div>ص.ب : <t t-esc="d['po_box']"/></div>
+                    <div>الرمز البريدي : <t t-esc="d['postal_code']"/></div>
+                    <div>سلطنة عمان</div>
+                    <div>نقال : <t t-esc="d['gsm_mobile']"/></div>
+                </div>
+            </div>
+
+            <div class="cmtitle">CASH MEMO</div>
+
+            <div class="row2">
+                <div class="field"><span class="lbl">No:</span><span class="dots"><t t-esc="d['order_ref']"/></span></div>
+                <div class="field"><span class="lbl">Date:</span><span class="dots"><t t-esc="d['date']"/></span></div>
+            </div>
+            <div class="field"><span class="lbl">Name:</span><span class="dots"><t t-esc="d['customer']"/></span></div>
+            <div class="field"><span class="lbl">Address:</span><span class="dots"><t t-esc="d['customer_address']"/></span></div>
+
+            <table class="items">
+                <thead>
+                    <tr>
+                        <th class="sl">Sl No</th><th class="desc">Description</th><th class="sz">Size</th><th class="qt">Quantity</th><th class="rt">Rate</th><th class="am">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <t t-foreach="d['items']" t-as="item">
+                        <tr>
+                            <td class="c"><t t-esc="item['num']"/></td>
+                            <td><t t-esc="item['name']"/></td>
+                            <td class="c"></td>
+                            <td class="c"><t t-esc="item['qty']"/></td>
+                            <td class="r"><t t-esc="item['unit_f']"/></td>
+                            <td class="r"><t t-esc="item['total_f']"/></td>
+                        </tr>
+                    </t>
+                    <!-- Filler row: keeps the six column rules running to the
+                         foot, matching the printed blank form. -->
+                    <tr>
+                        <td class="filler"></td><td></td><td></td><td></td><td></td><td></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="foot">
+                <div class="words">In Words: <t t-esc="d['amount_in_words']"/></div>
+                <div class="totals">
+                    <div class="trow"><div class="k">Total</div><div class="v"><t t-esc="d['total_f']"/></div></div>
+                    <div class="trow"><div class="k">Advance</div><div class="v"><t t-esc="d['advance_f']"/></div></div>
+                    <div class="trow"><div class="k">Due</div><div class="v"><t t-esc="d['due_f']"/></div></div>
+                </div>
+            </div>
+
+            <div class="sign">
+                <div>Cashier: ...............................</div>
+                <div>Customer: ...............................</div>
+            </div>
+        </div>
     </template>
 
     <!-- Backend report: wraps the self-contained receipt body in Odoo's

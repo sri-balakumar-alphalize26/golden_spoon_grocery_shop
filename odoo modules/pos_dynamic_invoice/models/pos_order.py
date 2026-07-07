@@ -204,6 +204,29 @@ class PosOrder(models.Model):
         company = self.company_id or self.env.company
         settings = self.env['pos.invoice.settings'].get_for_company(company)
 
+        # Common keys the dispatcher + Cash Memo template read (present in EVERY
+        # branch, including the normal-mode early return below).
+        data['invoice_template'] = settings.invoice_template
+        data['company_name_ar'] = settings.company_name_ar or ''
+        # Custom English name for the Cash Memo; blank -> the company's own name.
+        data['company_name_en'] = settings.company_name_en or company.name or ''
+        data['cr_number'] = settings.cr_number or ''
+        data['po_box'] = settings.po_box or ''
+        data['postal_code'] = settings.postal_code or ''
+        data['gsm_mobile'] = settings.gsm or ''
+        currency = self.currency_id or company.currency_id
+        fmt = self._receipt_money_formatter()
+        try:
+            data['amount_in_words'] = currency.amount_to_text(self.amount_total or 0.0)
+        except Exception:
+            data['amount_in_words'] = ''
+        data['advance_f'] = fmt(self.amount_paid or 0.0)
+        data['due_f'] = fmt((self.amount_total or 0.0) - (self.amount_paid or 0.0))
+        partner = self.partner_id
+        data['customer_address'] = ', '.join(
+            p for p in [getattr(partner, 'street', ''), getattr(partner, 'street2', ''), getattr(partner, 'city', '')] if p
+        ) if partner else ''
+
         # NORMAL MODE (switch OFF): render the plain receipt — the same look as
         # the app's built-in HTML receipt (res.company details, default title/
         # footer, no logo, no VAT line, no terms). So the backend preview shows

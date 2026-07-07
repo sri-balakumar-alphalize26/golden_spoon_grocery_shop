@@ -202,7 +202,7 @@ const DeviceSetupScreen = () => {
       if (msg.includes('timeout') || err.code === 'ECONNABORTED') {
         showToastMessage('Connection timed out. Check your network and server URL.');
       } else if (isNetworkError) {
-        showToastMessage('Cannot reach server. Check the URL and ensure Odoo is running.');
+        showToastMessage('Cannot reach server. Check the URL and ensure the server is running.');
       } else {
         showToastMessage(`Error: ${msg}`);
       }
@@ -399,7 +399,7 @@ const DeviceSetupScreen = () => {
         <StyledConfirmModal
           isVisible={moduleMissingOpen}
           title="Device Module Not Installed"
-          message={'The "device_login_config" module is not installed on this Odoo server.\n\nPlease ask your admin to install it before configuring this device.'}
+          message={'The "device_login_config" module is not installed on the server.\n\nPlease ask your admin to install it before configuring this device.'}
           confirmLabel="OK"
           onConfirm={() => setModuleMissingOpen(false)}
         />
@@ -407,7 +407,7 @@ const DeviceSetupScreen = () => {
         <StyledConfirmModal
           isVisible={scanPromptOpen}
           title="Ready to scan?"
-          message={`Open Odoo → Device Registry → New Device on the admin screen. A QR code will appear there — scan it next.\n\nDevice Model: ${getDeviceModel()}\nDevice ID: ${deviceUUID}`}
+          message={`Open the admin panel → Device Registry → New Device on the admin screen. A QR code will appear there — scan it next.\n\nDevice Model: ${getDeviceModel()}\nDevice ID: ${deviceUUID}`}
           confirmLabel="Scan QR"
           cancelLabel="Cancel"
           onConfirm={() => {

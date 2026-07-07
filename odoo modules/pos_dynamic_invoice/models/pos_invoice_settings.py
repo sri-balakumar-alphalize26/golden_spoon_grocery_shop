@@ -1,7 +1,7 @@
 import logging
 
-from odoo import api, fields, models
-from odoo.exceptions import ValidationError
+from odoo import _, api, fields, models
+from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -42,6 +42,29 @@ class PosInvoiceSettings(models.Model):
         help='When off, the app shows its normal built-in receipt even though '
              'this module is installed. Turn on to render this dynamic invoice.',
     )
+
+    # 3-way template the app reads via app_dynamic_enabled:
+    #   html      -> the app shows its normal built-in receipt (no server render)
+    #   dynamic   -> the branded dynamic receipt (standard body)
+    #   cash_memo -> the bilingual Oman Cash Memo invoice
+    # `use_dynamic_invoice` is kept in sync (True for dynamic/cash_memo) for any
+    # older readers.
+    invoice_template = fields.Selection([
+        ('html', 'Standard'),
+        ('dynamic', 'Dynamic'),
+        ('cash_memo', 'Cash Memo'),
+    ], string='Invoice Template', default='html')
+
+    # --- Cash Memo header (bilingual Oman invoice; shown when the template is
+    # 'cash_memo'). Defaults from the reference memo; each shop can edit them. ---
+    company_name_ar = fields.Char(string='Company Name (Arabic)', default='منارة الخوض للأعمال ش ش و')
+    # English company name for the Cash Memo header. Blank -> falls back to the
+    # company's own name (res.company).
+    company_name_en = fields.Char(string='Company Name (English)')
+    cr_number = fields.Char(string='C.R. Number', default='1410246')
+    po_box = fields.Char(string='P.O Box', default='112')
+    postal_code = fields.Char(string='Postal Code', default='111')
+    gsm = fields.Char(string='GSM / Mobile', default='77576196')
 
     # --- Branding (each falls back to res.company when blank) ---
     address = fields.Text(string='Address', help='Free-text address; one line per row.')
@@ -112,15 +135,28 @@ class PosInvoiceSettings(models.Model):
             record = self.sudo().create({'company_id': company.id})
         return record
 
+    # Keep the legacy `use_dynamic_invoice` flag in sync with the 3-way template
+    # so any older reader still works: on = Dynamic or Cash Memo, off = Normal.
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            if vals.get('invoice_template'):
+                vals['use_dynamic_invoice'] = vals['invoice_template'] != 'html'
+        return super().create(vals_list)
+
+    def write(self, vals):
+        if 'invoice_template' in vals:
+            vals = dict(vals, use_dynamic_invoice=(vals['invoice_template'] != 'html'))
+        return super().write(vals)
+
     @api.model
     def app_dynamic_enabled(self):
-        """Return True when the mobile app should render the dynamic invoice for
-        the current user's company — i.e. this module is installed AND the
-        'Use Dynamic Invoice on App' switch is on. The app calls this at
-        login/launch/foreground and caches the result; a missing model (module
-        not installed) makes the RPC error and the app falls back to False.
+        """Return True when the mobile app should fetch a server-rendered invoice
+        for the current company — i.e. the template is Dynamic OR Cash Memo (not
+        Normal/HTML). The app caches this; a missing model (module not installed)
+        errors and the app falls back to its built-in receipt.
         """
-        return bool(self.get_for_company(self.env.company).use_dynamic_invoice)
+        return bool(self.get_for_company(self.env.company).invoice_template != 'html')
 
     @api.model
     def app_paper_size(self):
@@ -140,6 +176,30 @@ class PosInvoiceSettings(models.Model):
         }
         _logger.info('[PAPER SIZE] app_paper_size -> %s', result)
         return result
+
+    def action_preview_receipt(self):
+        """Header 'Preview' button: render the currently selected template
+        against the most recent order for this company, so the admin can see
+        the invoice from the settings form itself. Odoo saves the (dirty) form
+        before running this object button, so the preview reflects the picked
+        template and header fields."""
+        self.ensure_one()
+        company = self.company_id or self.env.company
+        PosOrder = self.env['pos.order']
+        # Prefer a real sale (positive total) so the sample doesn't show a
+        # negative refund; fall back to any order if that's all there is.
+        order = PosOrder.search(
+            [('company_id', '=', company.id), ('amount_total', '>', 0)],
+            order='date_order desc', limit=1)
+        if not order:
+            order = PosOrder.search(
+                [('company_id', '=', company.id)],
+                order='date_order desc', limit=1)
+        if not order:
+            raise UserError(_(
+                'Make at least one sale for %s before previewing the invoice.',
+                company.display_name))
+        return order.action_open_dynamic_receipt_preview()
 
     @api.constrains('company_id')
     def _check_one_per_company(self):

@@ -305,7 +305,7 @@ const ExpenseDetailScreen = ({ navigation, route }) => {
     Toast.show({
       type: 'info',
       text1: 'Split Expense',
-      text2: 'Open this expense in the Odoo web client to split it across categories.',
+      text2: 'Open this expense in the web admin to split it across categories.',
       position: 'bottom',
     });
   };

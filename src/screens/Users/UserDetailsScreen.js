@@ -363,7 +363,7 @@ const UserDetailsScreen = ({ navigation, route }) => {
         Toast.show({
           type: 'error',
           text1: mode === 'create' ? 'Create failed' : 'Update failed',
-          text2: result.error?.data?.message || result.error?.message || 'Odoo rejected the request',
+          text2: result.error?.data?.message || result.error?.message || 'The request was rejected',
           position: 'bottom',
         });
         return;

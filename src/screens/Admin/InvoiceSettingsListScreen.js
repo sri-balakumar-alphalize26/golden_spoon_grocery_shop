@@ -41,7 +41,7 @@ const InvoiceSettingsListScreen = ({ navigation }) => {
     try {
       const list = await fetchInvoiceSettingsList();
       if (list === null) {
-        showToastMessage('Dynamic Invoice module not installed on this Odoo');
+        showToastMessage('Dynamic Invoice module is not installed on the server');
         setTimeout(() => navigation.goBack(), 1500);
         return;
       }

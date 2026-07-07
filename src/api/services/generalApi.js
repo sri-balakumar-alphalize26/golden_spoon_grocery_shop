@@ -8,7 +8,7 @@ export const processInvoiceWithPaymentOdoo = async ({ partnerId, products = [], 
     if (!finalJournalId) {
       const journals = await fetchPaymentJournalsOdoo();
       const salesJournal = journals.find(j => j.type === 'sale');
-      if (!salesJournal) throw new Error('No sales journal found in Odoo.');
+      if (!salesJournal) throw new Error('No sales journal found.');
       finalJournalId = salesJournal.id;
       console.log('[PROCESS] Auto-selected sales journal:', salesJournal);
     }
@@ -2034,7 +2034,7 @@ const _closeCallKw = async (model, method, args = [], kwargs = {}) => {
     id: new Date().getTime(),
   }, { headers: { 'Content-Type': 'application/json' } });
   if (resp?.data?.error) {
-    const detail = resp.data.error?.data?.message || resp.data.error?.message || 'Odoo error';
+    const detail = resp.data.error?.data?.message || resp.data.error?.message || 'Server error';
     const err = new Error(detail);
     err.odoo = resp.data.error;
     throw err;
@@ -3053,7 +3053,7 @@ export const deleteProductOdoo = async (productId, templateId = null) => {
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data && resp.data.error) {
       const err = resp.data.error;
-      const e = new Error('Odoo error');
+      const e = new Error('Server error');
       e.payload = err;
       throw e;
     }
@@ -3094,7 +3094,7 @@ export const archiveProductOdoo = async (productId, templateId = null) => {
       params: { model, method, args, kwargs: {} },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data && resp.data.error) {
-      const e = new Error('Odoo error'); e.payload = resp.data.error; throw e;
+      const e = new Error('Server error'); e.payload = resp.data.error; throw e;
     }
     return resp.data.result;
   };
@@ -3128,7 +3128,7 @@ export const unarchiveProductOdoo = async (productId, templateId = null) => {
       params: { model, method, args, kwargs },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data && resp.data.error) {
-      const e = new Error('Odoo error'); e.payload = resp.data.error; throw e;
+      const e = new Error('Server error'); e.payload = resp.data.error; throw e;
     }
     return resp.data.result;
   };
@@ -4538,6 +4538,8 @@ const INVOICE_SETTINGS_FIELDS = [
   'show_logo', 'header_title', 'footer_text', 'show_tax',
   'show_customer_signature', 'show_shop_owner_signature', 'show_footer',
   'use_default_paper_size', 'default_paper_size',
+  // 3-way template picker + Cash Memo header fields.
+  'invoice_template', 'company_name_ar', 'company_name_en', 'cr_number', 'po_box', 'postal_code', 'gsm',
 ];
 
 const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {
@@ -4547,7 +4549,7 @@ const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {
     { headers: { 'Content-Type': 'application/json' }, timeout: 20000 },
   );
   if (resp.data && resp.data.error) {
-    throw new Error(resp.data.error?.data?.message || resp.data.error?.message || 'Odoo error');
+    throw new Error(resp.data.error?.data?.message || resp.data.error?.message || 'Server error');
   }
   return resp.data?.result;
 };
@@ -4659,7 +4661,7 @@ const _manualKw = async (method, args = [], kwargs = {}) => {
     { headers: { 'Content-Type': 'application/json' }, timeout: 30000 },
   );
   if (resp.data && resp.data.error) {
-    throw new Error(resp.data.error?.data?.message || resp.data.error?.message || 'Odoo error');
+    throw new Error(resp.data.error?.data?.message || resp.data.error?.message || 'Server error');
   }
   return resp.data?.result;
 };

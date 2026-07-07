@@ -17,8 +17,9 @@ import { NavigationHeader } from '@components/Header';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { fetchInvoiceSettings, saveInvoiceSettings, fetchInvoiceCompanies, fetchInvoiceLogo } from '@api/services/generalApi';
+import { fetchInvoiceSettings, saveInvoiceSettings, fetchInvoiceCompanies, fetchInvoiceLogo, fetchDynamicReceiptHtml, fetchOrdersOdoo } from '@api/services/generalApi';
 import PaperSizeModal, { SIZES } from '@components/Modal/PaperSizeModal';
+import { WebView } from 'react-native-webview';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -42,7 +43,18 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [errorMsg, setErrorMsg] = useState(null);
 
   // Scalar fields
-  const [useDynamic, setUseDynamic] = useState(false);
+  // 3-way template: 'html' (built-in) | 'dynamic' (branded) | 'cash_memo'.
+  const [invoiceTemplate, setInvoiceTemplate] = useState('html');
+  // Cash Memo header (bilingual Oman invoice).
+  const [companyNameAr, setCompanyNameAr] = useState('');
+  const [companyNameEn, setCompanyNameEn] = useState('');
+  const [crNumber, setCrNumber] = useState('');
+  const [poBox, setPoBox] = useState('');
+  const [postalCode, setPostalCode] = useState('');
+  const [gsm, setGsm] = useState('');
+  // Preview modal
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -90,14 +102,14 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           setId(null);
           setCompanyId(null);
           setCompanyLabel('');
-          setUseDynamic(false);
+          setInvoiceTemplate('html');
           setHeaderTitle('INVOICE / فاتورة');
           setFooterText('Thank you for your purchase!\nشكرا لشرائك!');
           return;
         }
         const s = await fetchInvoiceSettings(recordId);
         if (!s) {
-          showToastMessage('Dynamic Invoice module not installed on this Odoo');
+          showToastMessage('Dynamic Invoice module is not installed on the server');
           setTimeout(() => navigation.goBack(), 1500);
           return;
         }
@@ -107,7 +119,14 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setCompanyLabel(recCompany);
         fetchInvoiceCompanies().then((rows) => setCompanies(rows || [])).catch(() => {});
         fetchInvoiceLogo(s.id).then((b64) => setExistingLogoB64(b64)).catch(() => {});
-        setUseDynamic(!!s.use_dynamic_invoice);
+        // 3-way template — fall back for older records that only had the boolean.
+        setInvoiceTemplate(s.invoice_template || (s.use_dynamic_invoice ? 'dynamic' : 'html'));
+        setCompanyNameAr(s.company_name_ar || '');
+        setCompanyNameEn(s.company_name_en || '');
+        setCrNumber(s.cr_number || '');
+        setPoBox(s.po_box || '');
+        setPostalCode(s.postal_code || '');
+        setGsm(s.gsm || '');
         setAddress(s.address || '');
         setPhone(s.phone || '');
         setEmail(s.email || '');
@@ -154,37 +173,85 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     setLogoBase64(false); // false → clear on save
   };
 
+  // The write() payload — shared by Save and Preview (Preview persists first so
+  // the server renders the picked template with the current form values).
+  const buildVals = () => ({
+    ...(companyId ? { company_id: companyId } : {}),
+    // Server syncs use_dynamic_invoice from invoice_template on write.
+    invoice_template: invoiceTemplate,
+    company_name_ar: companyNameAr || false,
+    company_name_en: companyNameEn || false,
+    cr_number: crNumber || false,
+    po_box: poBox || false,
+    postal_code: postalCode || false,
+    gsm: gsm || false,
+    address: address || false,
+    phone: phone || false,
+    email: email || false,
+    vat_number: vatNumber || false,
+    show_logo: !!showLogo,
+    header_title: headerTitle || false,
+    footer_text: footerText || false,
+    show_tax: !!showTax,
+    show_customer_signature: !!showCustomerSig,
+    show_shop_owner_signature: !!showCashierSig,
+    show_footer: !!showFooter,
+    use_default_paper_size: !!useDefaultSize,
+    default_paper_size: defaultSizeStr || '80',
+  });
+
+  const persistSettings = async () => {
+    const savedId = await saveInvoiceSettings({
+      id,
+      vals: buildVals(),
+      logoBase64, // undefined = unchanged, false = clear, string = new
+    });
+    if (savedId) {
+      setId(savedId);
+      // A logo just written is now stored — stop re-sending it on the next save.
+      if (typeof logoBase64 === 'string') setLogoBase64(undefined);
+    }
+    try { useAuthStore.getState().refreshDynamicInvoiceFlag?.(); } catch (_) {}
+    return savedId;
+  };
+
+  // Render the picked template server-side against a real recent order and show
+  // it in a WebView. Saves the current form first so the preview is accurate.
+  const onPreview = async () => {
+    if (!companyId) { setErrorMsg('Please select a company first.'); return; }
+    if (invoiceTemplate === 'html') {
+      setErrorMsg('Preview is available for Dynamic and Cash Memo templates. Standard uses the app\'s built-in receipt.');
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      await persistSettings();
+      const orders = await fetchOrdersOdoo({ limit: 1, configId: null });
+      const sample = Array.isArray(orders) && orders[0] ? orders[0] : null;
+      if (!sample) {
+        setErrorMsg('No orders found to preview. Make a sale first, then preview.');
+        return;
+      }
+      const widthMm = useDefaultSize ? (defaultSizeStr || '210') : '210';
+      const html = await fetchDynamicReceiptHtml({ orderId: sample.id, paperWidthMm: widthMm });
+      if (!html) { setErrorMsg('Could not render a preview for this template.'); return; }
+      setPreviewHtml(html);
+    } catch (e) {
+      console.error('[InvoiceSettings] preview', e);
+      setErrorMsg(e?.message || 'Failed to build preview');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const onSave = async () => {
     if (!companyId) { setErrorMsg('Please select a company first.'); return; }
     setSaving(true);
     try {
-      console.log('[InvoiceSettings] save — mode=' + (id ? ('write id=' + id) : 'create') + ' companyId=' + companyId + ' useDynamic=' + useDynamic);
-      const savedId = await saveInvoiceSettings({
-        id,
-        vals: {
-          ...(companyId ? { company_id: companyId } : {}),
-          use_dynamic_invoice: !!useDynamic,
-          address: address || false,
-          phone: phone || false,
-          email: email || false,
-          vat_number: vatNumber || false,
-          show_logo: !!showLogo,
-          header_title: headerTitle || false,
-          footer_text: footerText || false,
-          show_tax: !!showTax,
-          show_customer_signature: !!showCustomerSig,
-          show_shop_owner_signature: !!showCashierSig,
-          show_footer: !!showFooter,
-          use_default_paper_size: !!useDefaultSize,
-          default_paper_size: defaultSizeStr || '80',
-        },
-        logoBase64, // undefined = unchanged, false = clear, string = new
-      });
+      console.log('[InvoiceSettings] save — mode=' + (id ? ('write id=' + id) : 'create') + ' companyId=' + companyId + ' template=' + invoiceTemplate);
+      const savedId = await persistSettings();
       console.log('[InvoiceSettings] saved -> id=', savedId);
-      if (savedId) setId(savedId);
       showToastMessage('Invoice settings saved');
-      // Reflect a dynamic-toggle change in the app immediately.
-      try { useAuthStore.getState().refreshDynamicInvoiceFlag?.(); } catch (_) {}
       navigation.goBack();
     } catch (e) {
       console.error('[InvoiceSettings] save', e);
@@ -245,18 +312,59 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
       />
       <ScrollView style={styles.container} contentContainerStyle={{ padding: 12, paddingBottom: 110 }}>
 
-        {/* Master switch */}
+        {/* Invoice template picker — one control, three receipts. */}
         <View style={styles.card}>
-          <View style={styles.toggleRow}>
-            <View style={{ flex: 1, paddingRight: 10 }}>
-              <Text style={styles.sectionTitle}>Use Dynamic Invoice on App</Text>
-              <Text style={styles.toggleHelp}>
-                On → the app shows this dynamic receipt (logo, GST, layout below).
-                Off → the app shows its normal built-in receipt.
-              </Text>
-            </View>
-            <Switch value={useDynamic} onValueChange={setUseDynamic} trackColor={{ true: ORANGE }} />
-          </View>
+          <Text style={styles.sectionTitle}>Invoice Template</Text>
+          <Text style={styles.toggleHelp}>Choose which receipt the app shows.</Text>
+          {[
+            { key: 'html', title: 'Standard', desc: 'The app\'s built-in receipt.' },
+            { key: 'dynamic', title: 'Dynamic', desc: 'Branded receipt — logo, GST, custom header/footer.' },
+            { key: 'cash_memo', title: 'Cash Memo', desc: 'Bilingual (English/Arabic) Oman-style A4/A5 invoice.' },
+          ].map((opt) => {
+            const active = invoiceTemplate === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                activeOpacity={0.8}
+                style={[styles.templateOption, active && styles.templateOptionActive]}
+                onPress={() => setInvoiceTemplate(opt.key)}
+              >
+                <MaterialIcons
+                  name={active ? 'radio-button-checked' : 'radio-button-unchecked'}
+                  size={22}
+                  color={active ? ORANGE : '#b6bcc8'}
+                />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={[styles.templateTitle, active && { color: NAVY }]}>{opt.title}</Text>
+                  <Text style={styles.toggleHelp}>{opt.desc}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+          {invoiceTemplate !== 'html' ? (
+            <TouchableOpacity
+              style={[styles.previewBtn, previewLoading && { opacity: 0.6 }]}
+              disabled={previewLoading}
+              onPress={onPreview}
+            >
+              {previewLoading ? <ActivityIndicator color="#fff" size="small" /> : (
+                <>
+                  <MaterialIcons name="visibility" size={18} color="#fff" />
+                  <Text style={styles.previewBtnText}>Preview</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* Company — always visible (a settings record is one-per-company, so
+            every template needs it before Save). */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Company</Text>
+          <TouchableOpacity style={[styles.picker, { marginTop: 6 }]} onPress={() => setCompanyPickerVisible(true)}>
+            <Text style={styles.pickerValue}>{companyLabel || 'Select company'}</Text>
+            <MaterialIcons name="arrow-drop-down" size={22} color="#666" />
+          </TouchableOpacity>
         </View>
 
         {/* Receipt Size — ALWAYS visible (applies to both the dynamic and the
@@ -284,26 +392,72 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           ) : null}
         </View>
 
-        {!useDynamic ? (
+        {invoiceTemplate === 'html' ? (
           <View style={styles.card}>
             <Text style={styles.toggleHelp}>
-              Turn on “Use Dynamic Invoice on App” above to configure the invoice — branding, logo,
-              header/footer, show-hide options and terms. While it's off, the app shows its normal
-              built-in receipt and there's nothing to set here.
+              Standard shows the app's built-in receipt — there's nothing extra to configure here.
+              Pick <Text style={{ fontFamily: FONT_FAMILY.urbanistBold }}>Dynamic</Text> or{' '}
+              <Text style={{ fontFamily: FONT_FAMILY.urbanistBold }}>Cash Memo</Text> above to design a custom invoice.
             </Text>
           </View>
+        ) : invoiceTemplate === 'cash_memo' ? (
+        <>
+        {/* Cash Memo header (bilingual Oman invoice) */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Cash Memo Header</Text>
+          <Text style={styles.hint}>These appear on the bilingual invoice header. Leave blank to hide a line.</Text>
+
+          <Text style={styles.label}>Company Name (English)</Text>
+          <TextInput style={styles.input} value={companyNameEn} onChangeText={setCompanyNameEn} placeholder="Defaults to the company name" placeholderTextColor="#999" />
+
+          <Text style={styles.label}>Company Name (Arabic)</Text>
+          <TextInput style={styles.input} value={companyNameAr} onChangeText={setCompanyNameAr} placeholder="اسم الشركة" placeholderTextColor="#999" textAlign="right" />
+
+          <Text style={styles.label}>C.R. Number</Text>
+          <TextInput style={styles.input} value={crNumber} onChangeText={setCrNumber} placeholder="e.g. 1410246" placeholderTextColor="#999" />
+
+          <Text style={styles.label}>P.O. Box</Text>
+          <TextInput style={styles.input} value={poBox} onChangeText={setPoBox} placeholder="e.g. 112" placeholderTextColor="#999" />
+
+          <Text style={styles.label}>Postal Code</Text>
+          <TextInput style={styles.input} value={postalCode} onChangeText={setPostalCode} placeholder="e.g. 111" placeholderTextColor="#999" />
+
+          <Text style={styles.label}>GSM / Mobile</Text>
+          <TextInput style={styles.input} value={gsm} onChangeText={setGsm} placeholder="e.g. 77576196" placeholderTextColor="#999" keyboardType="phone-pad" />
+        </View>
+
+        {/* Logo — shared with the dynamic receipt */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Logo</Text>
+          <View style={styles.logoRow}>
+            <View style={styles.logoPreview}>
+              {previewSource ? (
+                <Image source={previewSource} style={styles.logoImg} resizeMode="contain" />
+              ) : (
+                <MaterialIcons name="image" size={40} color="#c7ccd6" />
+              )}
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <TouchableOpacity style={styles.smallBtn} onPress={pickLogo}>
+                <MaterialIcons name="photo-library" size={18} color="#fff" />
+                <Text style={styles.smallBtnText}>Change logo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.smallBtn, styles.smallBtnGhost]} onPress={clearLogo}>
+                <MaterialIcons name="delete-outline" size={18} color="#dc2626" />
+                <Text style={[styles.smallBtnText, { color: '#dc2626' }]}>Remove logo</Text>
+              </TouchableOpacity>
+              <Text style={styles.toggleHelp}>Any image; it's auto-resized for the receipt.</Text>
+            </View>
+          </View>
+          <Row label="Show logo on invoice" value={showLogo} onValueChange={setShowLogo} />
+        </View>
+        </>
         ) : (
         <>
         {/* Branding */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Branding</Text>
           <Text style={styles.hint}>Blank fields fall back to the company's own details.</Text>
-
-          <Text style={styles.label}>Company</Text>
-          <TouchableOpacity style={styles.picker} onPress={() => setCompanyPickerVisible(true)}>
-            <Text style={styles.pickerValue}>{companyLabel || 'Select company'}</Text>
-            <MaterialIcons name="arrow-drop-down" size={22} color="#666" />
-          </TouchableOpacity>
 
           <Text style={styles.label}>Address</Text>
           <TextInput style={[styles.input, styles.multiline]} value={address} onChangeText={setAddress} placeholder="One line per row" placeholderTextColor="#999" multiline />
@@ -398,6 +552,36 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         onCancel={() => setSizePickerVisible(false)}
       />
 
+      {/* Invoice preview */}
+      <Modal
+        isVisible={!!previewHtml}
+        animationIn="slideInUp"
+        animationOut="slideOutDown"
+        backdropOpacity={0.6}
+        style={{ margin: 0, justifyContent: 'flex-end' }}
+        onBackButtonPress={() => setPreviewHtml('')}
+        onBackdropPress={() => setPreviewHtml('')}
+      >
+        <View style={styles.previewSheet}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Invoice Preview</Text>
+            <TouchableOpacity onPress={() => setPreviewHtml('')} style={styles.modalCloseBtn}>
+              <MaterialIcons name="close" size={20} color="#666" />
+            </TouchableOpacity>
+          </View>
+          <WebView
+            originWhitelist={['*']}
+            source={{ html: previewHtml || '<html><body></body></html>' }}
+            style={{ flex: 1, backgroundColor: '#e9ecf2' }}
+            scalesPageToFit
+            startInLoadingState
+            renderLoading={() => (
+              <View style={styles.center}><ActivityIndicator size="large" color={ORANGE} /></View>
+            )}
+          />
+        </View>
+      </Modal>
+
       <Modal
         isVisible={companyPickerVisible}
         animationIn="zoomIn"
@@ -473,6 +657,18 @@ const styles = StyleSheet.create({
   alertButton: { backgroundColor: NAVY, borderRadius: 10, padding: 15, justifyContent: 'center', alignItems: 'center' },
   alertButtonText: { color: '#fff', fontFamily: FONT_FAMILY.urbanistBold },
   sectionTitle: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: NAVY, marginBottom: 4 },
+  templateOption: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, marginTop: 8, backgroundColor: '#fff',
+  },
+  templateOptionActive: { borderColor: ORANGE, backgroundColor: '#fff7ed' },
+  templateTitle: { fontSize: 14, fontFamily: FONT_FAMILY.urbanistBold, color: '#374151' },
+  previewBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: NAVY, borderRadius: 12, paddingVertical: 12, marginTop: 12,
+  },
+  previewBtnText: { color: '#fff', fontFamily: FONT_FAMILY.urbanistBold, fontSize: 14, marginLeft: 6 },
+  previewSheet: { height: '88%', backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   hint: { fontSize: 11, color: '#9ca3af', fontFamily: FONT_FAMILY.urbanistMedium, marginBottom: 6 },
   label: { fontSize: 12, color: '#6b7280', fontFamily: FONT_FAMILY.urbanistSemiBold, marginTop: 10, marginBottom: 4 },
   input: {

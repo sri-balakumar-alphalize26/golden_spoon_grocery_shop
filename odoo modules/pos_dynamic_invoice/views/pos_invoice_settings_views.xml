@@ -7,34 +7,53 @@
         <field name="model">pos.invoice.settings</field>
         <field name="arch" type="xml">
             <form string="Dynamic Invoice Settings">
+                <header>
+                    <!-- Render the selected template (Dynamic / Cash Memo)
+                         against a recent order. Hidden for Normal (HTML), which
+                         uses the app's built-in receipt. -->
+                    <button name="action_preview_receipt"
+                            type="object"
+                            string="Preview"
+                            class="btn-primary"
+                            icon="fa-eye"
+                            invisible="invoice_template == 'html'"/>
+                </header>
                 <sheet>
-                    <div class="alert alert-info" role="alert" invisible="use_dynamic_invoice">
-                        The app is showing its <b>normal</b> built-in receipt. Turn on
-                        <b>Use Dynamic Invoice on App</b> below to switch the app to this dynamic invoice.
+                    <div class="alert alert-info" role="alert" invisible="invoice_template != 'html'">
+                        The app is showing its <b>standard</b> built-in receipt. Pick
+                        <b>Dynamic</b> or <b>Cash Memo</b> above to render a custom invoice.
                     </div>
                     <group>
-                        <field name="use_dynamic_invoice" widget="boolean_toggle"/>
+                        <field name="company_id"/>
+                        <field name="invoice_template" widget="radio" options="{'horizontal': True}"/>
                     </group>
-                    <!-- Default receipt size: always visible (applies to both the
-                         dynamic and the normal receipt). -->
+                    <!-- Default receipt size: always visible (applies to every
+                         template). -->
                     <group string="Receipt Size">
                         <field name="use_default_paper_size" widget="boolean_toggle"/>
                         <field name="default_paper_size" invisible="not use_default_paper_size"/>
                     </group>
-                    <group invisible="not use_dynamic_invoice">
-                        <group string="Branding">
-                            <field name="company_id"/>
-                            <field name="address" placeholder="One line per row (defaults to company address)"/>
-                            <field name="phone" placeholder="Defaults to company phone"/>
-                            <field name="email" placeholder="Defaults to company email"/>
-                            <field name="vat_number" placeholder="VAT / GST number"/>
-                        </group>
-                        <group string="Logo">
-                            <field name="show_logo"/>
-                            <field name="logo" widget="image" class="oe_avatar" options="{'size': [160, 90]}"/>
-                        </group>
+                    <!-- Cash Memo header (bilingual Oman invoice). -->
+                    <group string="Cash Memo Header" invisible="invoice_template != 'cash_memo'">
+                        <field name="company_name_en" placeholder="Defaults to the company name"/>
+                        <field name="company_name_ar"/>
+                        <field name="cr_number"/>
+                        <field name="po_box"/>
+                        <field name="postal_code"/>
+                        <field name="gsm"/>
                     </group>
-                    <group invisible="not use_dynamic_invoice">
+                    <!-- Logo — shared by Dynamic and Cash Memo. -->
+                    <group string="Logo" invisible="invoice_template == 'html'">
+                        <field name="show_logo"/>
+                        <field name="logo" widget="image" class="oe_avatar" options="{'size': [160, 90]}"/>
+                    </group>
+                    <group string="Branding" invisible="invoice_template != 'dynamic'">
+                        <field name="address" placeholder="One line per row (defaults to company address)"/>
+                        <field name="phone" placeholder="Defaults to company phone"/>
+                        <field name="email" placeholder="Defaults to company email"/>
+                        <field name="vat_number" placeholder="VAT / GST number"/>
+                    </group>
+                    <group invisible="invoice_template != 'dynamic'">
                         <group string="Header &amp; Footer">
                             <field name="header_title"/>
                             <field name="footer_text"/>

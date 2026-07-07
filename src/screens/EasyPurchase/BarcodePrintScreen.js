@@ -145,7 +145,7 @@ const BarcodePrintScreen = ({ navigation, route }) => {
             </Text>
           ) : product ? (
             <Text style={styles.helpText}>
-              <MaterialIcons name="info-outline" size={12} color={ORANGE} /> No barcode yet — Odoo will auto-generate one.
+              <MaterialIcons name="info-outline" size={12} color={ORANGE} /> No barcode yet — the system will auto-generate one.
             </Text>
           ) : null}
         </View>
