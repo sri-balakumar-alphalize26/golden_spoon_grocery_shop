@@ -77,7 +77,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // Default receipt-size config from Invoice Settings (pos.invoice.settings via
   // RPC). When enabled, the action chips skip the picker and use `mm` directly.
   // Re-read on focus so an admin change in Invoice Settings takes effect.
-  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null });
+  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null, heightMm: 0 });
   useFocusEffect(useCallback(() => {
     let alive = true;
     fetchAppPaperSize().then((cfg) => {
@@ -332,9 +332,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   };
 
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
-  const runPreview = async (paperWidthMm) => {
+  const runPreview = async (paperWidthMm, paperHeightMm = 0) => {
     try {
-      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -348,12 +348,12 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // picker so the file lands wherever the user chooses (Downloads, Drive,
   // Documents, etc.). On iOS we fall back to the share sheet, whose
   // "Save to Files" entry is the iOS-equivalent of a folder picker.
-  const runDownload = async (paperWidthMm) => {
+  const runDownload = async (paperWidthMm, paperHeightMm = 0) => {
     setDownloading(true);
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
       console.log(`[Download] start — order=${orderId} size=${paperWidthMm}mm`);
-      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       console.log(`[Download] receipt HTML ready — ${html?.length || 0} chars`);
       const { uri } = await Print.printToFileAsync({ html });
       console.log(`[Download] PDF generated — ${uri || '(no uri)'}`);
@@ -404,10 +404,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
 
   // 3. Print Receipt — open the OS print dialog so the user can pick any
   // already-paired printer (AirPrint on iOS, Android print services).
-  const runPrint = async (paperWidthMm) => {
+  const runPrint = async (paperWidthMm, paperHeightMm = 0) => {
     setPrinting(true);
     try {
-      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       await Print.printAsync({ html });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
@@ -425,10 +425,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // then dispatches to the same runX via `sizePicker`).
   const startAction = (action) => {
     if (paperCfg.enabled && paperCfg.mm) {
-      console.log(`[PAPER SIZE] ${action}: using default ${paperCfg.mm}mm (skipping picker)`);
-      if (action === 'preview') runPreview(paperCfg.mm);
-      else if (action === 'download') runDownload(paperCfg.mm);
-      else if (action === 'print') runPrint(paperCfg.mm);
+      console.log(`[PAPER SIZE] ${action}: using default ${paperCfg.mm}mm × ${paperCfg.heightMm || 'auto'} (skipping picker)`);
+      if (action === 'preview') runPreview(paperCfg.mm, paperCfg.heightMm);
+      else if (action === 'download') runDownload(paperCfg.mm, paperCfg.heightMm);
+      else if (action === 'print') runPrint(paperCfg.mm, paperCfg.heightMm);
     } else {
       console.log(`[PAPER SIZE] ${action}: no default set — opening size picker`);
       setSizePicker(action);
@@ -847,12 +847,13 @@ const CreateInvoicePreview = ({ navigation, route }) => {
           the chosen width. */}
       <PaperSizeModal
         isVisible={!!sizePicker}
-        onSelect={(mm) => {
+        {...((paperCfg?.presets || []).length ? { sizes: paperCfg.presets.map((p) => ({ inch: p.label, mm: p.mm })) } : {})}
+        onSelect={(mm, height = 0) => {
           const action = sizePicker;
           setSizePicker(null);
-          if (action === 'preview') runPreview(mm);
-          else if (action === 'download') runDownload(mm);
-          else if (action === 'print') runPrint(mm);
+          if (action === 'preview') runPreview(mm, height);
+          else if (action === 'download') runDownload(mm, height);
+          else if (action === 'print') runPrint(mm, height);
         }}
         onCancel={() => setSizePicker(null)}
       />

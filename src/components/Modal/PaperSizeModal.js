@@ -3,8 +3,8 @@
 // width is passed back to the parent via onSelect(widthMm), then the
 // parent invokes the chosen action with that width applied to the
 // generated invoice HTML.
-import React from 'react';
-import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, Modal, StyleSheet, TextInput } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 // Shared source of truth for the six supported receipt sizes. Also consumed by
@@ -19,7 +19,19 @@ export const SIZES = [
   { inch: 'A4',       mm: 210, sub: '210 × 297 mm' },
 ];
 
-const PaperSizeModal = ({ isVisible, onSelect, onCancel }) => {
+const PaperSizeModal = ({ isVisible, onSelect, onCancel, sizes }) => {
+  // Admin can edit preset widths per company; the parent passes the resolved
+  // list via `sizes`. Fall back to the built-in SIZES when none is supplied.
+  const rows = Array.isArray(sizes) && sizes.length ? sizes : SIZES;
+  // Custom width sub-form — typed directly in the popup. Height is always auto
+  // (continuous roll) so the receipt never splits into pages.
+  const [customMode, setCustomMode] = useState(false);
+  const [cw, setCw] = useState('80');
+  useEffect(() => {
+    if (isVisible) { setCustomMode(false); setCw('80'); }
+  }, [isVisible]);
+  const pickPreset = (mm) => { if (onSelect) onSelect(mm, 0); };
+  const useCustom = () => { if (onSelect) onSelect(parseInt(cw, 10) || 80, 0); };
   return (
     <Modal
       visible={!!isVisible}
@@ -46,17 +58,17 @@ const PaperSizeModal = ({ isVisible, onSelect, onCancel }) => {
             Pick a paper size. The receipt re-flows to fit the chosen size.
           </Text>
 
-          {SIZES.map((sz) => (
+          {rows.map((sz) => (
             <TouchableOpacity
               key={sz.mm}
               style={[s.row, sz.isDefault && s.rowDefault]}
-              onPress={() => onSelect && onSelect(sz.mm)}
+              onPress={() => pickPreset(sz.mm)}
               activeOpacity={0.85}
             >
               <View style={[s.rowDot, sz.isDefault && s.rowDotActive]} />
               <View style={{ flex: 1 }}>
                 <Text style={[s.rowLabel, sz.isDefault && s.rowLabelActive]}>{sz.inch}</Text>
-                <Text style={s.rowSub}>{sz.sub}</Text>
+                <Text style={s.rowSub}>{sz.sub || `${sz.mm} mm`}</Text>
               </View>
               {sz.isDefault ? (
                 <View style={s.defaultBadge}>
@@ -66,6 +78,39 @@ const PaperSizeModal = ({ isVisible, onSelect, onCancel }) => {
               <MaterialIcons name="chevron-right" size={20} color="#9333ea" />
             </TouchableOpacity>
           ))}
+
+          {/* Custom (W × H mm) — type your own size directly in the popup */}
+          <TouchableOpacity
+            style={[s.row, customMode && s.rowDefault]}
+            onPress={() => setCustomMode(true)}
+            activeOpacity={0.85}
+          >
+            <View style={[s.rowDot, customMode && s.rowDotActive]} />
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowLabel, customMode && s.rowLabelActive]}>Custom width (mm)</Text>
+              <Text style={s.rowSub}>Type your own width — one continuous page</Text>
+            </View>
+            <MaterialIcons name="tune" size={20} color="#9333ea" />
+          </TouchableOpacity>
+
+          {customMode ? (
+            <View style={s.customBox}>
+              <View style={s.customField}>
+                <Text style={s.customLabel}>Width (mm)</Text>
+                <TextInput
+                  style={s.customInput}
+                  value={cw}
+                  onChangeText={(t) => setCw(t.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  selectTextOnFocus
+                />
+              </View>
+              <TouchableOpacity style={s.useBtn} onPress={useCustom} activeOpacity={0.85}>
+                <Text style={s.useBtnText}>Use this size</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           <View style={s.footer}>
             <TouchableOpacity
@@ -152,4 +197,19 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: '#9333ea',
   },
   cancelBtnText: { color: '#9333ea', fontWeight: '700' },
+  customBox: {
+    borderWidth: 1, borderColor: '#c4b5fd', borderRadius: 10,
+    backgroundColor: '#faf5ff', padding: 12, marginBottom: 6,
+  },
+  customField: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8,
+  },
+  customLabel: { fontSize: 13, color: '#581c87', fontWeight: '600' },
+  customInput: {
+    width: 90, borderWidth: 1, borderColor: '#c4b5fd', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 8, textAlign: 'center',
+    fontSize: 14, color: '#111827', backgroundColor: '#fff',
+  },
+  useBtn: { backgroundColor: '#9333ea', borderRadius: 10, paddingVertical: 11, alignItems: 'center', marginTop: 2 },
+  useBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

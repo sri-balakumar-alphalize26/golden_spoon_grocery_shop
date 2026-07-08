@@ -36,9 +36,15 @@ class PosOrder(models.Model):
         settings = self.env['pos.invoice.settings'].get_for_company(
             self.company_id or self.env.company)
         if settings.use_default_paper_size:
+            # `default_paper_size` is now a KEY; resolve it to mm and always
+            # render via the custom path (the wizard Selection only knows the
+            # fixed preset strings, not an edited mm).
+            width, height = settings._resolved_default()
             wizard = self.env['pos.dynamic.invoice.wizard'].create({
                 'order_id': self.id,
-                'paper_size': settings.default_paper_size or '80',
+                'paper_size': 'custom',
+                'custom_width': width,
+                'custom_height': height,
             })
             return wizard.action_preview()
         return {
@@ -285,9 +291,10 @@ class PosOrder(models.Model):
     # ------------------------------------------------------------------
     # App entry point — rendered receipt HTML for a chosen paper size
     # ------------------------------------------------------------------
-    def get_dynamic_receipt_html(self, paper_size='80'):
+    def get_dynamic_receipt_html(self, paper_size='80', paper_height=0):
         """Return the dynamic receipt as a self-contained HTML string for
-        `paper_size` (mm). Called by the React Native app over JSON-RPC.
+        `paper_size` (mm width) and optional `paper_height` (mm; 0 = auto).
+        Called by the React Native app over JSON-RPC.
 
         Renders ONLY the receipt body template (inline <style> + base64 images,
         no /web/assets bundles) wrapped in a minimal <html> document, so the app
@@ -297,10 +304,24 @@ class PosOrder(models.Model):
         never load on-device and hang the print engine.
         """
         self.ensure_one()
-        wizard = self.env['pos.dynamic.invoice.wizard'].create({
+        try:
+            height = int(paper_height or 0)
+        except (TypeError, ValueError):
+            height = 0
+        # The app always sends a numeric width (mm) — presets are resolved to
+        # their configured mm server-side. Always render via the custom path so
+        # any width works (the wizard Selection only knows the fixed presets).
+        try:
+            width = int(paper_size)
+        except (TypeError, ValueError):
+            width = 80
+        wiz_vals = {
             'order_id': self.id,
-            'paper_size': str(paper_size or '80'),
-        })
+            'paper_size': 'custom',
+            'custom_width': width,
+            'custom_height': height,
+        }
+        wizard = self.env['pos.dynamic.invoice.wizard'].create(wiz_vals)
         values = wizard._render_context()
         body = self.env['ir.qweb']._render('pos_dynamic_invoice.report_pos_dynamic_invoice_doc', values)
         body = body.decode() if isinstance(body, bytes) else body

@@ -196,11 +196,12 @@
     <template id="report_pos_dynamic_invoice_cash_memo_doc">
         <div class="cm_root">
             <style>
-                /* Cash Memo is a full-page A4 invoice — it always renders at A4,
-                   ignoring the thermal default receipt size (which would squeeze
-                   it into a strip and wrap every line). */
-                @page { size: A4 portrait; margin: 8mm; }
-                .cm_root { width:194mm; max-width:100%; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; }
+                /* Cash Memo honours the selected receipt size like the other
+                   templates (page_size_css / receipt_width from the wizard), so
+                   the size setting applies to all 3 templates. At thermal widths
+                   the A4-style form is naturally cramped. */
+                @page { size: <t t-esc="page_size_css"/>; margin: 6mm; }
+                .cm_root { width:<t t-esc="receipt_width"/>mm; max-width:100%; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; }
                 .cm_root .cmhead { display:flex; justify-content:space-between; align-items:stretch; background:#eef0ef; border:1px solid #cfcfcf; padding:6px 10px; }
                 .cm_root .cmhead .col { font-size:11px; color:#1a7a3f; line-height:1.5; white-space:nowrap; }
                 .cm_root .cmhead .en { text-align:left; }

@@ -55,6 +55,7 @@ export const generateInvoiceHtml = ({
   // values from the in-app PaperSizeModal: 50 (2"), 76 (3"), 100 (4"),
   // 148 (A5 → fixed-height A5 page), 210 (A4 → fixed-height A4 page).
   paperWidthMm = 80,
+  paperHeightMm = 0,
   // Letterhead from Odoo res.company (cached via useAuthStore().companyProfile
   // at login). When omitted, the header falls back to a generic "Company"
   // label so the printed receipt never leaks an old hardcoded name.
@@ -81,7 +82,9 @@ export const generateInvoiceHtml = ({
   // continuously-growing page. Named sheets (A4/A5) have a fixed physical
   // height, which splits a tall receipt onto a 2nd page on Download/Print;
   // `<width>mm auto` keeps it to a single page for every size.
-  const pageSizeCss = `${pageWidth}mm auto`;
+  // Custom size can pin a fixed page height; 0 = auto (continuous roll).
+  const pageHeight = Math.max(0, Number(paperHeightMm) || 0);
+  const pageSizeCss = pageHeight > 0 ? `${pageWidth}mm ${pageHeight}mm` : `${pageWidth}mm auto`;
   const orderRef = extractOrderRef(orderName, orderId);
   // Use the active currency (set by post-login fetch and boot-time hydration
   // from AsyncStorage) and the active "Product Price" decimal precision pulled

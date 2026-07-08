@@ -32,6 +32,53 @@
                     <group string="Receipt Size">
                         <field name="use_default_paper_size" widget="boolean_toggle"/>
                         <field name="default_paper_size" invisible="not use_default_paper_size"/>
+                        <field name="default_size_hint" invisible="not use_default_paper_size" readonly="1"/>
+                        <field name="custom_paper_width" string="Custom Width (mm)" invisible="not use_default_paper_size or default_paper_size != 'custom'"
+                               help="Prints as one continuous page (auto height)."/>
+                    </group>
+                    <!-- Editable mm for each preset (per company). Change once
+                         here and every "4 inch" etc. renders at your mm. Always
+                         visible: the preset mm feed both the default-size render
+                         AND the print-time "choose size" popup (default OFF). -->
+                    <group string="Preset Sizes (mm)">
+                        <div class="text-danger" colspan="2" style="margin-bottom:8px; font-weight:500;">
+                            Set each receipt size's width in mm. These apply to the default size
+                            <b>and</b> the print-time "choose size" popup (shown when Use Default is off).
+                            Keep each value within the allowed range shown beside it — out-of-range
+                            values snap back automatically.
+                        </div>
+                        <label for="size_mm_2in"/>
+                        <div class="o_row">
+                            <field name="size_mm_2in" nolabel="1" class="oe_inline"/>
+                            <span class="text-danger ms-2">allowed 40–65 mm</span>
+                        </div>
+                        <label for="size_mm_3in"/>
+                        <div class="o_row">
+                            <field name="size_mm_3in" nolabel="1" class="oe_inline"/>
+                            <span class="text-danger ms-2">allowed 60–85 mm</span>
+                        </div>
+                        <label for="size_mm_35in"/>
+                        <div class="o_row">
+                            <field name="size_mm_35in" nolabel="1" class="oe_inline"/>
+                            <span class="text-danger ms-2">allowed 70–95 mm</span>
+                        </div>
+                        <label for="size_mm_4in"/>
+                        <div class="o_row">
+                            <field name="size_mm_4in" nolabel="1" class="oe_inline"/>
+                            <span class="text-danger ms-2">allowed 85–115 mm</span>
+                        </div>
+                        <label for="size_mm_a5"/>
+                        <div class="o_row">
+                            <field name="size_mm_a5" nolabel="1" class="oe_inline"/>
+                            <span class="text-danger ms-2">allowed 140–160 mm</span>
+                        </div>
+                        <label for="size_mm_a4"/>
+                        <div class="o_row">
+                            <field name="size_mm_a4" nolabel="1" class="oe_inline"/>
+                            <span class="text-danger ms-2">allowed 200–225 mm</span>
+                        </div>
+                        <button name="action_reset_preset_sizes" type="object"
+                                string="Reset to default" icon="fa-undo" class="btn-secondary"/>
                     </group>
                     <!-- Cash Memo header (bilingual Oman invoice). -->
                     <group string="Cash Memo Header" invisible="invoice_template != 'cash_memo'">

@@ -4445,15 +4445,21 @@ export const fetchAppPaperSize = async () => {
     }
     const res = response.data?.result || {};
     const mm = Number(res.size);
+    const heightMm = Number(res.height);
     const cfg = {
       enabled: !!res.use_default && Number.isFinite(mm) && mm > 0,
       mm: Number.isFinite(mm) && mm > 0 ? mm : null,
+      // Custom fixed page height (mm); 0/absent = auto (continuous roll).
+      heightMm: Number.isFinite(heightMm) && heightMm > 0 ? heightMm : 0,
+      // Configured mm for each preset ([{key,label,mm}]) so the ad-hoc size
+      // picker reflects admin edits; null = fall back to the built-in list.
+      presets: Array.isArray(res.presets) ? res.presets : null,
     };
     console.log('[PAPER SIZE] fetchAppPaperSize =', cfg);
     return cfg;
   } catch (err) {
     console.warn('[PAPER SIZE] fetchAppPaperSize failed:', err?.message || err);
-    return { enabled: false, mm: null };
+    return { enabled: false, mm: null, heightMm: 0 };
   }
 };
 
@@ -4461,7 +4467,7 @@ export const fetchAppPaperSize = async () => {
 // width (mm). Returns the HTML string, or null on any failure (module absent,
 // order not yet in Odoo, network) so the caller can fall back to the built-in
 // receipt without ever blocking a print.
-export const fetchDynamicReceiptHtml = async ({ orderId, paperWidthMm = 80 } = {}) => {
+export const fetchDynamicReceiptHtml = async ({ orderId, paperWidthMm = 80, paperHeightMm = 0 } = {}) => {
   if (!orderId) return null;
   try {
     const response = await axios.post(
@@ -4472,7 +4478,8 @@ export const fetchDynamicReceiptHtml = async ({ orderId, paperWidthMm = 80 } = {
         params: {
           model: 'pos.order',
           method: 'get_dynamic_receipt_html',
-          args: [[Number(orderId)], String(paperWidthMm)],
+          // 2nd positional arg = fixed page height (mm); 0 = auto.
+          args: [[Number(orderId)], String(paperWidthMm), String(paperHeightMm || 0)],
           kwargs: {},
         },
       },
@@ -4516,7 +4523,7 @@ export const resolveInvoiceHtml = async (params = {}) => {
       try { useAuthStore.setState?.({ dynamicInvoiceEnabled: !!enabled }); } catch (_) {}
     }
     if (enabled && params?.orderId) {
-      const dyn = await fetchDynamicReceiptHtml({ orderId: params.orderId, paperWidthMm: params.paperWidthMm });
+      const dyn = await fetchDynamicReceiptHtml({ orderId: params.orderId, paperWidthMm: params.paperWidthMm, paperHeightMm: params.paperHeightMm });
       if (dyn) return dyn;
     }
   } catch (e) {
@@ -4538,8 +4545,12 @@ const INVOICE_SETTINGS_FIELDS = [
   'show_logo', 'header_title', 'footer_text', 'show_tax',
   'show_customer_signature', 'show_shop_owner_signature', 'show_footer',
   'use_default_paper_size', 'default_paper_size',
+  // Per-company editable preset widths (mm) — the default size stores a KEY.
+  'size_mm_2in', 'size_mm_3in', 'size_mm_35in', 'size_mm_4in', 'size_mm_a5', 'size_mm_a4',
   // 3-way template picker + Cash Memo header fields.
   'invoice_template', 'company_name_ar', 'company_name_en', 'cr_number', 'po_box', 'postal_code', 'gsm',
+  // Custom receipt size (Width × Height mm).
+  'custom_paper_width', 'custom_paper_height',
 ];
 
 const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {

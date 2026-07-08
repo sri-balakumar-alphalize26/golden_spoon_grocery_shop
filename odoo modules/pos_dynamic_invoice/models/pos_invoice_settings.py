@@ -108,15 +108,144 @@ class PosInvoiceSettings(models.Model):
         help='When on, the app prints at the size below without asking each time. '
              'Applies whether the app shows the dynamic or the normal receipt.',
     )
-    # Same six sizes as the app's PaperSizeModal / the wizard's paper_size.
-    default_paper_size = fields.Selection([
-        ('50', '2 inch (50 mm)'),
-        ('76', '3 inch (76 mm)'),
-        ('80', '3.5 inch (80 mm)'),
-        ('100', '4 inch (100 mm)'),
-        ('148', 'A5 (148 mm)'),
-        ('210', 'A4 (210 mm)'),
-    ], string='Default Receipt Size', default='80')
+    # The default size is a stable KEY (not the mm), so each preset's mm can be
+    # edited below without changing the stored value. Dropdown LABELS are built
+    # dynamically to show the configured mm — "4 inch (100 mm)" — so the brackets
+    # are back and reflect saved edits.
+    def _default_paper_size_selection(self):
+        rec = self.sudo().search([('company_id', '=', self.env.company.id)], limit=1)
+
+        def g(fld, d):
+            return int((getattr(rec, fld) if rec else d) or d)
+
+        return [
+            ('2in', '2 inch (%d mm)' % g('size_mm_2in', 50)),
+            ('3in', '3 inch (%d mm)' % g('size_mm_3in', 76)),
+            ('35in', '3.5 inch (%d mm)' % g('size_mm_35in', 80)),
+            ('4in', '4 inch (%d mm)' % g('size_mm_4in', 100)),
+            ('a5', 'A5 (%d mm)' % g('size_mm_a5', 148)),
+            ('a4', 'A4 (%d mm)' % g('size_mm_a4', 210)),
+            ('custom', 'Custom (W × H mm)'),
+        ]
+
+    default_paper_size = fields.Selection(
+        selection='_default_paper_size_selection',
+        string='Default Receipt Size', default='35in')
+    # Custom paper size (mm) used when default_paper_size == 'custom'. Height 0
+    # means "auto" (continuous roll); a positive value is a fixed sheet height.
+    custom_paper_width = fields.Integer(string='Custom Width (mm)', default=80)
+    custom_paper_height = fields.Integer(string='Custom Height (mm)', default=0)
+
+    # Editable physical width (mm) of each preset — per company. Defaults match
+    # the historic hardcoded values, so nothing changes until an admin edits one.
+    size_mm_2in = fields.Integer(string='2 inch (mm)', default=50)
+    size_mm_3in = fields.Integer(string='3 inch (mm)', default=76)
+    size_mm_35in = fields.Integer(string='3.5 inch (mm)', default=80)
+    size_mm_4in = fields.Integer(string='4 inch (mm)', default=100)
+    size_mm_a5 = fields.Integer(string='A5 (mm)', default=148)
+    size_mm_a4 = fields.Integer(string='A4 (mm)', default=210)
+
+    # Live indicator of the resolved size for the current selection — updates
+    # instantly as any preset/custom mm is edited (the dropdown labels only
+    # refresh on save/reload).
+    default_size_hint = fields.Char(compute='_compute_default_size_hint', string='Selected')
+
+    # preset key -> (mm field, display label). Presets render at auto height.
+    _PRESET_FIELD = {
+        '2in': ('size_mm_2in', '2 inch'),
+        '3in': ('size_mm_3in', '3 inch'),
+        '35in': ('size_mm_35in', '3.5 inch'),
+        '4in': ('size_mm_4in', '4 inch'),
+        'a5': ('size_mm_a5', 'A5'),
+        'a4': ('size_mm_a4', 'A4'),
+    }
+
+    def _resolved_default(self):
+        """Return (width_mm, height_mm) for the selected default size.
+        Custom → its own width/height; preset → the configured mm, height 0."""
+        self.ensure_one()
+        if self.default_paper_size == 'custom':
+            # Custom is one continuous page (auto height) — never split.
+            return (self.custom_paper_width or 80, 0)
+        fld = self._PRESET_FIELD.get(self.default_paper_size)
+        if fld:
+            return (getattr(self, fld[0]) or 80, 0)
+        return (80, 0)
+
+    def _preset_list(self):
+        """[{key,label,mm}] of the 6 presets with their configured mm — the app
+        uses this to render its 'Choose receipt size' picker dynamically."""
+        self.ensure_one()
+        return [
+            {'key': key, 'label': label, 'mm': int(getattr(self, fld) or 0)}
+            for key, (fld, label) in self._PRESET_FIELD.items()
+        ]
+
+    @api.onchange('default_paper_size')
+    def _onchange_default_paper_size(self):
+        """When a preset is picked, seed the Custom Width/Height from its
+        configured mm so the admin can switch to Custom and just tweak."""
+        if self.default_paper_size and self.default_paper_size != 'custom':
+            w, h = self._resolved_default()
+            self.custom_paper_width, self.custom_paper_height = w, h
+
+    @api.depends('default_paper_size', 'custom_paper_width', 'custom_paper_height',
+                 'size_mm_2in', 'size_mm_3in', 'size_mm_35in',
+                 'size_mm_4in', 'size_mm_a5', 'size_mm_a4')
+    def _compute_default_size_hint(self):
+        for rec in self:
+            w, h = rec._resolved_default()
+            rec.default_size_hint = ('→ %d × %d mm' % (w, h)) if h else ('→ %d mm' % w)
+
+    # Sensible band per preset so a value stays near its inch (Custom is free).
+    _SIZE_LIMITS = {
+        'size_mm_2in': (40, 65, '2 inch'),
+        'size_mm_3in': (60, 85, '3 inch'),
+        'size_mm_35in': (70, 95, '3.5 inch'),
+        'size_mm_4in': (85, 115, '4 inch'),
+        'size_mm_a5': (140, 160, 'A5'),
+        'size_mm_a4': (200, 225, 'A4'),
+    }
+
+    @api.onchange('size_mm_2in', 'size_mm_3in', 'size_mm_35in',
+                  'size_mm_4in', 'size_mm_a5', 'size_mm_a4')
+    def _onchange_clamp_preset_sizes(self):
+        """Live guard: if an out-of-range mm is typed, snap it back to the
+        nearest allowed value and warn — no need to wait for save."""
+        for fld, (lo, hi, label) in self._SIZE_LIMITS.items():
+            val = getattr(self, fld)
+            if val is None:
+                continue
+            if val < lo or val > hi:
+                clamped = lo if val < lo else hi
+                setattr(self, fld, clamped)
+                return {'warning': {
+                    'title': _('Size out of range'),
+                    'message': _(
+                        '%(label)s must be between %(lo)d and %(hi)d mm. '
+                        'Reset to %(clamped)d.',
+                        label=label, lo=lo, hi=hi, clamped=clamped),
+                }}
+
+    @api.constrains('size_mm_2in', 'size_mm_3in', 'size_mm_35in',
+                    'size_mm_4in', 'size_mm_a5', 'size_mm_a4')
+    def _check_preset_sizes(self):
+        """Server-side backstop (RPC / direct writes bypass the onchange)."""
+        for rec in self:
+            for fld, (lo, hi, label) in rec._SIZE_LIMITS.items():
+                val = getattr(rec, fld)
+                if val < lo or val > hi:
+                    raise ValidationError(_(
+                        '%(label)s size must be between %(lo)d and %(hi)d mm (got %(val)d).',
+                        label=label, lo=lo, hi=hi, val=val))
+
+    def action_reset_preset_sizes(self):
+        """Reset ONLY the 6 preset mm values to their factory defaults."""
+        self.ensure_one()
+        self.write({
+            'size_mm_2in': 50, 'size_mm_3in': 76, 'size_mm_35in': 80,
+            'size_mm_4in': 100, 'size_mm_a5': 148, 'size_mm_a4': 210,
+        })
 
     _sql_constraints = [
         ('company_uniq', 'unique(company_id)',
@@ -170,9 +299,14 @@ class PosInvoiceSettings(models.Model):
         falls back to asking each time.
         """
         rec = self.get_for_company(self.env.company)
+        width, height = rec._resolved_default()
         result = {
             'use_default': bool(rec.use_default_paper_size),
-            'size': rec.default_paper_size or '80',
+            'size': str(width),
+            'height': int(height),
+            # Configured mm for each preset so the app's ad-hoc size picker
+            # reflects any edits the admin made.
+            'presets': rec._preset_list(),
         }
         _logger.info('[PAPER SIZE] app_paper_size -> %s', result)
         return result

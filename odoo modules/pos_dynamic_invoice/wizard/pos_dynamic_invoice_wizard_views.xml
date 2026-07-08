@@ -12,6 +12,8 @@
                 <field name="order_id" invisible="1"/>
                 <group>
                     <field name="paper_size" widget="radio"/>
+                    <field name="custom_width" string="Custom Width (mm)" invisible="paper_size != 'custom'"
+                           help="Prints as one continuous page (auto height)."/>
                 </group>
                 <footer>
                     <button name="action_preview" string="Preview" type="object" class="btn-primary"/>

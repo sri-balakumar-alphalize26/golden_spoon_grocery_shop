@@ -101,7 +101,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const [sizePicker, setSizePicker] = useState(null);
   // Default receipt-size config from Invoice Settings (pos.invoice.settings via
   // RPC). When enabled, the action chips skip the picker and use `mm` directly.
-  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null });
+  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null, heightMm: 0 });
   useEffect(() => {
     let alive = true;
     fetchAppPaperSize().then((cfg) => {
@@ -356,11 +356,11 @@ const OrderDetailScreen = ({ navigation, route }) => {
     };
   };
 
-  const runPreview = async (paperWidthMm) => {
+  const runPreview = async (paperWidthMm, paperHeightMm = 0) => {
     try {
       const params = buildInvoiceParams();
       if (!params) return;
-      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, paperHeightMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -369,14 +369,14 @@ const OrderDetailScreen = ({ navigation, route }) => {
     }
   };
 
-  const runDownload = async (paperWidthMm) => {
+  const runDownload = async (paperWidthMm, paperHeightMm = 0) => {
     setDownloading(true);
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
       const filename = `Invoice-${extractOrderRef(order?.name, order?.id)}.pdf`;
       console.log(`[Download] start — order=${order?.id} size=${paperWidthMm}mm`);
-      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, paperHeightMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       console.log(`[Download] receipt HTML ready — ${html?.length || 0} chars`);
       const { uri } = await Print.printToFileAsync({ html });
       console.log(`[Download] PDF generated — ${uri || '(no uri)'}`);
@@ -420,12 +420,12 @@ const OrderDetailScreen = ({ navigation, route }) => {
     }
   };
 
-  const runPrint = async (paperWidthMm) => {
+  const runPrint = async (paperWidthMm, paperHeightMm = 0) => {
     setPrinting(true);
     try {
       const params = buildInvoiceParams();
       if (!params) throw new Error('Order not loaded');
-      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
+      const html = await resolveInvoiceHtml({ ...params, paperWidthMm, paperHeightMm, companyProfile, cashierName: order?.user?.name || authUser?.name || authUser?.username || authUser?.login || 'Cashier' });
       await Print.printAsync({ html });
     } catch (err) {
       if (err?.message && !/cancel/i.test(err.message)) {
@@ -441,10 +441,10 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // we run the action immediately; otherwise we open the size picker.
   const startAction = (action) => {
     if (paperCfg.enabled && paperCfg.mm) {
-      console.log(`[PAPER SIZE] ${action}: using default ${paperCfg.mm}mm (skipping picker)`);
-      if (action === 'preview') runPreview(paperCfg.mm);
-      else if (action === 'download') runDownload(paperCfg.mm);
-      else if (action === 'print') runPrint(paperCfg.mm);
+      console.log(`[PAPER SIZE] ${action}: using default ${paperCfg.mm}mm × ${paperCfg.heightMm || 'auto'} (skipping picker)`);
+      if (action === 'preview') runPreview(paperCfg.mm, paperCfg.heightMm);
+      else if (action === 'download') runDownload(paperCfg.mm, paperCfg.heightMm);
+      else if (action === 'print') runPrint(paperCfg.mm, paperCfg.heightMm);
     } else {
       console.log(`[PAPER SIZE] ${action}: no default set — opening size picker`);
       setSizePicker(action);
@@ -880,12 +880,13 @@ const OrderDetailScreen = ({ navigation, route }) => {
           cashier can re-render the receipt at 2"/3"/3.5"/4" thermal widths. */}
       <PaperSizeModal
         isVisible={!!sizePicker}
-        onSelect={(mm) => {
+        {...((paperCfg?.presets || []).length ? { sizes: paperCfg.presets.map((p) => ({ inch: p.label, mm: p.mm })) } : {})}
+        onSelect={(mm, height = 0) => {
           const action = sizePicker;
           setSizePicker(null);
-          if (action === 'preview') runPreview(mm);
-          else if (action === 'download') runDownload(mm);
-          else if (action === 'print') runPrint(mm);
+          if (action === 'preview') runPreview(mm, height);
+          else if (action === 'download') runDownload(mm, height);
+          else if (action === 'print') runPrint(mm, height);
         }}
         onCancel={() => setSizePicker(null)}
       />
