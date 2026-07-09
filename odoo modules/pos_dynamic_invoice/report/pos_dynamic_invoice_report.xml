@@ -239,25 +239,27 @@
 
             <div class="cmhead">
                 <div class="col en">
-                    <div>C.R. : <t t-esc="d['cr_number']"/></div>
-                    <div>P.O Box : <t t-esc="d['po_box']"/></div>
-                    <div>Postal Code : <t t-esc="d['postal_code']"/></div>
-                    <div>Sultanate of Oman</div>
-                    <div>GSM : <t t-esc="d['gsm_mobile']"/></div>
+                    <t t-if="d['show_cm_cr']"><div>C.R. : <t t-esc="d['cr_number']"/></div></t>
+                    <t t-if="d['show_cm_pobox']"><div>P.O Box : <t t-esc="d['po_box']"/></div></t>
+                    <t t-if="d['show_cm_postal']"><div>Postal Code : <t t-esc="d['postal_code']"/></div></t>
+                    <t t-if="d['show_cm_sultanate']"><div>Sultanate of Oman</div></t>
+                    <t t-if="d['show_cm_gsm']"><div>GSM : <t t-esc="d['gsm_mobile']"/></div></t>
                 </div>
                 <div class="center">
                     <t t-if="d['show_logo'] and d['logo']">
                         <img class="logo" t-att-src="'data:image/png;base64,' + d['logo']"/>
                     </t>
-                    <div class="name-ar"><t t-esc="d['company_name_ar']"/></div>
-                    <div class="name-en"><t t-esc="d['company_name_en'] or d['company']['name']"/></div>
+                    <t t-if="d['show_cm_name']">
+                        <div class="name-ar"><t t-esc="d['company_name_ar']"/></div>
+                        <div class="name-en"><t t-esc="d['company_name_en'] or d['company']['name']"/></div>
+                    </t>
                 </div>
                 <div class="col ar">
-                    <div>س.ت : <t t-esc="d['cr_number']"/></div>
-                    <div>ص.ب : <t t-esc="d['po_box']"/></div>
-                    <div>الرمز البريدي : <t t-esc="d['postal_code']"/></div>
-                    <div>سلطنة عمان</div>
-                    <div>نقال : <t t-esc="d['gsm_mobile']"/></div>
+                    <t t-if="d['show_cm_cr']"><div>س.ت : <t t-esc="d['cr_number']"/></div></t>
+                    <t t-if="d['show_cm_pobox']"><div>ص.ب : <t t-esc="d['po_box']"/></div></t>
+                    <t t-if="d['show_cm_postal']"><div>الرمز البريدي : <t t-esc="d['postal_code']"/></div></t>
+                    <t t-if="d['show_cm_sultanate']"><div>سلطنة عمان</div></t>
+                    <t t-if="d['show_cm_gsm']"><div>نقال : <t t-esc="d['gsm_mobile']"/></div></t>
                 </div>
             </div>
 
