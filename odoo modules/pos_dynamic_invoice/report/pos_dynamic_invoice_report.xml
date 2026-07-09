@@ -231,7 +231,10 @@
                 .cm_root .foot .totals .trow { display:flex; border:1px solid #333; border-top:0; }
                 .cm_root .foot .totals .trow .k { width:45%; border-right:1px solid #333; padding:6px 8px; font-size:12px; font-weight:700; }
                 .cm_root .foot .totals .trow .v { flex:1; padding:6px 8px; text-align:right; font-size:12px; }
-                .cm_root .sign { display:flex; justify-content:space-between; margin-top:26px; font-size:13px; }
+                .cm_root .sign { display:flex; justify-content:space-between; align-items:flex-end; margin-top:26px; font-size:13px; }
+                .cm_root .sigcol { width:45%; text-align:center; }
+                .cm_root .sigimg { max-height:48px; max-width:100%; object-fit:contain; display:block; margin:0 auto 2px; }
+                .cm_root .sigline { border-top:1px solid #333; padding-top:3px; }
             </style>
 
             <div class="cmhead">
@@ -302,8 +305,18 @@
             </div>
 
             <div class="sign">
-                <div>Cashier: ...............................</div>
-                <div>Customer: ...............................</div>
+                <div class="sigcol">
+                    <t t-if="d['show_shop_owner_sig']">
+                        <img class="sigimg" t-att-src="'data:image/png;base64,' + d['shop_owner_signature']"/>
+                    </t>
+                    <div class="sigline">Cashier</div>
+                </div>
+                <div class="sigcol">
+                    <t t-if="d['show_customer_sig']">
+                        <img class="sigimg" t-att-src="'data:image/png;base64,' + d['customer_signature']"/>
+                    </t>
+                    <div class="sigline">Customer</div>
+                </div>
             </div>
         </div>
     </template>
