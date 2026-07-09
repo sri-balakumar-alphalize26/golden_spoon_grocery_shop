@@ -4548,9 +4548,9 @@ const INVOICE_SETTINGS_FIELDS = [
   // Per-company editable preset widths (mm) — the default size stores a KEY.
   'size_mm_2in', 'size_mm_3in', 'size_mm_35in', 'size_mm_4in', 'size_mm_a5', 'size_mm_a4',
   // 3-way template picker + Cash Memo header fields.
-  'invoice_template', 'company_name_ar', 'company_name_en', 'cr_number', 'po_box', 'postal_code', 'gsm',
+  'invoice_template', 'company_name_ar', 'company_name_en', 'cr_number', 'po_box', 'postal_code', 'gsm', 'vat_no',
   // Per-field show/hide toggles for the Cash Memo header.
-  'show_cm_name', 'show_cm_cr', 'show_cm_pobox', 'show_cm_postal', 'show_cm_sultanate', 'show_cm_gsm',
+  'show_cm_name', 'show_cm_cr', 'show_cm_pobox', 'show_cm_postal', 'show_cm_sultanate', 'show_cm_gsm', 'show_cm_vat',
   // Custom receipt size (Width × Height mm).
   'custom_paper_width', 'custom_paper_height',
 ];

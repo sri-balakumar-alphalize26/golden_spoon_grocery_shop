@@ -65,6 +65,7 @@ class PosInvoiceSettings(models.Model):
     po_box = fields.Char(string='P.O Box', default='112')
     postal_code = fields.Char(string='Postal Code', default='111')
     gsm = fields.Char(string='GSM / Mobile', default='77576196')
+    vat_no = fields.Char(string='VAT Number')
 
     # Per-field show/hide for the Cash Memo header lines (both EN + AR columns).
     show_cm_name = fields.Boolean(string='Show Company Name', default=True)
@@ -73,6 +74,7 @@ class PosInvoiceSettings(models.Model):
     show_cm_postal = fields.Boolean(string='Show Postal Code', default=True)
     show_cm_sultanate = fields.Boolean(string='Show Sultanate of Oman', default=True)
     show_cm_gsm = fields.Boolean(string='Show GSM / Mobile', default=True)
+    show_cm_vat = fields.Boolean(string='Show VAT Number', default=True)
 
     # --- Branding (each falls back to res.company when blank) ---
     address = fields.Text(string='Address', help='Free-text address; one line per row.')

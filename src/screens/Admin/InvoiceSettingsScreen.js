@@ -73,6 +73,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [poBox, setPoBox] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [gsm, setGsm] = useState('');
+  const [vatNo, setVatNo] = useState('');
   // Per-field show/hide toggles for the Cash Memo header.
   const [showCmName, setShowCmName] = useState(true);
   const [showCmCr, setShowCmCr] = useState(true);
@@ -80,6 +81,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [showCmPostal, setShowCmPostal] = useState(true);
   const [showCmSultanate, setShowCmSultanate] = useState(true);
   const [showCmGsm, setShowCmGsm] = useState(true);
+  const [showCmVat, setShowCmVat] = useState(true);
   // Preview modal
   const [previewHtml, setPreviewHtml] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -162,12 +164,14 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setPoBox(s.po_box || '');
         setPostalCode(s.postal_code || '');
         setGsm(s.gsm || '');
+        setVatNo(s.vat_no || '');
         setShowCmName(s.show_cm_name !== false);
         setShowCmCr(s.show_cm_cr !== false);
         setShowCmPobox(s.show_cm_pobox !== false);
         setShowCmPostal(s.show_cm_postal !== false);
         setShowCmSultanate(s.show_cm_sultanate !== false);
         setShowCmGsm(s.show_cm_gsm !== false);
+        setShowCmVat(s.show_cm_vat !== false);
         setAddress(s.address || '');
         setPhone(s.phone || '');
         setEmail(s.email || '');
@@ -236,12 +240,14 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     po_box: poBox || false,
     postal_code: postalCode || false,
     gsm: gsm || false,
+    vat_no: vatNo || false,
     show_cm_name: !!showCmName,
     show_cm_cr: !!showCmCr,
     show_cm_pobox: !!showCmPobox,
     show_cm_postal: !!showCmPostal,
     show_cm_sultanate: !!showCmSultanate,
     show_cm_gsm: !!showCmGsm,
+    show_cm_vat: !!showCmVat,
     address: address || false,
     phone: phone || false,
     email: email || false,
@@ -642,19 +648,15 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           <TextInput style={styles.input} value={crNumber} onChangeText={setCrNumber} placeholder="e.g. 1410246" placeholderTextColor="#999" />
           <Row label="Show C.R. Number" value={showCmCr} onValueChange={setShowCmCr} />
 
-          <Text style={styles.label}>P.O. Box</Text>
-          <TextInput style={styles.input} value={poBox} onChangeText={setPoBox} placeholder="e.g. 112" placeholderTextColor="#999" />
-          <Row label="Show P.O Box" value={showCmPobox} onValueChange={setShowCmPobox} />
-
-          <Text style={styles.label}>Postal Code</Text>
-          <TextInput style={styles.input} value={postalCode} onChangeText={setPostalCode} placeholder="e.g. 111" placeholderTextColor="#999" />
-          <Row label="Show Postal Code" value={showCmPostal} onValueChange={setShowCmPostal} />
-
-          <Row label="Show Sultanate of Oman" value={showCmSultanate} onValueChange={setShowCmSultanate} />
-
           <Text style={styles.label}>GSM / Mobile</Text>
           <TextInput style={styles.input} value={gsm} onChangeText={setGsm} placeholder="e.g. 77576196" placeholderTextColor="#999" keyboardType="phone-pad" />
           <Row label="Show GSM / Mobile" value={showCmGsm} onValueChange={setShowCmGsm} />
+
+          <Row label="Show Sultanate of Oman" value={showCmSultanate} onValueChange={setShowCmSultanate} />
+
+          <Text style={styles.label}>VAT Number</Text>
+          <TextInput style={styles.input} value={vatNo} onChangeText={setVatNo} placeholder="e.g. OM1100000000" placeholderTextColor="#999" />
+          <Row label="Show VAT Number" value={showCmVat} onValueChange={setShowCmVat} />
         </View>
 
         {/* Logo — shared with the dynamic receipt */}

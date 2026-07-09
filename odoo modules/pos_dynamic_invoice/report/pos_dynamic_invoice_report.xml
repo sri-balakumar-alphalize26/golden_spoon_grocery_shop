@@ -224,7 +224,7 @@
                 /* Tall filler cell keeps the column rules running down the page,
                    like the printed blank form. */
                 .cm_root table.items td.filler { height:300px; }
-                .cm_root .sl { width:8%; } .cm_root .desc { width:38%; } .cm_root .sz { width:10%; } .cm_root .qt { width:13%; } .cm_root .rt { width:14%; } .cm_root .am { width:17%; }
+                .cm_root .sl { width:8%; } .cm_root .desc { width:52%; } .cm_root .qt { width:18%; } .cm_root .am { width:22%; }
                 .cm_root .foot { display:flex; }
                 .cm_root .foot .words { flex:1; border:1px solid #333; border-top:0; padding:8px; font-size:12px; }
                 .cm_root .foot .totals { width:34%; }
@@ -239,11 +239,10 @@
 
             <div class="cmhead">
                 <div class="col en">
-                    <t t-if="d['show_cm_cr']"><div>C.R. : <t t-esc="d['cr_number']"/></div></t>
-                    <t t-if="d['show_cm_pobox']"><div>P.O Box : <t t-esc="d['po_box']"/></div></t>
-                    <t t-if="d['show_cm_postal']"><div>Postal Code : <t t-esc="d['postal_code']"/></div></t>
-                    <t t-if="d['show_cm_sultanate']"><div>Sultanate of Oman</div></t>
+                    <t t-if="d['show_cm_cr']"><div>C.R. No : <t t-esc="d['cr_number']"/></div></t>
                     <t t-if="d['show_cm_gsm']"><div>GSM : <t t-esc="d['gsm_mobile']"/></div></t>
+                    <t t-if="d['show_cm_sultanate']"><div>Sur-Sultanate of Oman</div></t>
+                    <t t-if="d['show_cm_vat']"><div>VAT No : <t t-esc="d['vat_no']"/></div></t>
                 </div>
                 <div class="center">
                     <t t-if="d['show_logo'] and d['logo']">
@@ -256,14 +255,13 @@
                 </div>
                 <div class="col ar">
                     <t t-if="d['show_cm_cr']"><div>س.ت : <t t-esc="d['cr_number']"/></div></t>
-                    <t t-if="d['show_cm_pobox']"><div>ص.ب : <t t-esc="d['po_box']"/></div></t>
-                    <t t-if="d['show_cm_postal']"><div>الرمز البريدي : <t t-esc="d['postal_code']"/></div></t>
-                    <t t-if="d['show_cm_sultanate']"><div>سلطنة عمان</div></t>
                     <t t-if="d['show_cm_gsm']"><div>نقال : <t t-esc="d['gsm_mobile']"/></div></t>
+                    <t t-if="d['show_cm_sultanate']"><div>صور-سلطنة عمان</div></t>
+                    <t t-if="d['show_cm_vat']"><div>الرقم الضريبي : <t t-esc="d['vat_no']"/></div></t>
                 </div>
             </div>
 
-            <div class="cmtitle">CASH MEMO</div>
+            <div class="cmtitle">INVOICE</div>
 
             <div class="row2">
                 <div class="field"><span class="lbl">No:</span><span class="dots"><t t-esc="d['order_ref']"/></span></div>
@@ -275,7 +273,7 @@
             <table class="items">
                 <thead>
                     <tr>
-                        <th class="sl">Sl No</th><th class="desc">Description</th><th class="sz">Size</th><th class="qt">Quantity</th><th class="rt">Rate</th><th class="am">Amount</th>
+                        <th class="sl">Sl No</th><th class="desc">Description</th><th class="qt">Quantity</th><th class="am">Amount</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -283,16 +281,14 @@
                         <tr>
                             <td class="c"><t t-esc="item['num']"/></td>
                             <td><t t-esc="item['name']"/></td>
-                            <td class="c"></td>
                             <td class="c"><t t-esc="item['qty']"/></td>
-                            <td class="r"><t t-esc="item['unit_f']"/></td>
                             <td class="r"><t t-esc="item['total_f']"/></td>
                         </tr>
                     </t>
-                    <!-- Filler row: keeps the six column rules running to the
-                         foot, matching the printed blank form. -->
+                    <!-- Filler row: keeps the column rules running to the foot,
+                         matching the printed blank form. -->
                     <tr>
-                        <td class="filler"></td><td></td><td></td><td></td><td></td><td></td>
+                        <td class="filler"></td><td></td><td></td><td></td>
                     </tr>
                 </tbody>
             </table>

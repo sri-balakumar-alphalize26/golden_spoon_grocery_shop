@@ -93,21 +93,16 @@
                             <field name="cr_number" nolabel="1"/>
                             <field name="show_cm_cr" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
                         </div>
-                        <label for="po_box"/>
-                        <div class="o_row">
-                            <field name="po_box" nolabel="1"/>
-                            <field name="show_cm_pobox" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
-                        </div>
-                        <label for="postal_code"/>
-                        <div class="o_row">
-                            <field name="postal_code" nolabel="1"/>
-                            <field name="show_cm_postal" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
-                        </div>
-                        <field name="show_cm_sultanate" widget="boolean_toggle" string="Show Sultanate of Oman"/>
                         <label for="gsm"/>
                         <div class="o_row">
                             <field name="gsm" nolabel="1"/>
                             <field name="show_cm_gsm" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
+                        </div>
+                        <field name="show_cm_sultanate" widget="boolean_toggle" string="Show Sultanate of Oman"/>
+                        <label for="vat_no"/>
+                        <div class="o_row">
+                            <field name="vat_no" nolabel="1"/>
+                            <field name="show_cm_vat" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
                         </div>
                     </group>
                     <!-- Logo — shared by Dynamic and Cash Memo. -->

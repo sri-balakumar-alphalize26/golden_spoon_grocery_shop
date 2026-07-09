@@ -220,12 +220,14 @@ class PosOrder(models.Model):
         data['po_box'] = settings.po_box or ''
         data['postal_code'] = settings.postal_code or ''
         data['gsm_mobile'] = settings.gsm or ''
+        data['vat_no'] = settings.vat_no or ''
         data['show_cm_name'] = settings.show_cm_name
         data['show_cm_cr'] = settings.show_cm_cr
         data['show_cm_pobox'] = settings.show_cm_pobox
         data['show_cm_postal'] = settings.show_cm_postal
         data['show_cm_sultanate'] = settings.show_cm_sultanate
         data['show_cm_gsm'] = settings.show_cm_gsm
+        data['show_cm_vat'] = settings.show_cm_vat
         currency = self.currency_id or company.currency_id
         fmt = self._receipt_money_formatter()
         try:
