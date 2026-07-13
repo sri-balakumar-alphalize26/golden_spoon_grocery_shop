@@ -13,7 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml, fetchAppPaperSize } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
-import { generateInvoiceHtml, extractOrderRef } from '@utils/invoiceHtml';
+import { generateInvoiceHtml, extractOrderRef, printPageSize } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
 import Toast from 'react-native-toast-message';
 import LocationModal from '@components/Modal/LocationModal';
@@ -355,7 +355,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
       console.log(`[Download] start — order=${orderId} size=${paperWidthMm}mm`);
       const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
       console.log(`[Download] receipt HTML ready — ${html?.length || 0} chars`);
-      const { uri } = await Print.printToFileAsync({ html });
+      // Exact page size (points) so the PDF page == the physical roll → printer
+      // prints at 100%, no downscaling that smears thermal text.
+      const { uri } = await Print.printToFileAsync({ html, ...printPageSize(paperWidthMm, paperHeightMm) });
       console.log(`[Download] PDF generated — ${uri || '(no uri)'}`);
       if (!uri) throw new Error('Failed to generate PDF');
 
@@ -408,7 +410,8 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     setPrinting(true);
     try {
       const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
-      await Print.printAsync({ html });
+      // Exact page size (points) so the printer prints at 100% with no scaling.
+      await Print.printAsync({ html, ...printPageSize(paperWidthMm, paperHeightMm) });
     } catch (err) {
       // User cancellation throws — only toast for genuine errors
       if (err?.message && !/cancel/i.test(err.message)) {

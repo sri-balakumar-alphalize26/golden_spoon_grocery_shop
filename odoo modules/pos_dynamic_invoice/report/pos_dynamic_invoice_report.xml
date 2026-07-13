@@ -194,7 +194,7 @@
     <!-- Cash Memo: bilingual (English/Arabic) Oman invoice, auto-filled from the
          order. Self-contained inline style + base64 images, no /web/assets. -->
     <template id="report_pos_dynamic_invoice_cash_memo_doc">
-        <div class="cm_root">
+        <div t-attf-class="cm_root#{' narrow' if width &lt;= 110 else ''}">
             <style>
                 /* Cash Memo honours the selected receipt size like the other
                    templates (page_size_css / receipt_width from the wizard), so
@@ -210,34 +210,70 @@
                 .cm_root .cmhead .center .name-ar { font-size:20px; font-weight:700; color:#1a7a3f; line-height:1.2; }
                 .cm_root .cmhead .center .name-en { font-size:15px; font-weight:700; color:#1a7a3f; margin-top:3px; letter-spacing:0.3px; }
                 .cm_root .cmhead .logo { max-height:38px; margin:0 auto 3px; display:block; }
+                /* Narrow header for ALL thermal rolls (up to 110mm / 4"): the
+                   3-column form can't fit a long company name on a roll, so it
+                   stacks into ONE centered column — name on top, then the EN info
+                   lines, then the AR info lines. Only A5/A4 (>110mm) keep the
+                   3-column form. Chosen by width via t-if below (server-side). */
+                .cm_root .cmhead-narrow { background:#eef0ef; border:1px solid #cfcfcf; padding:6px 8px; text-align:center; }
+                .cm_root .cmhead-narrow .logo { max-height:34px; margin:0 auto 3px; display:block; }
+                .cm_root .cmhead-narrow .name-ar { font-size:16px; font-weight:700; color:#1a7a3f; line-height:1.2; }
+                .cm_root .cmhead-narrow .name-en { font-size:12px; font-weight:700; color:#1a7a3f; margin-top:2px; }
+                .cm_root .cmhead-narrow .info { font-size:10px; color:#1a7a3f; line-height:1.5; margin-top:4px; white-space:normal; }
+                .cm_root .cmhead-narrow .info .ar { direction:rtl; }
+                /* Narrow: stack No/Date instead of side-by-side (Date was clipping). */
+                .cm_root.narrow .row2 { flex-direction:column; gap:0; }
                 .cm_root .cmtitle { text-align:center; font-weight:700; font-size:16px; letter-spacing:1px; margin:14px 0 12px; }
-                .cm_root .field { font-size:13px; margin:9px 0; display:flex; align-items:flex-end; }
+                .cm_root .field { font-size:14px; margin:9px 0; display:flex; align-items:flex-end; }
                 .cm_root .field .lbl { white-space:nowrap; }
                 .cm_root .field .dots { border-bottom:1px dotted #333; flex:1; margin-left:6px; min-height:16px; padding:0 4px 1px; }
+                .cm_root .field .num { direction:ltr; unicode-bidi:embed; }
                 .cm_root .row2 { display:flex; justify-content:space-between; gap:40px; }
                 .cm_root .row2 .field { flex:1; }
-                .cm_root table.items { width:100%; border-collapse:collapse; margin-top:6px; table-layout:fixed; }
-                .cm_root table.items th, .cm_root table.items td { border:1px solid #333; padding:5px 6px; font-size:12px; vertical-align:top; word-wrap:break-word; }
-                .cm_root table.items th { text-align:center; font-weight:700; background:#fff; }
+                /* Auto layout (NOT table-layout:fixed) so long product names lay
+                   out at natural width — the fixed layout + narrow columns crushed
+                   text and smeared it when the thermal printer scaled the PDF.
+                   Larger font + lighter cell borders survive that downscaling. */
+                .cm_root table.items { width:100%; border-collapse:collapse; margin-top:6px; }
+                /* Tight horizontal padding (was 6px) so numeric columns fit even
+                   on 76/80mm rolls without the "OMR x.xxx" overflowing the right
+                   border. Vertical padding kept for legibility. */
+                .cm_root table.items th, .cm_root table.items td { border:1px solid #555; padding:6px 3px; font-size:13px; vertical-align:top; }
+                .cm_root table.items th { text-align:center; font-weight:700; background:#fff; font-size:12px; }
                 .cm_root table.items td.c { text-align:center; }
-                .cm_root table.items td.r { text-align:right; }
-                /* Tall filler cell keeps the column rules running down the page,
-                   like the printed blank form. */
-                .cm_root table.items td.filler { height:300px; }
-                .cm_root .sl { width:8%; } .cm_root .desc { width:52%; } .cm_root .qt { width:18%; } .cm_root .am { width:22%; }
+                /* Amounts are numeric — never wrap, force LTR so digits stay in
+                   order, and give the column just enough room via a slightly
+                   smaller font so "OMR 2.500" sits INSIDE its cell at any width. */
+                .cm_root table.items td.r { text-align:right; white-space:nowrap; direction:ltr; unicode-bidi:embed; font-size:12px; }
+                .cm_root table.items th.am { white-space:nowrap; }
+                .cm_root table.items td.c { white-space:nowrap; }
+                .cm_root table.items td.desc-cell { word-wrap:break-word; }
+                /* Small filler so the column rules run just below the last item
+                   without wasting the thermal roll (was 300px). */
+                .cm_root table.items td.filler { height:24px; }
+                /* Only pin the tiny Sl-No + Qty columns; let Description and the
+                   numeric Amount column auto-size to their content so amounts are
+                   never crushed/overflowed. */
+                .cm_root .sl { width:9%; } .cm_root .qt { width:14%; }
                 .cm_root .foot { display:flex; }
-                .cm_root .foot .words { flex:1; border:1px solid #333; border-top:0; padding:8px; font-size:12px; }
-                .cm_root .foot .totals { width:34%; }
-                .cm_root .foot .totals .trow { display:flex; border:1px solid #333; border-top:0; }
-                .cm_root .foot .totals .trow .k { width:45%; border-right:1px solid #333; padding:6px 8px; font-size:12px; font-weight:700; }
-                .cm_root .foot .totals .trow .v { flex:1; padding:6px 8px; text-align:right; font-size:12px; }
+                .cm_root .foot .words { flex:1; border:1px solid #555; border-top:0; padding:6px; font-size:12px; }
+                /* Totals box: label col auto-sizes to "Advance"; value cell gets
+                   the rest with tight padding + nowrap so "OMR 8.400" always fits
+                   inside the border at every paper width. */
+                .cm_root .foot .totals { width:48%; }
+                .cm_root .foot .totals .trow { display:flex; border:1px solid #555; border-top:0; }
+                .cm_root .foot .totals .trow .k { flex:0 0 auto; white-space:nowrap; border-right:1px solid #555; padding:6px 4px; font-size:12px; font-weight:700; }
+                .cm_root .foot .totals .trow .v { flex:1; min-width:0; padding:6px 4px; text-align:right; font-size:12px; white-space:nowrap; direction:ltr; unicode-bidi:embed; }
                 .cm_root .sign { display:flex; justify-content:space-between; align-items:flex-end; margin-top:26px; font-size:13px; }
                 .cm_root .sigcol { width:45%; text-align:center; }
                 .cm_root .sigimg { max-height:48px; max-width:100%; object-fit:contain; display:block; margin:0 auto 2px; }
                 .cm_root .sigline { border-top:1px solid #333; padding-top:3px; }
             </style>
 
-            <div class="cmhead">
+            <!-- WIDE (A5/A4, >110mm): 3-column header (EN | name | AR) side by
+                 side — only wide sheets have room. Thermal rolls (<=110mm) use
+                 the stacked header below so long company names never cramp. -->
+            <div class="cmhead" t-if="width &gt; 110">
                 <div class="col en">
                     <t t-if="d['show_cm_cr']"><div>C.R. No : <t t-esc="d['cr_number']"/></div></t>
                     <t t-if="d['show_cm_gsm']"><div>GSM : <t t-esc="d['gsm_mobile']"/></div></t>
@@ -260,12 +296,32 @@
                     <t t-if="d['show_cm_vat']"><div>الرقم الضريبي : <t t-esc="d['vat_no']"/></div></t>
                 </div>
             </div>
+            <!-- NARROW (<=58mm / 2"): stacked single column so nothing clips. -->
+            <div class="cmhead-narrow" t-else="">
+                <t t-if="d['show_logo'] and d['logo']">
+                    <img class="logo" t-att-src="'data:image/png;base64,' + d['logo']"/>
+                </t>
+                <t t-if="d['show_cm_name']">
+                    <div class="name-ar"><t t-esc="d['company_name_ar']"/></div>
+                    <div class="name-en"><t t-esc="d['company_name_en'] or d['company']['name']"/></div>
+                </t>
+                <div class="info">
+                    <t t-if="d['show_cm_cr']"><div>C.R. No : <t t-esc="d['cr_number']"/></div></t>
+                    <t t-if="d['show_cm_gsm']"><div>GSM : <t t-esc="d['gsm_mobile']"/></div></t>
+                    <t t-if="d['show_cm_sultanate']"><div>Sur-Sultanate of Oman</div></t>
+                    <t t-if="d['show_cm_vat']"><div>VAT No : <t t-esc="d['vat_no']"/></div></t>
+                    <t t-if="d['show_cm_cr']"><div class="ar">س.ت : <t t-esc="d['cr_number']"/></div></t>
+                    <t t-if="d['show_cm_gsm']"><div class="ar">نقال : <t t-esc="d['gsm_mobile']"/></div></t>
+                    <t t-if="d['show_cm_sultanate']"><div class="ar">صور-سلطنة عمان</div></t>
+                    <t t-if="d['show_cm_vat']"><div class="ar">الرقم الضريبي : <t t-esc="d['vat_no']"/></div></t>
+                </div>
+            </div>
 
             <div class="cmtitle">INVOICE</div>
 
             <div class="row2">
-                <div class="field"><span class="lbl">No:</span><span class="dots"><t t-esc="d['order_ref']"/></span></div>
-                <div class="field"><span class="lbl">Date:</span><span class="dots"><t t-esc="d['date']"/></span></div>
+                <div class="field"><span class="lbl">No:</span><span class="dots num"><t t-esc="d['order_ref']"/></span></div>
+                <div class="field"><span class="lbl">Date:</span><span class="dots num"><t t-esc="d['date']"/></span></div>
             </div>
             <div class="field"><span class="lbl">Name:</span><span class="dots"><t t-esc="d['customer']"/></span></div>
             <div class="field"><span class="lbl">Address:</span><span class="dots"><t t-esc="d['customer_address']"/></span></div>
@@ -273,20 +329,20 @@
             <table class="items">
                 <thead>
                     <tr>
-                        <th class="sl">Sl No</th><th class="desc">Description</th><th class="qt">Quantity</th><th class="am">Amount</th>
+                        <th class="sl">Sl No</th><th>Description</th><th class="qt">Quantity</th><th class="am">Amount</th>
                     </tr>
                 </thead>
                 <tbody>
                     <t t-foreach="d['items']" t-as="item">
                         <tr>
                             <td class="c"><t t-esc="item['num']"/></td>
-                            <td><t t-esc="item['name']"/></td>
+                            <td class="desc-cell"><t t-esc="item['name']"/></td>
                             <td class="c"><t t-esc="item['qty']"/></td>
                             <td class="r"><t t-esc="item['total_f']"/></td>
                         </tr>
                     </t>
-                    <!-- Filler row: keeps the column rules running to the foot,
-                         matching the printed blank form. -->
+                    <!-- Small filler row: runs the column rules just below the last
+                         item without wasting the thermal roll. -->
                     <tr>
                         <td class="filler"></td><td></td><td></td><td></td>
                     </tr>
@@ -330,6 +386,7 @@
             <t t-foreach="docs" t-as="doc">
                 <t t-set="v" t-value="doc._render_context()"/>
                 <t t-set="d" t-value="v['d']"/>
+                <t t-set="width" t-value="v['width']"/>
                 <t t-set="receipt_width" t-value="v['receipt_width']"/>
                 <t t-set="page_size_css" t-value="v['page_size_css']"/>
                 <t t-set="sig_max_h" t-value="v['sig_max_h']"/>

@@ -35,6 +35,22 @@ export const extractOrderRef = (orderName, orderId) => {
   return String(orderId || '').padStart(6, '0');
 };
 
+// Build the expo-print page-size options (in PDF points; 1mm = 2.83465pt) for a
+// given thermal roll width/height in mm. Passing an explicit `width` makes the
+// generated PDF page exactly match the physical roll, so the printer prints at
+// 100% with NO "fit to page" downscaling — the downscaling is what smears small
+// mixed EN/AR text into boxes on thermal printers. `height` is omitted when 0
+// (auto/continuous roll) so expo-print uses the content height. Spread the
+// result into Print.printAsync / Print.printToFileAsync: `{ html, ...opts }`.
+const MM_TO_PT = 2.83465;
+export const printPageSize = (paperWidthMm = 80, paperHeightMm = 0) => {
+  const w = Math.max(20, Number(paperWidthMm) || 80);
+  const h = Math.max(0, Number(paperHeightMm) || 0);
+  const opts = { width: Math.round(w * MM_TO_PT) };
+  if (h > 0) opts.height = Math.round(h * MM_TO_PT);
+  return opts;
+};
+
 export const generateInvoiceHtml = ({
   items = [],
   subtotal = 0,
