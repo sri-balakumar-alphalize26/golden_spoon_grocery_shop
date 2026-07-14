@@ -108,6 +108,33 @@ class PosInvoiceSettings(models.Model):
         help='When off, the footer text (e.g. "Thank you for your purchase!") is hidden.',
     )
 
+    # --- Dynamic-header info lines (values shared with the Cash Memo fields:
+    # cr_number / gsm; the Sultanate line is static text). Each line has its own
+    # show/hide toggle so the DYNAMIC invoice header can carry the same company
+    # info as the Cash Memo. Only the Dynamic template reads these — Standard
+    # and Cash Memo are unaffected. ---
+    show_dyn_cr = fields.Boolean(
+        string='Show C.R. Number', default=True,
+        help='Show the C.R. Number line on the Dynamic invoice header.',
+    )
+    show_dyn_gsm = fields.Boolean(
+        string='Show GSM / Mobile', default=True,
+        help='Show the GSM / Mobile line on the Dynamic invoice header.',
+    )
+    show_dyn_sultanate = fields.Boolean(
+        string='Show Sultanate of Oman', default=True,
+        help='Show the "Sur-Sultanate of Oman" line on the Dynamic invoice header.',
+    )
+    show_dyn_vat = fields.Boolean(
+        string='Show VAT Line', default=True,
+        help='Show the VAT / GST line on the Dynamic invoice header.',
+    )
+    show_dyn_name_ar = fields.Boolean(
+        string='Show Arabic Company Name', default=True,
+        help='Show the Arabic company name (shared with the Cash Memo) above '
+             'the company name on the Dynamic invoice header.',
+    )
+
     # --- Default receipt size (applies to BOTH the dynamic and the normal
     # receipt) ---
     # When on, the app skips its paper-size prompt on Preview / Download / Print
@@ -291,11 +318,14 @@ class PosInvoiceSettings(models.Model):
     @api.model
     def app_dynamic_enabled(self):
         """Return True when the mobile app should fetch a server-rendered invoice
-        for the current company — i.e. the template is Dynamic OR Cash Memo (not
-        Normal/HTML). The app caches this; a missing model (module not installed)
-        errors and the app falls back to its built-in receipt.
+        for the current company. Now True for ALL templates (Standard included):
+        the server's Standard render is a same-look port of the app's built-in
+        receipt, and rendering it server-side lets the Invoice Settings logo
+        appear on the Standard receipt too. The app's built-in receipt remains
+        the offline fallback (fetch failure -> generateInvoiceHtml).
         """
-        return bool(self.get_for_company(self.env.company).invoice_template != 'html')
+        self.get_for_company(self.env.company)  # ensure the settings record exists
+        return True
 
     @api.model
     def app_paper_size(self):

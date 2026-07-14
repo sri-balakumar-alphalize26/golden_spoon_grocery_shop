@@ -8,20 +8,20 @@
         <field name="arch" type="xml">
             <form string="Dynamic Invoice Settings">
                 <header>
-                    <!-- Render the selected template (Dynamic / Cash Memo)
-                         against a recent order. Hidden for Normal (HTML), which
-                         uses the app's built-in receipt. -->
+                    <!-- Render the selected template against a recent order.
+                         Visible for ALL templates: the Standard receipt is now
+                         also server-rendered (so it can carry the logo). -->
                     <button name="action_preview_receipt"
                             type="object"
                             string="Preview"
                             class="btn-primary"
-                            icon="fa-eye"
-                            invisible="invoice_template == 'html'"/>
+                            icon="fa-eye"/>
                 </header>
                 <sheet>
                     <div class="alert alert-info" role="alert" invisible="invoice_template != 'html'">
-                        The app is showing its <b>standard</b> built-in receipt. Pick
-                        <b>Dynamic</b> or <b>Cash Memo</b> above to render a custom invoice.
+                        The app is showing the <b>standard</b> receipt (with your logo,
+                        if set below). Pick <b>Dynamic</b> or <b>Cash Memo</b> above to
+                        render a custom invoice.
                     </div>
                     <group>
                         <field name="company_id"/>
@@ -105,8 +105,9 @@
                             <field name="show_cm_vat" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
                         </div>
                     </group>
-                    <!-- Logo — shared by Dynamic and Cash Memo. -->
-                    <group string="Logo" invisible="invoice_template == 'html'">
+                    <!-- Logo — shared by ALL templates (Standard included: the
+                         Standard receipt is server-rendered and shows it too). -->
+                    <group string="Logo">
                         <field name="show_logo"/>
                         <field name="logo" widget="image" class="oe_avatar" options="{'size': [160, 90]}"/>
                     </group>
@@ -114,7 +115,30 @@
                         <field name="address" placeholder="One line per row (defaults to company address)"/>
                         <field name="phone" placeholder="Defaults to company phone"/>
                         <field name="email" placeholder="Defaults to company email"/>
-                        <field name="vat_number" placeholder="VAT / GST number"/>
+                        <label for="vat_number"/>
+                        <div class="o_row">
+                            <field name="vat_number" nolabel="1" placeholder="VAT / GST number"/>
+                            <field name="show_dyn_vat" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
+                        </div>
+                        <!-- Header info lines shared with the Cash Memo (same
+                             company_name_ar / cr_number / gsm values), each with
+                             its own toggle. -->
+                        <label for="company_name_ar"/>
+                        <div class="o_row">
+                            <field name="company_name_ar" nolabel="1"/>
+                            <field name="show_dyn_name_ar" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
+                        </div>
+                        <label for="cr_number"/>
+                        <div class="o_row">
+                            <field name="cr_number" nolabel="1"/>
+                            <field name="show_dyn_cr" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
+                        </div>
+                        <label for="gsm"/>
+                        <div class="o_row">
+                            <field name="gsm" nolabel="1"/>
+                            <field name="show_dyn_gsm" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
+                        </div>
+                        <field name="show_dyn_sultanate" widget="boolean_toggle" string="Show Sultanate of Oman"/>
                     </group>
                     <group invisible="invoice_template != 'dynamic'">
                         <group string="Header &amp; Footer">

@@ -99,6 +99,29 @@ class PosOrder(models.Model):
             sig[attachment.name] = raw.decode() if isinstance(raw, bytes) else raw
         return sig
 
+    @staticmethod
+    def _receipt_logo_b64(settings):
+        """Settings logo as a base64 PNG string, downscaled to a 512px box.
+
+        The receipt shows it at most ~90px tall, so 512px stays crisp for
+        screen + print while cutting a multi-MB original down to tens of KB
+        (a full-res logo otherwise bloats every receipt and can hang on-device
+        PDF generation). Binary fields hold base64, but image_process wants raw
+        bytes: decode -> resize -> PNG re-encode -> base64. Aspect ratio is
+        preserved; any processing error falls back to the original image.
+        Shared by the Standard (normal) and Dynamic/Cash Memo branches.
+        Returns '' when no logo is set."""
+        raw_logo = settings.logo
+        if not raw_logo:
+            return ''
+        logo_b64 = raw_logo
+        try:
+            resized = image_process(base64.b64decode(raw_logo), size=(512, 512), output_format='PNG')
+            logo_b64 = base64.b64encode(resized)
+        except Exception:
+            logo_b64 = raw_logo
+        return (logo_b64.decode() if isinstance(logo_b64, bytes) else logo_b64) or ''
+
     # ------------------------------------------------------------------
     # Order payload (before settings) — ports buildInvoiceParams
     # ------------------------------------------------------------------
@@ -228,6 +251,14 @@ class PosOrder(models.Model):
         data['show_cm_sultanate'] = settings.show_cm_sultanate
         data['show_cm_gsm'] = settings.show_cm_gsm
         data['show_cm_vat'] = settings.show_cm_vat
+        # Dynamic-header info-line toggles (read by the standard_doc template in
+        # DYNAMIC mode only; the normal-mode branch below forces them off so the
+        # plain Standard receipt stays unchanged).
+        data['show_dyn_cr'] = settings.show_dyn_cr
+        data['show_dyn_gsm'] = settings.show_dyn_gsm
+        data['show_dyn_sultanate'] = settings.show_dyn_sultanate
+        data['show_dyn_vat'] = settings.show_dyn_vat
+        data['show_dyn_name_ar'] = settings.show_dyn_name_ar
         currency = self.currency_id or company.currency_id
         fmt = self._receipt_money_formatter()
         try:
@@ -243,12 +274,19 @@ class PosOrder(models.Model):
 
         # NORMAL MODE (switch OFF): render the plain receipt — the same look as
         # the app's built-in HTML receipt (res.company details, default title/
-        # footer, no logo, no VAT line, no terms). So the backend preview shows
-        # "normal when off, dynamic when on", matching the app.
+        # footer, no VAT line, no terms). The Invoice Settings LOGO now shows on
+        # the Standard receipt too (same as Dynamic / Cash Memo); everything
+        # else stays plain.
         if not settings.use_dynamic_invoice:
             data['vat_number'] = ''
-            data['show_logo'] = False
-            data['logo'] = ''
+            # Dynamic-only header lines never show on the plain Standard receipt.
+            data['show_dyn_cr'] = False
+            data['show_dyn_gsm'] = False
+            data['show_dyn_sultanate'] = False
+            data['show_dyn_vat'] = False
+            data['show_dyn_name_ar'] = False
+            data['show_logo'] = bool(settings.show_logo and settings.logo)
+            data['logo'] = self._receipt_logo_b64(settings)
             data['header_title'] = 'INVOICE / فاتورة'
             data['footer_text'] = 'Thank you for your purchase!\nشكرا لشرائك!'
             data['footer_lines'] = data['footer_text'].split('\n')
@@ -266,24 +304,9 @@ class PosOrder(models.Model):
         if settings.email:
             block['email'] = settings.email
 
-        raw_logo = settings.logo
         data['vat_number'] = settings.vat_number or company.vat or ''
-        data['show_logo'] = bool(settings.show_logo and raw_logo)
-        # Downscale the logo before embedding. The receipt shows it at most
-        # ~90px tall, so a 512px box stays crisp for screen + print while cutting
-        # a multi-MB original down to tens of KB (a full-res logo otherwise
-        # bloats every receipt and can hang on-device PDF generation). Binary
-        # fields hold base64, but image_process wants raw bytes: decode →
-        # resize → PNG re-encode → base64. Aspect ratio is preserved; any
-        # processing error falls back to the original image.
-        logo_b64 = raw_logo
-        if raw_logo:
-            try:
-                resized = image_process(base64.b64decode(raw_logo), size=(512, 512), output_format='PNG')
-                logo_b64 = base64.b64encode(resized)
-            except Exception:
-                logo_b64 = raw_logo
-        data['logo'] = (logo_b64.decode() if isinstance(logo_b64, bytes) else logo_b64) or ''
+        data['show_logo'] = bool(settings.show_logo and settings.logo)
+        data['logo'] = self._receipt_logo_b64(settings)
         data['header_title'] = settings.header_title or 'INVOICE / فاتورة'
         data['footer_text'] = settings.footer_text or 'Thank you for your purchase!\nشكرا لشرائك!'
         data['footer_lines'] = (data['footer_text'] or '').split('\n')

@@ -75,13 +75,26 @@
                                 <t t-if="d['show_logo'] and d['logo']">
                                     <img class="logo" t-att-src="'data:image/png;base64,' + d['logo']"/>
                                 </t>
+                                <!-- Arabic company name (shared with the Cash Memo
+                                     field) above the English name — Dynamic only;
+                                     the normal-mode branch forces the flag off. -->
+                                <t t-if="d.get('show_dyn_name_ar') and d['company_name_ar']">
+                                    <div class="company" style="direction:rtl;"><t t-esc="d['company_name_ar']"/></div>
+                                </t>
                                 <div class="company"><t t-esc="d['company']['name']"/></div>
                                 <t t-foreach="d['company']['address_lines']" t-as="addr_line">
                                     <div class="meta"><t t-esc="addr_line"/></div>
                                 </t>
                                 <t t-if="d['company']['phone']"><div class="meta"><t t-esc="d['company']['phone']"/></div></t>
                                 <t t-if="d['company']['email']"><div class="meta"><t t-esc="d['company']['email']"/></div></t>
-                                <t t-if="d['vat_number']"><div class="meta">VAT: <t t-esc="d['vat_number']"/></div></t>
+                                <!-- Dynamic-only info lines (values shared with the
+                                     Cash Memo header), each behind its own settings
+                                     toggle. The normal-mode branch forces the flags
+                                     off, so the plain Standard receipt is unchanged. -->
+                                <t t-if="d.get('show_dyn_vat') and d['vat_number']"><div class="meta">VAT: <t t-esc="d['vat_number']"/></div></t>
+                                <t t-if="d.get('show_dyn_cr') and d['cr_number']"><div class="meta">C.R. No / س.ت : <t t-esc="d['cr_number']"/></div></t>
+                                <t t-if="d.get('show_dyn_gsm') and d['gsm_mobile']"><div class="meta">GSM / نقال : <t t-esc="d['gsm_mobile']"/></div></t>
+                                <t t-if="d.get('show_dyn_sultanate')"><div class="meta">Sur-Sultanate of Oman / صور-سلطنة عمان</div></t>
                             </div>
 
                             <div class="hr"></div>
@@ -202,21 +215,23 @@
                    the A4-style form is naturally cramped. */
                 @page { size: <t t-esc="page_size_css"/>; margin: 6mm; }
                 .cm_root { width:<t t-esc="receipt_width"/>mm; max-width:100%; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#111; }
-                .cm_root .cmhead { display:flex; justify-content:space-between; align-items:stretch; background:#eef0ef; border:1px solid #cfcfcf; padding:6px 10px; }
+                /* Plain WHITE header — a filled background dithers into a dirty
+                   shaded band on thermal printers. */
+                .cm_root .cmhead { display:flex; justify-content:space-between; align-items:stretch; border:1px solid #cfcfcf; padding:6px 10px; }
                 .cm_root .cmhead .col { font-size:11px; color:#1a7a3f; line-height:1.5; white-space:nowrap; }
                 .cm_root .cmhead .en { text-align:left; }
                 .cm_root .cmhead .ar { text-align:right; direction:rtl; }
                 .cm_root .cmhead .center { text-align:center; flex:1; padding:0 10px; display:flex; flex-direction:column; justify-content:center; }
                 .cm_root .cmhead .center .name-ar { font-size:20px; font-weight:700; color:#1a7a3f; line-height:1.2; }
                 .cm_root .cmhead .center .name-en { font-size:15px; font-weight:700; color:#1a7a3f; margin-top:3px; letter-spacing:0.3px; }
-                .cm_root .cmhead .logo { max-height:38px; margin:0 auto 3px; display:block; }
+                .cm_root .cmhead .logo { width:45%; height:auto; margin:0 auto 3px; display:block; }
                 /* Narrow header for ALL thermal rolls (up to 110mm / 4"): the
                    3-column form can't fit a long company name on a roll, so it
                    stacks into ONE centered column — name on top, then the EN info
                    lines, then the AR info lines. Only A5/A4 (>110mm) keep the
                    3-column form. Chosen by width via t-if below (server-side). */
-                .cm_root .cmhead-narrow { background:#eef0ef; border:1px solid #cfcfcf; padding:6px 8px; text-align:center; }
-                .cm_root .cmhead-narrow .logo { max-height:34px; margin:0 auto 3px; display:block; }
+                .cm_root .cmhead-narrow { border:1px solid #cfcfcf; padding:6px 8px; text-align:center; }
+                .cm_root .cmhead-narrow .logo { width:45%; height:auto; margin:0 auto 4px; display:block; }
                 .cm_root .cmhead-narrow .name-ar { font-size:16px; font-weight:700; color:#1a7a3f; line-height:1.2; }
                 .cm_root .cmhead-narrow .name-en { font-size:12px; font-weight:700; color:#1a7a3f; margin-top:2px; }
                 .cm_root .cmhead-narrow .info { font-size:10px; color:#1a7a3f; line-height:1.5; margin-top:4px; white-space:normal; }
@@ -240,6 +255,9 @@
                    border. Vertical padding kept for legibility. */
                 .cm_root table.items th, .cm_root table.items td { border:1px solid #555; padding:6px 3px; font-size:13px; vertical-align:top; }
                 .cm_root table.items th { text-align:center; font-weight:700; background:#fff; font-size:12px; }
+                /* Arabic sub-line under each English column header (label text
+                   only — no layout/size change), like the Standard receipt. */
+                .cm_root table.items th .th-ar { font-weight:400; font-size:10px; }
                 .cm_root table.items td.c { text-align:center; }
                 /* Amounts are numeric — never wrap, force LTR so digits stay in
                    order, and give the column just enough room via a slightly
@@ -317,19 +335,22 @@
                 </div>
             </div>
 
-            <div class="cmtitle">INVOICE</div>
+            <div class="cmtitle">INVOICE / فاتورة</div>
 
             <div class="row2">
-                <div class="field"><span class="lbl">No:</span><span class="dots num"><t t-esc="d['order_ref']"/></span></div>
-                <div class="field"><span class="lbl">Date:</span><span class="dots num"><t t-esc="d['date']"/></span></div>
+                <div class="field"><span class="lbl">No / الرقم:</span><span class="dots num"><t t-esc="d['order_ref']"/></span></div>
+                <div class="field"><span class="lbl">Date / التاريخ:</span><span class="dots num"><t t-esc="d['date']"/></span></div>
             </div>
-            <div class="field"><span class="lbl">Name:</span><span class="dots"><t t-esc="d['customer']"/></span></div>
-            <div class="field"><span class="lbl">Address:</span><span class="dots"><t t-esc="d['customer_address']"/></span></div>
+            <div class="field"><span class="lbl">Name / الاسم:</span><span class="dots"><t t-esc="d['customer']"/></span></div>
+            <div class="field"><span class="lbl">Address / العنوان:</span><span class="dots"><t t-esc="d['customer_address']"/></span></div>
 
             <table class="items">
                 <thead>
                     <tr>
-                        <th class="sl">Sl No</th><th>Description</th><th class="qt">Quantity</th><th class="am">Amount</th>
+                        <th class="sl">Sl No<br/><span class="th-ar">م</span></th>
+                        <th>Description<br/><span class="th-ar">الوصف</span></th>
+                        <th class="qt">Quantity<br/><span class="th-ar">الكمية</span></th>
+                        <th class="am">Amount<br/><span class="th-ar">المبلغ</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -350,11 +371,11 @@
             </table>
 
             <div class="foot">
-                <div class="words">In Words: <t t-esc="d['amount_in_words']"/></div>
+                <div class="words">In Words / المبلغ كتابة: <t t-esc="d['amount_in_words']"/></div>
                 <div class="totals">
-                    <div class="trow"><div class="k">Total</div><div class="v"><t t-esc="d['total_f']"/></div></div>
-                    <div class="trow"><div class="k">Advance</div><div class="v"><t t-esc="d['advance_f']"/></div></div>
-                    <div class="trow"><div class="k">Due</div><div class="v"><t t-esc="d['due_f']"/></div></div>
+                    <div class="trow"><div class="k">Total / المجموع</div><div class="v"><t t-esc="d['total_f']"/></div></div>
+                    <div class="trow"><div class="k">Advance / المقدم</div><div class="v"><t t-esc="d['advance_f']"/></div></div>
+                    <div class="trow"><div class="k">Due / المتبقي</div><div class="v"><t t-esc="d['due_f']"/></div></div>
                 </div>
             </div>
 
@@ -363,13 +384,13 @@
                     <t t-if="d['show_shop_owner_sig']">
                         <img class="sigimg" t-att-src="'data:image/png;base64,' + d['shop_owner_signature']"/>
                     </t>
-                    <div class="sigline">Cashier</div>
+                    <div class="sigline">Cashier / الكاشير</div>
                 </div>
                 <div class="sigcol">
                     <t t-if="d['show_customer_sig']">
                         <img class="sigimg" t-att-src="'data:image/png;base64,' + d['customer_signature']"/>
                     </t>
-                    <div class="sigline">Customer</div>
+                    <div class="sigline">Customer / العميل</div>
                 </div>
             </div>
         </div>

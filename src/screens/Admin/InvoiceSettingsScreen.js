@@ -82,6 +82,13 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [showCmSultanate, setShowCmSultanate] = useState(true);
   const [showCmGsm, setShowCmGsm] = useState(true);
   const [showCmVat, setShowCmVat] = useState(true);
+  // Per-field show/hide toggles for the Dynamic invoice header (share the same
+  // company_name_ar / cr_number / gsm / vat_number values as the Cash Memo).
+  const [showDynCr, setShowDynCr] = useState(true);
+  const [showDynGsm, setShowDynGsm] = useState(true);
+  const [showDynSultanate, setShowDynSultanate] = useState(true);
+  const [showDynVat, setShowDynVat] = useState(true);
+  const [showDynNameAr, setShowDynNameAr] = useState(true);
   // Preview modal
   const [previewHtml, setPreviewHtml] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -172,6 +179,11 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setShowCmSultanate(s.show_cm_sultanate !== false);
         setShowCmGsm(s.show_cm_gsm !== false);
         setShowCmVat(s.show_cm_vat !== false);
+        setShowDynCr(s.show_dyn_cr !== false);
+        setShowDynGsm(s.show_dyn_gsm !== false);
+        setShowDynSultanate(s.show_dyn_sultanate !== false);
+        setShowDynVat(s.show_dyn_vat !== false);
+        setShowDynNameAr(s.show_dyn_name_ar !== false);
         setAddress(s.address || '');
         setPhone(s.phone || '');
         setEmail(s.email || '');
@@ -248,6 +260,11 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     show_cm_sultanate: !!showCmSultanate,
     show_cm_gsm: !!showCmGsm,
     show_cm_vat: !!showCmVat,
+    show_dyn_cr: !!showDynCr,
+    show_dyn_gsm: !!showDynGsm,
+    show_dyn_sultanate: !!showDynSultanate,
+    show_dyn_vat: !!showDynVat,
+    show_dyn_name_ar: !!showDynNameAr,
     address: address || false,
     phone: phone || false,
     email: email || false,
@@ -703,6 +720,24 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
 
           <Text style={styles.label}>VAT / GST Number</Text>
           <TextInput style={styles.input} value={vatNumber} onChangeText={setVatNumber} placeholder="e.g. 3001234567890" placeholderTextColor="#999" />
+          <Row label="Show VAT / GST line" value={showDynVat} onValueChange={setShowDynVat} />
+
+          {/* Header info lines shared with the Cash Memo (same
+              company_name_ar / cr_number / gsm values), each independently
+              toggleable on the Dynamic invoice header. */}
+          <Text style={styles.label}>Company Name (Arabic)</Text>
+          <TextInput style={styles.input} value={companyNameAr} onChangeText={setCompanyNameAr} placeholder="اسم الشركة" placeholderTextColor="#999" textAlign="right" />
+          <Row label="Show Arabic company name" value={showDynNameAr} onValueChange={setShowDynNameAr} />
+
+          <Text style={styles.label}>C.R. Number</Text>
+          <TextInput style={styles.input} value={crNumber} onChangeText={setCrNumber} placeholder="e.g. 1410246" placeholderTextColor="#999" />
+          <Row label="Show C.R. Number" value={showDynCr} onValueChange={setShowDynCr} />
+
+          <Text style={styles.label}>GSM / Mobile</Text>
+          <TextInput style={styles.input} value={gsm} onChangeText={setGsm} placeholder="e.g. 77576196" placeholderTextColor="#999" keyboardType="phone-pad" />
+          <Row label="Show GSM / Mobile" value={showDynGsm} onValueChange={setShowDynGsm} />
+
+          <Row label="Show Sultanate of Oman" value={showDynSultanate} onValueChange={setShowDynSultanate} />
         </View>
 
         {/* Logo */}

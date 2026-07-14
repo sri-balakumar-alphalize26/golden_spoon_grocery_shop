@@ -4551,6 +4551,8 @@ const INVOICE_SETTINGS_FIELDS = [
   'invoice_template', 'company_name_ar', 'company_name_en', 'cr_number', 'po_box', 'postal_code', 'gsm', 'vat_no',
   // Per-field show/hide toggles for the Cash Memo header.
   'show_cm_name', 'show_cm_cr', 'show_cm_pobox', 'show_cm_postal', 'show_cm_sultanate', 'show_cm_gsm', 'show_cm_vat',
+  // Per-field show/hide toggles for the Dynamic invoice header.
+  'show_dyn_cr', 'show_dyn_gsm', 'show_dyn_sultanate', 'show_dyn_vat', 'show_dyn_name_ar',
   // Custom receipt size (Width × Height mm).
   'custom_paper_width', 'custom_paper_height',
 ];
