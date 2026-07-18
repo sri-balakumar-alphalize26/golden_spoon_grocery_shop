@@ -43,16 +43,18 @@ class PosInvoiceSettings(models.Model):
              'this module is installed. Turn on to render this dynamic invoice.',
     )
 
-    # 3-way template the app reads via app_dynamic_enabled:
+    # Template the app reads via app_dynamic_enabled:
     #   html      -> the app shows its normal built-in receipt (no server render)
     #   dynamic   -> the branded dynamic receipt (standard body)
     #   cash_memo -> the bilingual Oman Cash Memo invoice
-    # `use_dynamic_invoice` is kept in sync (True for dynamic/cash_memo) for any
+    #   layout    -> the editable, block-based layout (per paper size)
+    # `use_dynamic_invoice` is kept in sync (True for all non-html) for any
     # older readers.
     invoice_template = fields.Selection([
         ('html', 'Standard'),
         ('dynamic', 'Dynamic'),
         ('cash_memo', 'Cash Memo'),
+        ('layout', 'Custom Layout (editable)'),
     ], string='Invoice Template', default='html')
 
     # --- Cash Memo header (bilingual Oman invoice; shown when the template is
@@ -138,151 +140,98 @@ class PosInvoiceSettings(models.Model):
     # --- Default receipt size (applies to BOTH the dynamic and the normal
     # receipt) ---
     # When on, the app skips its paper-size prompt on Preview / Download / Print
-    # and renders at `default_paper_size` (mm). Independent of use_dynamic_invoice
+    # and renders at `default_paper_size_id` (mm). Independent of use_dynamic_invoice
     # so it works even when the app is on its built-in receipt.
     use_default_paper_size = fields.Boolean(
         string='Use Default Receipt Size', default=False,
         help='When on, the app prints at the size below without asking each time. '
              'Applies whether the app shows the dynamic or the normal receipt.',
     )
-    # The default size is a stable KEY (not the mm), so each preset's mm can be
-    # edited below without changing the stored value. Dropdown LABELS are built
-    # dynamically to show the configured mm — "4 inch (100 mm)" — so the brackets
-    # are back and reflect saved edits.
-    def _default_paper_size_selection(self):
-        rec = self.sudo().search([('company_id', '=', self.env.company.id)], limit=1)
+    # The default receipt size is now a RECORD (pos.invoice.paper.size), so a shop
+    # can add its own sizes (e.g. "8 inch") — not just edit the fixed six. The
+    # record carries the editable mm; `key` on it stays stable across renames.
+    default_paper_size_id = fields.Many2one(
+        'pos.invoice.paper.size', string='Default Receipt Size',
+        domain="[('company_id', '=', company_id)]", ondelete='restrict',
+        help='Pick the size the app prints at. Manage the list of sizes — '
+             'including your own — from Paper Sizes.',
+    )
 
-        def g(fld, d):
-            return int((getattr(rec, fld) if rec else d) or d)
-
-        return [
-            ('2in', '2 inch (%d mm)' % g('size_mm_2in', 50)),
-            ('3in', '3 inch (%d mm)' % g('size_mm_3in', 76)),
-            ('35in', '3.5 inch (%d mm)' % g('size_mm_35in', 80)),
-            ('4in', '4 inch (%d mm)' % g('size_mm_4in', 100)),
-            ('a5', 'A5 (%d mm)' % g('size_mm_a5', 148)),
-            ('a4', 'A4 (%d mm)' % g('size_mm_a4', 210)),
-            ('custom', 'Custom (W × H mm)'),
-        ]
-
-    default_paper_size = fields.Selection(
-        selection='_default_paper_size_selection',
-        string='Default Receipt Size', default='35in')
-    # Custom paper size (mm) used when default_paper_size == 'custom'. Height 0
-    # means "auto" (continuous roll); a positive value is a fixed sheet height.
-    custom_paper_width = fields.Integer(string='Custom Width (mm)', default=80)
-    custom_paper_height = fields.Integer(string='Custom Height (mm)', default=0)
-
-    # Editable physical width (mm) of each preset — per company. Defaults match
-    # the historic hardcoded values, so nothing changes until an admin edits one.
-    size_mm_2in = fields.Integer(string='2 inch (mm)', default=50)
-    size_mm_3in = fields.Integer(string='3 inch (mm)', default=76)
-    size_mm_35in = fields.Integer(string='3.5 inch (mm)', default=80)
-    size_mm_4in = fields.Integer(string='4 inch (mm)', default=100)
-    size_mm_a5 = fields.Integer(string='A5 (mm)', default=148)
-    size_mm_a4 = fields.Integer(string='A4 (mm)', default=210)
-
-    # Live indicator of the resolved size for the current selection — updates
-    # instantly as any preset/custom mm is edited (the dropdown labels only
-    # refresh on save/reload).
+    # Live indicator of the resolved size — updates as the picked size's mm change.
     default_size_hint = fields.Char(compute='_compute_default_size_hint', string='Selected')
-
-    # preset key -> (mm field, display label). Presets render at auto height.
-    _PRESET_FIELD = {
-        '2in': ('size_mm_2in', '2 inch'),
-        '3in': ('size_mm_3in', '3 inch'),
-        '35in': ('size_mm_35in', '3.5 inch'),
-        '4in': ('size_mm_4in', '4 inch'),
-        'a5': ('size_mm_a5', 'A5'),
-        'a4': ('size_mm_a4', 'A4'),
-    }
 
     def _resolved_default(self):
         """Return (width_mm, height_mm) for the selected default size.
-        Custom → its own width/height; preset → the configured mm, height 0."""
+
+        Reads the linked pos.invoice.paper.size record; falls back to 80mm/auto
+        when nothing is selected, matching the historic behaviour.
+        """
         self.ensure_one()
-        if self.default_paper_size == 'custom':
-            # Custom is one continuous page (auto height) — never split.
-            return (self.custom_paper_width or 80, 0)
-        fld = self._PRESET_FIELD.get(self.default_paper_size)
-        if fld:
-            return (getattr(self, fld[0]) or 80, 0)
+        size = self.default_paper_size_id
+        if size:
+            return (size.width_mm or 80, size.height_mm or 0)
         return (80, 0)
 
     def _preset_list(self):
-        """[{key,label,mm}] of the 6 presets with their configured mm — the app
-        uses this to render its 'Choose receipt size' picker dynamically."""
+        """[{key,label,mm}] the app uses to render its size picker.
+
+        Excludes the 'Custom' record so the JSON stays the historic 6-entry
+        shape; a shop's own extra sizes DO appear (appended).
+        """
         self.ensure_one()
+        sizes = self.env['pos.invoice.paper.size'].sudo().search([
+            ('company_id', '=', self.company_id.id), ('is_custom', '=', False),
+        ])
         return [
-            {'key': key, 'label': label, 'mm': int(getattr(self, fld) or 0)}
-            for key, (fld, label) in self._PRESET_FIELD.items()
+            {'key': s.key, 'label': s.name, 'mm': int(s.width_mm or 0)}
+            for s in sizes
         ]
 
-    @api.onchange('default_paper_size')
-    def _onchange_default_paper_size(self):
-        """When a preset is picked, seed the Custom Width/Height from its
-        configured mm so the admin can switch to Custom and just tweak."""
-        if self.default_paper_size and self.default_paper_size != 'custom':
-            w, h = self._resolved_default()
-            self.custom_paper_width, self.custom_paper_height = w, h
-
-    @api.depends('default_paper_size', 'custom_paper_width', 'custom_paper_height',
-                 'size_mm_2in', 'size_mm_3in', 'size_mm_35in',
-                 'size_mm_4in', 'size_mm_a5', 'size_mm_a4')
+    @api.depends('default_paper_size_id',
+                 'default_paper_size_id.width_mm', 'default_paper_size_id.height_mm')
     def _compute_default_size_hint(self):
         for rec in self:
             w, h = rec._resolved_default()
             rec.default_size_hint = ('→ %d × %d mm' % (w, h)) if h else ('→ %d mm' % w)
 
-    # Sensible band per preset so a value stays near its inch (Custom is free).
-    _SIZE_LIMITS = {
-        'size_mm_2in': (40, 65, '2 inch'),
-        'size_mm_3in': (60, 85, '3 inch'),
-        'size_mm_35in': (70, 95, '3.5 inch'),
-        'size_mm_4in': (85, 115, '4 inch'),
-        'size_mm_a5': (140, 160, 'A5'),
-        'size_mm_a4': (200, 225, 'A4'),
-    }
-
-    @api.onchange('size_mm_2in', 'size_mm_3in', 'size_mm_35in',
-                  'size_mm_4in', 'size_mm_a5', 'size_mm_a4')
-    def _onchange_clamp_preset_sizes(self):
-        """Live guard: if an out-of-range mm is typed, snap it back to the
-        nearest allowed value and warn — no need to wait for save."""
-        for fld, (lo, hi, label) in self._SIZE_LIMITS.items():
-            val = getattr(self, fld)
-            if val is None:
-                continue
-            if val < lo or val > hi:
-                clamped = lo if val < lo else hi
-                setattr(self, fld, clamped)
-                return {'warning': {
-                    'title': _('Size out of range'),
-                    'message': _(
-                        '%(label)s must be between %(lo)d and %(hi)d mm. '
-                        'Reset to %(clamped)d.',
-                        label=label, lo=lo, hi=hi, clamped=clamped),
-                }}
-
-    @api.constrains('size_mm_2in', 'size_mm_3in', 'size_mm_35in',
-                    'size_mm_4in', 'size_mm_a5', 'size_mm_a4')
-    def _check_preset_sizes(self):
-        """Server-side backstop (RPC / direct writes bypass the onchange)."""
-        for rec in self:
-            for fld, (lo, hi, label) in rec._SIZE_LIMITS.items():
-                val = getattr(rec, fld)
-                if val < lo or val > hi:
-                    raise ValidationError(_(
-                        '%(label)s size must be between %(lo)d and %(hi)d mm (got %(val)d).',
-                        label=label, lo=lo, hi=hi, val=val))
-
-    def action_reset_preset_sizes(self):
-        """Reset ONLY the 6 preset mm values to their factory defaults."""
+    def action_edit_layout(self):
+        """Open the visual layout editor for the current default paper size, so
+        the admin can jump straight from Invoice Settings into editing (no need to
+        hunt for the Invoice Layouts menu)."""
         self.ensure_one()
-        self.write({
-            'size_mm_2in': 50, 'size_mm_3in': 76, 'size_mm_35in': 80,
-            'size_mm_4in': 100, 'size_mm_a5': 148, 'size_mm_a4': 210,
-        })
+        size = self.default_paper_size_id
+        if not size:
+            Size = self.env['pos.invoice.paper.size'].sudo()
+            size = Size.search([('company_id', '=', self.company_id.id)], limit=1)
+        layout = self.env['pos.invoice.layout'].resolve_for(self.company_id, size)
+        return layout.action_open_editor()
+
+    @api.model
+    def action_open_company_settings(self):
+        """Open the single settings FORM for the current company directly (not the
+        list), so the 'Invoice Settings' menu lands on the editable form with the
+        Preview / Edit Layout buttons."""
+        rec = self.get_for_company(self.env.company)
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Invoice Settings'),
+            'res_model': 'pos.invoice.settings',
+            'view_mode': 'form',
+            'res_id': rec.id,
+            'target': 'current',
+        }
+
+    def action_manage_paper_sizes(self):
+        """Open the per-company list of paper sizes so the admin can add/edit."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Paper Sizes'),
+            'res_model': 'pos.invoice.paper.size',
+            'view_mode': 'list,form',
+            'domain': [('company_id', '=', self.company_id.id)],
+            'context': {'default_company_id': self.company_id.id},
+        }
 
     _sql_constraints = [
         ('company_uniq', 'unique(company_id)',
@@ -296,10 +245,43 @@ class PosInvoiceSettings(models.Model):
         can always assume a record exists.
         """
         company = company or self.env.company
+        # Ensure this company has its paper sizes (factory six + custom).
+        self.env['pos.invoice.paper.size'].sudo().seed_for_company(company)
         record = self.sudo().search([('company_id', '=', company.id)], limit=1)
         if not record:
             record = self.sudo().create({'company_id': company.id})
+        if not record.default_paper_size_id:
+            # Default to 3.5 inch (the historic '35in' default), else the first.
+            Size = self.env['pos.invoice.paper.size'].sudo()
+            default = Size.search([
+                ('company_id', '=', company.id), ('key', '=', '35in'),
+            ], limit=1) or Size.search([('company_id', '=', company.id)], limit=1)
+            record.default_paper_size_id = default
+        record._seed_header_fields()
         return record
+
+    def _seed_header_fields(self):
+        """Create the default Company-Header rows (C.R. No, GSM, Sur-Sultanate, VAT)
+        once per company, from the current branding values. After this, the header
+        table is driven by these editable/reorderable rows (see the visual editor)."""
+        self.ensure_one()
+        HF = self.env['pos.invoice.header.field'].sudo()
+        if HF.search_count([('company_id', '=', self.company_id.id)]):
+            return
+        seed = []
+        if self.cr_number:
+            seed.append(('C.R. No', 'السجل التجاري', self.cr_number))
+        if self.gsm:
+            seed.append(('GSM', 'الهاتف', self.gsm))
+        seed.append(('Sur-Sultanate of Oman', 'العنوان : سلطنة عمان', ''))
+        vat = self.vat_number or (self.company_id.partner_id.vat or '')
+        if vat:
+            seed.append(('VAT No', 'الرقم الضريبي', vat))
+        for i, (le, la, v) in enumerate(seed):
+            HF.create({
+                'company_id': self.company_id.id, 'sequence': (i + 1) * 10,
+                'label_en': le, 'label_ar': la, 'value': v,
+            })
 
     # Keep the legacy `use_dynamic_invoice` flag in sync with the 3-way template
     # so any older reader still works: on = Dynamic or Cash Memo, off = Normal.

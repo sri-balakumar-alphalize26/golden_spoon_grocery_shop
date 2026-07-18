@@ -122,6 +122,20 @@ class PosOrder(models.Model):
             logo_b64 = raw_logo
         return (logo_b64.decode() if isinstance(logo_b64, bytes) else logo_b64) or ''
 
+    def _receipt_barcode_b64(self, btype, value):
+        """A barcode/QR as a base64 PNG string, self-contained + thermal-safe
+        (pure black). Uses Odoo's built-in generator; any failure or missing
+        value returns '' so the block simply falls back to text / hides."""
+        if not value:
+            return ''
+        try:
+            kw = {'width': 600, 'height': 600, 'humanreadable': 0} if btype == 'QR' \
+                else {'width': 600, 'height': 120, 'humanreadable': 0}
+            img = self.env['ir.actions.report'].barcode(btype, value, **kw)
+            return base64.b64encode(img).decode() if img else ''
+        except Exception:
+            return ''
+
     # ------------------------------------------------------------------
     # Order payload (before settings) — ports buildInvoiceParams
     # ------------------------------------------------------------------
@@ -271,6 +285,15 @@ class PosOrder(models.Model):
         data['customer_address'] = ', '.join(
             p for p in [getattr(partner, 'street', ''), getattr(partner, 'street2', ''), getattr(partner, 'city', '')] if p
         ) if partner else ''
+
+        # Layout blocks: barcode + QR as self-contained base64 (thermal-safe),
+        # and a refunded row. All optional — a block only shows when present.
+        data['barcode_value'] = self.pos_reference or self.name or str(self.id)
+        data['barcode_img'] = self._receipt_barcode_b64('Code128', data['barcode_value'])
+        data['qr_img'] = self._receipt_barcode_b64('QR', company.website or data['barcode_value'])
+        refunded = abs(min(0.0, self.amount_total or 0.0)) if (self.amount_total or 0.0) < 0 else 0.0
+        data['refunded_f'] = fmt(refunded)
+        data['show_refunded'] = bool(refunded)
 
         # NORMAL MODE (switch OFF): render the plain receipt — the same look as
         # the app's built-in HTML receipt (res.company details, default title/

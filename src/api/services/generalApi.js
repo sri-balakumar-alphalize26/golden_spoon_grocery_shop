@@ -4544,17 +4544,18 @@ const INVOICE_SETTINGS_FIELDS = [
   'use_dynamic_invoice', 'address', 'phone', 'email', 'vat_number',
   'show_logo', 'header_title', 'footer_text', 'show_tax',
   'show_customer_signature', 'show_shop_owner_signature', 'show_footer',
-  'use_default_paper_size', 'default_paper_size',
-  // Per-company editable preset widths (mm) — the default size stores a KEY.
-  'size_mm_2in', 'size_mm_3in', 'size_mm_35in', 'size_mm_4in', 'size_mm_a5', 'size_mm_a4',
-  // 3-way template picker + Cash Memo header fields.
+  // Default receipt size now LINKS to a pos.invoice.paper.size record (the old
+  // string `default_paper_size` + hardcoded `size_mm_*` + `custom_paper_*`
+  // fields were removed when the module split sizes into their own model).
+  // Sizes are managed on the Receipt Paper Sizes screen; `default_size_hint` is
+  // a readonly display like "→ 80 mm".
+  'use_default_paper_size', 'default_paper_size_id', 'default_size_hint',
+  // 4-way template picker (html / dynamic / cash_memo / layout) + Cash Memo header fields.
   'invoice_template', 'company_name_ar', 'company_name_en', 'cr_number', 'po_box', 'postal_code', 'gsm', 'vat_no',
   // Per-field show/hide toggles for the Cash Memo header.
   'show_cm_name', 'show_cm_cr', 'show_cm_pobox', 'show_cm_postal', 'show_cm_sultanate', 'show_cm_gsm', 'show_cm_vat',
   // Per-field show/hide toggles for the Dynamic invoice header.
   'show_dyn_cr', 'show_dyn_gsm', 'show_dyn_sultanate', 'show_dyn_vat', 'show_dyn_name_ar',
-  // Custom receipt size (Width × Height mm).
-  'custom_paper_width', 'custom_paper_height',
 ];
 
 const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {
@@ -4586,7 +4587,14 @@ export const fetchInvoiceSettings = async (recordId = null) => {
     }
     const rec = rows && rows[0];
     if (!rec) return null;
-    return { ...rec };
+    // Flatten the default-size Many2one ([id, label] | false) into a plain id +
+    // label the screen can bind to directly.
+    const dps = rec.default_paper_size_id;
+    return {
+      ...rec,
+      default_paper_size_id: Array.isArray(dps) ? dps[0] : (dps || null),
+      default_paper_size_label: Array.isArray(dps) ? dps[1] : '',
+    };
   } catch (err) {
     console.warn('[DynInvoice] fetchInvoiceSettings failed:', err?.message || err);
     return null;
@@ -4658,6 +4666,186 @@ export const saveInvoiceSettings = async ({ id, vals = {}, logoBase64 = undefine
   const newId = await _invSettingsKw('pos.invoice.settings', 'create', [writeVals]);
   return newId;
 };
+
+// ---------------------------------------------------------------------------
+// Receipt Paper Sizes (pos.invoice.paper.size). The six presets are no longer
+// hardcoded on the settings record — they're editable per-company records. The
+// settings' default receipt size LINKS to one of these (default_paper_size_id),
+// and the print-time size popup reads them via app_paper_size(). Managed from
+// the app's Receipt Paper Sizes screen. group_pos_manager has full CRUD.
+// ---------------------------------------------------------------------------
+const PAPER_SIZE_FIELDS = ['id', 'name', 'key', 'width_mm', 'height_mm', 'sequence', 'is_custom', 'min_mm', 'max_mm', 'company_id'];
+
+// All paper sizes for a company (or the current company when companyId is null),
+// in display order. The `custom` record is included so the screen can lock it.
+export const fetchPaperSizes = async (companyId = null) => {
+  try {
+    const domain = companyId ? [['company_id', '=', Number(companyId)]] : [];
+    const rows = await _invSettingsKw(
+      'pos.invoice.paper.size', 'search_read', [domain],
+      { fields: PAPER_SIZE_FIELDS, order: 'sequence, width_mm' },
+    );
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn('[PaperSize] fetchPaperSizes failed:', err?.message || err);
+    return [];
+  }
+};
+
+// Slug a name into a stable key, mirroring the module's _slugify:
+// non-alphanumerics → '_', collapse runs, trim, fallback 'size'. e.g.
+// "8 inch" → "8_inch", "3.5 inch" → "3_5_inch".
+const slugifyPaperKey = (value) => {
+  let out = String(value || '').split('').map((c) => (/[a-z0-9]/i.test(c) ? c.toLowerCase() : '_')).join('');
+  while (out.includes('__')) out = out.replace(/__/g, '_');
+  out = out.replace(/^_+|_+$/g, '');
+  return out || 'size';
+};
+
+// Create a size. `vals` should carry company_id, name, width_mm. `key` is
+// REQUIRED by the model (its UI onchange doesn't run over RPC), so we auto-slug
+// it from the name here when the caller didn't supply one. Returns the new id.
+export const createPaperSize = async (vals = {}) => {
+  const withKey = vals.key ? vals : { ...vals, key: slugifyPaperKey(vals.name) };
+  return _invSettingsKw('pos.invoice.paper.size', 'create', [withKey]);
+};
+
+export const updatePaperSize = async (id, vals = {}) =>
+  _invSettingsKw('pos.invoice.paper.size', 'write', [[Number(id)], vals]);
+
+export const deletePaperSize = async (id) =>
+  _invSettingsKw('pos.invoice.paper.size', 'unlink', [[Number(id)]]);
+
+// Persist a new order by writing each record's `sequence`. `orderedIds` = the
+// full id list top-to-bottom.
+export const reorderPaperSizes = async (orderedIds = []) => {
+  let seq = 10;
+  for (const pid of orderedIds) {
+    await _invSettingsKw('pos.invoice.paper.size', 'write', [[Number(pid)], { sequence: seq }]);
+    seq += 10;
+  }
+  return true;
+};
+
+// ---------------------------------------------------------------------------
+// Invoice Layouts (pos.invoice.layout + .block + .header.field). One block-based
+// layout per paper size. The app reproduces the Odoo visual editor natively:
+// blocks are edited via direct write/create/unlink on pos.invoice.layout.block;
+// layout-level ops (positioning, reset) and the shared company header are
+// methods on pos.invoice.layout. All writes require group_pos_manager (covered
+// by the admin gate). Mirrors the OWL editor's exact RPCs.
+// ---------------------------------------------------------------------------
+const LAYOUT_FIELDS = ['id', 'name', 'paper_size_id', 'base_style', 'positioning'];
+
+// Every editable block field (mirrors the OWL editor's BLOCK_FIELDS + the
+// items_table line toggles the Odoo editor omits).
+const LAYOUT_BLOCK_FIELDS = [
+  'id', 'block_type', 'row', 'col', 'width_pct', 'visible', 'align', 'direction',
+  'font_size_px', 'bold', 'label_en', 'label_ar', 'logo_width_pct',
+  'content_en', 'content_ar', 'grid_x', 'grid_y', 'grid_w', 'grid_h',
+  'qr_data', 'barcode_field', 'show_line_meta', 'show_line_properties', 'show_line_tags',
+];
+
+// One layout per paper size for a company. paper_size_id is flattened to a
+// plain id + label.
+export const fetchInvoiceLayouts = async (companyId = null) => {
+  try {
+    const domain = companyId ? [['company_id', '=', Number(companyId)]] : [];
+    const rows = await _invSettingsKw(
+      'pos.invoice.layout', 'search_read', [domain],
+      { fields: LAYOUT_FIELDS, order: 'id' },
+    );
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      ...r,
+      paper_size_id: Array.isArray(r.paper_size_id) ? r.paper_size_id[0] : (r.paper_size_id || null),
+      paper_size_label: Array.isArray(r.paper_size_id) ? r.paper_size_id[1] : '',
+    }));
+  } catch (err) {
+    console.warn('[Layout] fetchInvoiceLayouts failed:', err?.message || err);
+    return [];
+  }
+};
+
+// Print-exact preview HTML for a layout (render_preview_html renders the layout
+// doc against a recent order, independent of the current template). Returns the
+// HTML string, or '' on failure.
+export const fetchLayoutPreviewHtml = async (layoutId) => {
+  if (!layoutId) return '';
+  try {
+    const html = await _invSettingsKw('pos.invoice.layout', 'render_preview_html', [[Number(layoutId)]]);
+    return typeof html === 'string' ? html : '';
+  } catch (err) {
+    console.warn('[Layout] fetchLayoutPreviewHtml failed:', err?.message || err);
+    return '';
+  }
+};
+
+// Layout header info (name/paper size width/positioning) for the editor. Also
+// returns the paper width (mm) used when adding a grid block.
+export const fetchLayoutDetail = async (layoutId) => {
+  const rows = await _invSettingsKw('pos.invoice.layout', 'read', [[Number(layoutId)], ['name', 'paper_size_id', 'base_style', 'active', 'company_id', 'positioning', 'canvas_h_cm']]);
+  const rec = rows && rows[0];
+  if (!rec) return null;
+  let widthMm = 80;
+  const psId = Array.isArray(rec.paper_size_id) ? rec.paper_size_id[0] : rec.paper_size_id;
+  if (psId) {
+    try {
+      const ps = await _invSettingsKw('pos.invoice.paper.size', 'read', [[Number(psId)], ['width_mm']]);
+      if (ps && ps[0] && ps[0].width_mm) widthMm = ps[0].width_mm;
+    } catch (_) {}
+  }
+  return {
+    ...rec,
+    paper_size_label: Array.isArray(rec.paper_size_id) ? rec.paper_size_id[1] : '',
+    base_style_label: Array.isArray(rec.base_style) ? rec.base_style[1] : rec.base_style,
+    widthMm,
+  };
+};
+
+// --- Blocks: direct CRUD on pos.invoice.layout.block (what the OWL editor does). ---
+export const fetchLayoutBlocks = async (layoutId) => {
+  const rows = await _invSettingsKw(
+    'pos.invoice.layout.block', 'search_read',
+    [[['layout_id', '=', Number(layoutId)]]],
+    { fields: LAYOUT_BLOCK_FIELDS, order: 'row, col, id' },
+  );
+  return Array.isArray(rows) ? rows : [];
+};
+export const createLayoutBlock = async (vals = {}) =>
+  _invSettingsKw('pos.invoice.layout.block', 'create', [vals]);
+export const updateLayoutBlock = async (id, vals = {}) =>
+  _invSettingsKw('pos.invoice.layout.block', 'write', [[Number(id)], vals]);
+export const deleteLayoutBlock = async (id) =>
+  _invSettingsKw('pos.invoice.layout.block', 'unlink', [[Number(id)]]);
+// Persist flow order by writing row=index, col=0 per id (mirrors persistOrder).
+export const reorderLayoutBlocks = async (orderedIds = []) => {
+  for (let i = 0; i < orderedIds.length; i += 1) {
+    await _invSettingsKw('pos.invoice.layout.block', 'write', [[Number(orderedIds[i])], { row: i, col: 0 }]);
+  }
+  return true;
+};
+
+// --- Layout-level ops (recordset methods → args [[layoutId], ...]). ---
+export const setLayoutPositioning = async (layoutId, mode) =>
+  _invSettingsKw('pos.invoice.layout', 'set_positioning', [[Number(layoutId)], mode]);
+export const resetLayoutDefault = async (layoutId) =>
+  _invSettingsKw('pos.invoice.layout', 'action_reset_default', [[Number(layoutId)]]);
+
+// --- Company Header (company-wide; shared by every layout of the company). ---
+export const fetchHeaderSettings = async (layoutId) =>
+  _invSettingsKw('pos.invoice.layout', 'header_settings', [[Number(layoutId)]]);
+export const setHeaderSetting = async (layoutId, field, value) =>
+  _invSettingsKw('pos.invoice.layout', 'set_header_setting', [[Number(layoutId)], field, value]);
+export const fetchHeaderFields = async (layoutId) =>
+  _invSettingsKw('pos.invoice.layout', 'header_fields', [[Number(layoutId)]]);
+export const addHeaderField = async (layoutId) =>
+  _invSettingsKw('pos.invoice.layout', 'add_header_field', [[Number(layoutId)]]);
+export const writeHeaderField = async (layoutId, fieldId, vals) =>
+  _invSettingsKw('pos.invoice.layout', 'write_header_field', [[Number(layoutId)], Number(fieldId), vals]);
+export const moveHeaderField = async (layoutId, fieldId, dir) =>
+  _invSettingsKw('pos.invoice.layout', 'move_header_field', [[Number(layoutId)], Number(fieldId), dir]);
+export const delHeaderField = async (layoutId, fieldId) =>
+  _invSettingsKw('pos.invoice.layout', 'del_header_field', [[Number(layoutId)], Number(fieldId)]);
 
 // ---------------------------------------------------------------------------
 // App User Manual (app_user_manual module). A library of PDF documents stored

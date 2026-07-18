@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="pos_invoice_layout_form" model="ir.ui.view">
+        <field name="name">pos.invoice.layout.form</field>
+        <field name="model">pos.invoice.layout</field>
+        <field name="arch" type="xml">
+            <form string="Invoice Layout">
+                <header>
+                    <button name="action_open_editor" type="object" string="Open Visual Editor"
+                            class="btn-primary" icon="fa-object-group"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="paper_size_id"
+                                   domain="[('company_id', '=', company_id)]"
+                                   options="{'no_create_edit': True}"/>
+                        </group>
+                        <group>
+                            <field name="base_style"/>
+                            <field name="active"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Blocks" name="blocks">
+                            <p class="text-muted">
+                                Blocks render top to bottom by <b>Row</b>, then left to right by
+                                <b>Column</b> within a row. <b>Width %</b> sets each column's share
+                                of its row. Prefer the <b>Open Visual Editor</b> button above to
+                                arrange these by drag-and-drop with a live preview.
+                            </p>
+                            <field name="block_ids">
+                                <list editable="bottom" default_order="row,col">
+                                    <field name="row"/>
+                                    <field name="col"/>
+                                    <field name="width_pct"/>
+                                    <field name="block_type"/>
+                                    <field name="visible" widget="boolean_toggle"/>
+                                    <field name="align"/>
+                                    <field name="direction" optional="hide"/>
+                                    <field name="font_size_px" optional="hide"/>
+                                    <field name="label_en" optional="hide"/>
+                                    <field name="label_ar" optional="hide"/>
+                                    <field name="logo_width_pct" optional="hide"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Preview" name="preview">
+                            <field name="preview" widget="iframe_wrapper"
+                                   class="d-flex justify-content-center"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="pos_invoice_layout_list" model="ir.ui.view">
+        <field name="name">pos.invoice.layout.list</field>
+        <field name="model">pos.invoice.layout</field>
+        <field name="arch" type="xml">
+            <list string="Invoice Layouts" js_class="pdi_help_list">
+                <field name="name"/>
+                <field name="paper_size_id"/>
+                <field name="base_style"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_pos_invoice_layout" model="ir.actions.act_window">
+        <field name="name">Invoice Layouts</field>
+        <field name="res_model">pos.invoice.layout</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Create an editable invoice layout</p>
+            <p>One layout per paper size. Arrange the blocks that make up the receipt;
+               select "Custom Layout (editable)" in Invoice Settings to use it.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_pos_invoice_layout"
+              name="Invoice Layouts"
+              parent="menu_pos_invoice_settings"
+              action="action_pos_invoice_layout"
+              sequence="3"/>
+
+</odoo>

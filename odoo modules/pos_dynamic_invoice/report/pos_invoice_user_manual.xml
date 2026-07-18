@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- A4 paper format for the printable user manual. -->
+    <record id="paperformat_user_manual" model="report.paperformat">
+        <field name="name">POS Dynamic Invoice User Manual</field>
+        <field name="format">A4</field>
+        <field name="orientation">Portrait</field>
+        <field name="margin_top">14</field>
+        <field name="margin_bottom">14</field>
+        <field name="margin_left">12</field>
+        <field name="margin_right">12</field>
+        <field name="header_spacing">0</field>
+        <field name="header_line" eval="False"/>
+        <field name="dpi">96</field>
+    </record>
+
+    <record id="action_report_user_manual" model="ir.actions.report">
+        <field name="name">POS Dynamic Invoice — User Manual</field>
+        <field name="model">res.company</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">pos_dynamic_invoice.report_user_manual</field>
+        <field name="report_file">pos_dynamic_invoice.report_user_manual</field>
+        <field name="paperformat_id" ref="paperformat_user_manual"/>
+    </record>
+
+    <template id="report_user_manual">
+        <t t-call="web.html_container">
+            <t t-set="company" t-value="docs[:1] or env.company"/>
+            <div class="pdi_manual">
+                <style>
+                    /* Times New Roman per request; ASCII/entities only so wkhtmltopdf
+                       never mangles the characters, and no position:fixed elements
+                       (those printed as black bars). */
+                    .pdi_manual { font-family: 'Times New Roman', Times, serif; color:#2b2b33; font-size:12.5px; line-height:1.55; }
+                    .pdi_manual h1,.pdi_manual h2,.pdi_manual h3 { margin:0; }
+                    .pdi-accent { color:#714b67; }
+                    .pdi-cover { text-align:center; padding-top:60mm; page-break-after:always; }
+                    .pdi-cover .brand { letter-spacing:3px; font-size:12px; color:#714b67; font-weight:700; }
+                    .pdi-cover .suite { letter-spacing:5px; font-size:10px; color:#9a95a3; margin-top:2px; }
+                    .pdi-cover .title { font-size:34px; font-weight:700; color:#2b2b33; margin:26px 0 6px; }
+                    .pdi-cover .subtitle { font-size:17px; color:#714b67; font-weight:700; }
+                    .pdi-cover .rule { width:80px; height:3px; background:#714b67; margin:18px auto; }
+                    .pdi-cover .tagline { font-size:13px; color:#5b5b66; max-width:150mm; margin:0 auto; }
+                    .pdi-cover .prepared { margin-top:34mm; font-size:12px; color:#8a8a95; }
+                    .pdi-part { background:#714b67; color:#fff; font-weight:700; font-size:15px;
+                        padding:6px 12px; border-radius:4px; margin:20px 0 10px; page-break-after:avoid; page-break-inside:avoid; }
+                    .pdi-part .num { opacity:.75; font-weight:700; margin-right:6px; }
+                    .pdi-step { margin:14px 0 3px; page-break-after:avoid; page-break-inside:avoid; }
+                    .pdi-step .badge { background:#efe7ee; color:#714b67; font-weight:700; font-size:11px;
+                        border-radius:10px; padding:1px 9px; margin-right:8px; }
+                    .pdi-step .h { font-weight:700; font-size:13.5px; color:#2b2b33; }
+                    .pdi-body { margin:2px 0 6px; }
+                    .pdi-body b { color:#2b2b33; }
+                    .pdi-call { border-left:4px solid #d9b441; background:#fdf6e3; padding:6px 10px; margin:8px 0; font-size:12px; page-break-inside:avoid; }
+                    .pdi-call.note { border-left-color:#4a90d9; background:#eef5fc; }
+                    .pdi-call .k { font-weight:700; letter-spacing:.5px; }
+                    table.pdi-tbl { width:100%; border-collapse:collapse; margin:8px 0; font-size:12px; page-break-inside:avoid; }
+                    table.pdi-tbl th { background:#f1eef3; text-align:left; padding:5px 8px; border:1px solid #ded9e4; font-weight:700; }
+                    table.pdi-tbl td { padding:5px 8px; border:1px solid #ded9e4; vertical-align:top; }
+                    .pdi-remember li { margin:3px 0; }
+                    .pdi-end { text-align:center; color:#8a8a95; font-size:12px; margin-top:22px; border-top:1px solid #e5e2ea; padding-top:10px; }
+                </style>
+
+                <!-- COVER -->
+                <div class="pdi-cover">
+                    <div class="brand">ALPHALIZE</div>
+                    <div class="suite">POS SUITE FOR ODOO 19</div>
+                    <div class="title">POS DYNAMIC INVOICE</div>
+                    <div class="subtitle">Invoice Settings - User Guide</div>
+                    <div class="rule"/>
+                    <div class="tagline">Set up your branded receipt, add paper sizes, and design the invoice layout that prints - a simple, step-by-step guide to the three screens under <b>Invoice Settings</b>.</div>
+                    <div class="prepared">Prepared for <b><t t-esc="company.name"/></b></div>
+                </div>
+
+                <!-- INTRO -->
+                <div class="pdi-body">
+                    Everything lives under <b>Point of Sale &gt; Invoice Settings</b>, which holds three screens:
+                    <b>General Settings</b>, <b>Receipt Paper Sizes</b> and <b>Invoice Layouts</b>. Set them up once and every
+                    receipt follows. Each screen is explained below.
+                </div>
+
+                <!-- PART 1 -->
+                <div class="pdi-part"><span class="num">PART 1</span> General Settings</div>
+                <div class="pdi-body">This is the main screen: choose how the receipt looks, its size, and your branding.</div>
+
+                <div class="pdi-step"><span class="badge">Step 1</span><span class="h">Choose an Invoice Template</span></div>
+                <div class="pdi-body"><b>Standard</b> = plain receipt. <b>Dynamic</b> / <b>Cash Memo</b> = ready-made branded layouts. <b>Custom Layout (editable)</b> = design your own in the visual editor (Part 3). Whatever you pick here is what the app prints.</div>
+
+                <div class="pdi-step"><span class="badge">Step 2</span><span class="h">Preview it</span></div>
+                <div class="pdi-body">Click <b>Preview</b> (top of the form) to see the selected template rendered against your most recent order - exactly what will print.</div>
+
+                <div class="pdi-step"><span class="badge">Step 3</span><span class="h">Set the Default Receipt Size</span></div>
+                <div class="pdi-body">Turn on <b>Use Default Receipt Size</b> and pick a size (e.g. 4 inch). Add or edit sizes on the <b>Receipt Paper Sizes</b> screen (Part 2).</div>
+
+                <div class="pdi-step"><span class="badge">Step 4</span><span class="h">Fill your branding</span></div>
+                <div class="pdi-body">Company name (English + Arabic), C.R. number, GSM, VAT and logo appear on the receipt. Each line has a <b>Show</b> toggle so you control what prints.</div>
+
+                <div class="pdi-call"><span class="k">TIP</span> - With <b>Custom Layout (editable)</b> selected, an <b>Edit Layout (Drag &amp; Drop)</b> button appears; it opens the visual editor for the current size.</div>
+
+                <!-- PART 2 -->
+                <div class="pdi-part"><span class="num">PART 2</span> Receipt Paper Sizes</div>
+                <div class="pdi-body">Manage every paper size your shop prints on. The built-in sizes are here, and you can add your own. Each size you add automatically gets its own layout under <b>Invoice Layouts</b>.</div>
+
+                <div class="pdi-step"><span class="badge">Step 5</span><span class="h">Add a size the easy way</span></div>
+                <div class="pdi-body">Click <b>New</b>, then in <b>Name</b> type just a number - e.g. <b>6</b>. It becomes <b>"6 inch"</b> automatically and the <b>Width</b> is filled for you (1 inch ~ 25.4 mm). You can still adjust the width.</div>
+
+                <div class="pdi-step"><span class="badge">Step 6</span><span class="h">Understand the columns</span></div>
+                <table class="pdi-tbl">
+                    <tr><th>Field</th><th>What it means</th></tr>
+                    <tr><td><b>Name</b></td><td>Shown in the size picker (e.g. "6 inch").</td></tr>
+                    <tr><td><b>Key</b></td><td>A stable code auto-filled from the name. Don't change it once the size is in use.</td></tr>
+                    <tr><td><b>Width (mm)</b></td><td>The paper width. 3 inch ~ 76 mm, 4 inch ~ 100 mm, A4 = 210 mm.</td></tr>
+                    <tr><td><b>Height (mm)</b></td><td><b>0 = continuous roll</b> (auto height). A positive number pins a fixed page height.</td></tr>
+                </table>
+
+                <div class="pdi-call note"><span class="k">NOTE</span> - Very narrow sizes (2 inch / 50 mm) are tight for a full bilingual table; 3 inch and up give the cleanest result.</div>
+
+                <!-- PART 3 -->
+                <div class="pdi-part"><span class="num">PART 3</span> Invoice Layouts (Visual Editor)</div>
+                <div class="pdi-body">Design exactly what the receipt shows. There is <b>one layout per paper size</b>, so each size can look different.</div>
+
+                <div class="pdi-step"><span class="badge">Step 7</span><span class="h">Open the editor</span></div>
+                <div class="pdi-body">Open a layout (or click <b>Edit Layout</b> in General Settings). You'll see three panels: <b>Design</b> (your sections), <b>Options</b> (edit the selected section), and <b>Live Preview</b> (exactly what prints).</div>
+
+                <div class="pdi-step"><span class="badge">Step 8</span><span class="h">Use List mode (recommended)</span></div>
+                <div class="pdi-body">Sections stack top-to-bottom and the paper grows to fit - more company details or more products simply make it longer. <b>List mode prints exactly like the editor</b> at every size.</div>
+
+                <div class="pdi-call"><span class="k">TIP</span> - <b>Grid</b> mode lets you drag freely, but fixed positions can shift when printed at a different width. For print that always matches the editor, stay in <b>List</b>.</div>
+
+                <div class="pdi-step"><span class="badge">Step 9</span><span class="h">Edit a section</span></div>
+                <div class="pdi-body">Click any section to edit it on the right: change the <b>Title</b> text (English + Arabic), the <b>Grand Total</b> label, company details, alignment and width; drag to reorder; use the eye icon to hide/show. <b>Company Name</b> (English and Arabic) are their own sections you can place separately, and the <b>Company Header</b> fields can be reordered and added to.</div>
+
+                <div class="pdi-step"><span class="badge">Step 10</span><span class="h">Save &amp; use it</span></div>
+                <div class="pdi-body">Every change <b>auto-saves</b> (the <b>Save</b> button just confirms). To make a layout the one that prints, pick <b>Custom Layout (editable)</b> in General Settings.</div>
+
+                <!-- QUICK REFERENCE -->
+                <div class="pdi-part"><span class="num">&gt;</span> Quick Reference</div>
+                <table class="pdi-tbl">
+                    <tr><th>Where</th><th>What it does</th></tr>
+                    <tr><td>General Settings</td><td>Pick the invoice template, default size, and branding; Preview and Edit Layout.</td></tr>
+                    <tr><td>Receipt Paper Sizes</td><td>Add/edit the sizes you print on (type a number = "N inch").</td></tr>
+                    <tr><td>Invoice Layouts</td><td>Design each size's receipt in the visual editor (List = print-exact).</td></tr>
+                    <tr><td>Preview</td><td>See the current template against your latest order.</td></tr>
+                    <tr><td>Save / auto-save</td><td>Layout changes save instantly; the Live Preview is what prints.</td></tr>
+                </table>
+
+                <!-- REMEMBER -->
+                <div class="pdi-part"><span class="num">&gt;</span> Things to Remember</div>
+                <ul class="pdi-remember">
+                    <li>Choose the <b>Invoice Template</b> and <b>Default Receipt Size</b> first - everything else builds on them.</li>
+                    <li>To add a size, just type a number in <b>Name</b>; the width fills automatically, and a layout is created for it.</li>
+                    <li><b>Height 0 = continuous roll</b>; a number = fixed page height.</li>
+                    <li>Design in <b>List</b> mode so the printed receipt always matches the editor and grows with content.</li>
+                    <li>Layout edits <b>auto-save</b>; the <b>Live Preview</b> is exactly what prints.</li>
+                    <li>To use your designed layout, select <b>Custom Layout (editable)</b> in General Settings.</li>
+                </ul>
+
+                <div class="pdi-end">- End of Guide -<br/>Alphalize | POS Dynamic Invoice - User Manual</div>
+            </div>
+        </t>
+    </template>
+
+</odoo>

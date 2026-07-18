@@ -75,6 +75,18 @@ class PosDynamicInvoiceWizard(models.TransientModel):
             width, height = int(self.paper_size or 80), 0
         context = compute_size_css(width, height)
         context['d'] = self.order_id.get_dynamic_receipt_data()
+        # Layout-driven receipt: resolve (and lazily seed) the layout for this
+        # company + paper size, so the third dispatcher branch can render it.
+        # Only when the settings template is 'layout' — otherwise skip the lookup.
+        context['layout'] = False
+        if context['d'].get('invoice_template') == 'layout':
+            company = self.order_id.company_id or self.env.company
+            Size = self.env['pos.invoice.paper.size'].sudo()
+            size = Size.search([
+                ('company_id', '=', company.id), ('width_mm', '=', width),
+            ], limit=1)
+            if size:
+                context['layout'] = self.env['pos.invoice.layout'].resolve_for(company, size)
         return context
 
     def action_preview(self):

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <!-- Inherit the standard list view and append a yellow help banner after the
+         list content (so it sits at the bottom of the page). Shown only for our two
+         models, keyed by helpKey set on the controller. -->
+    <t t-name="pos_dynamic_invoice.HelpBannerListView" t-inherit="web.ListView" t-inherit-mode="primary">
+        <xpath expr="//Layout" position="after">
+            <div t-if="helpKey" class="alert alert-warning pdi-help-banner m-3" role="alert">
+                <t t-if="helpKey === 'paper_sizes'">
+                    <strong>Receipt Paper Sizes — quick guide</strong>
+                    <ol class="mb-1">
+                        <li>Click <b>New</b> to add a size. In <b>Name</b>, type just a number (e.g. <b>6</b>) — it becomes <b>“6 inch”</b> and the width is filled for you.</li>
+                        <li><b>Key</b> auto-fills from the name; leave it — don't change it once the size is in use.</li>
+                        <li><b>Width (mm)</b> — paper width. 1 inch ≈ 25.4 mm (3 inch ≈ 76 mm, 4 inch ≈ 100 mm). Adjust if needed.</li>
+                        <li><b>Height (mm)</b> — <b>0 = continuous roll</b> (auto height); a number pins a fixed page height.</li>
+                        <li>Sizes here feed the <b>Default Receipt Size</b> in Invoice Settings and the print-time size picker.</li>
+                    </ol>
+                    <span class="text-muted">Full guide: <b>Invoice Settings ▸ User Manual</b>.</span>
+                </t>
+                <t t-if="helpKey === 'layouts'">
+                    <strong>Invoice Layouts — quick guide</strong>
+                    <ol class="mb-1">
+                        <li>There is <b>one layout per paper size</b>. Open a row, then click <b>Open Visual Editor</b> to design it.</li>
+                        <li>In the editor, click a <b>section</b> (Logo, Company Header, Title, Items, Totals, Footer…) to edit it on the right.</li>
+                        <li>Use <b>List</b> mode (recommended) — it stacks sections and <b>prints exactly like the editor</b>, growing with content.</li>
+                        <li>Edit the <b>Title</b> and <b>Grand Total</b> labels (English + Arabic), drag to reorder, set width/alignment, hide/show.</li>
+                        <li>Changes <b>auto-save</b>; the <b>Live Preview</b> is exactly what prints. To use a layout, pick <b>Custom Layout (editable)</b> in Invoice Settings.</li>
+                    </ol>
+                    <span class="text-muted">Full guide: <b>Invoice Settings ▸ User Manual</b>.</span>
+                </t>
+            </div>
+        </xpath>
+    </t>
+
+</templates>

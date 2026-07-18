@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="pos_dynamic_invoice.LayoutEditor">
+        <div class="pdi-editor">
+            <div class="pdi-toolbar">
+                <button class="btn btn-secondary btn-sm" t-on-click="close">
+                    <i class="fa fa-arrow-left"/> Back
+                </button>
+                <span class="pdi-title">
+                    <i class="fa fa-object-group"/> <t t-esc="state.layoutName"/>
+                    <span class="pdi-sub">— <t t-esc="state.widthMm"/> mm wide</span>
+                </span>
+                <button class="btn btn-sm btn-success" t-on-click="save" title="Save this layout (changes also save automatically)"><i class="fa fa-check"/> Save</button>
+                <span class="pdi-saved" title="Every change is saved automatically">✓ auto-saved</span>
+                <button class="btn btn-sm btn-light" t-on-click="undo" t-att-disabled="!canUndo" title="Undo">↶ Undo</button>
+                <button class="btn btn-sm btn-light" t-on-click="redo" t-att-disabled="!canRedo" title="Redo">↷ Redo</button>
+                <button class="btn btn-sm btn-info pdi-mode" t-on-click="toggleMode">
+                    <t t-if="isGrid">☰ Switch to List</t>
+                    <t t-else="">▦ Switch to Grid</t>
+                </button>
+                <span class="pdi-gridwarn" t-if="isGrid" title="Grid uses fixed positions that only line up at one paper width — the printed receipt may differ. List (stacked) always prints exactly like the editor.">⚠ Grid = fixed; use List for print-exact</span>
+                <button class="btn btn-sm btn-warning" t-on-click="resetDefault" title="Reset this size to the clean default layout">↺ Reset to Default</button>
+                <div class="pdi-add">
+                    <label>Add section:</label>
+                    <select t-on-change="(ev) => this.addSection(ev)">
+                        <option value="">+ choose…</option>
+                        <t t-foreach="addableOptions" t-as="opt" t-key="opt.value">
+                            <option t-att-value="opt.value" t-esc="opt.label"/>
+                        </t>
+                    </select>
+                </div>
+            </div>
+
+            <div class="pdi-err" t-if="state.error">
+                <i class="fa fa-exclamation-triangle"/> <t t-esc="state.error"/>
+            </div>
+
+            <div class="pdi-body" t-if="!state.loading">
+                <!-- DESIGN: grid canvas OR flow list -->
+                <div class="pdi-col pdi-canvas-col">
+                    <div class="pdi-col-head">
+                        Design
+                        <span class="pdi-hint" t-if="isGrid">grab a box's top bar to move · drag ↘ corner to resize · snaps to 0.25cm</span>
+                        <span class="pdi-hint" t-else="">drag ⠿ to reorder · drag the right edge to resize</span>
+                    </div>
+                    <!-- Section chips: select any section even if covered on the grid. -->
+                    <div class="pdi-chips" t-if="isGrid">
+                        <t t-foreach="state.blocks" t-as="block" t-key="block.id">
+                            <button class="pdi-chip" t-att-class="{ 'pdi-chip-sel': block.id === state.selectedId, 'pdi-chip-off': !block.visible }"
+                                    t-on-click="() => this.select(block.id)"><t t-esc="label(block)"/></button>
+                        </t>
+                    </div>
+                    <div class="pdi-canvas-scroll">
+                        <!-- top mm ruler (shared) -->
+                        <div class="pdi-ruler" t-attf-style="width:#{canvasPx + 2}px;">
+                            <t t-foreach="ruler" t-as="tick" t-key="tick.mm">
+                                <div t-att-class="tick.major ? 'pdi-tick pdi-tick-major' : 'pdi-tick'" t-attf-style="left:#{tick.px}px;">
+                                    <span t-if="tick.major" class="pdi-tick-lbl" t-esc="tick.mm"/>
+                                </div>
+                            </t>
+                        </div>
+
+                        <!-- GRID canvas -->
+                        <div t-if="isGrid" class="pdi-gridcanvas" t-attf-style="width:#{canvasPx}px; height:#{gridHpx}px;">
+                            <t t-foreach="state.blocks" t-as="block" t-key="block.id">
+                                <div class="pdi-gbox"
+                                     t-att-class="{ 'pdi-selected': block.id === state.selectedId, 'pdi-off': !block.visible }"
+                                     t-attf-style="left:#{gLeft(block)}px; top:#{gTop(block)}px; width:#{gW(block)}px; height:#{gH(block)}px;"
+                                     t-on-click="() => this.select(block.id)">
+                                    <!-- Handle bar (the "line"): grab this to MOVE, even when boxes overlap. -->
+                                    <div class="pdi-ghbar" title="Drag this bar to move"
+                                         t-on-pointerdown="(ev) => this.startGridMove(block, ev)">
+                                        <span class="pdi-ghgrip">⠿</span>
+                                        <span class="pdi-gname" t-esc="label(block)"/>
+                                        <button class="pdi-gvis" t-on-click.stop="() => this.onToggleVisible(block)" t-att-title="block.visible ? 'Hide' : 'Show'">
+                                            <i t-att-class="block.visible ? 'fa fa-eye' : 'fa fa-eye-slash'"/>
+                                        </button>
+                                        <button class="pdi-gdel" t-on-click.stop="() => this.removeSection(block)" title="Remove"><i class="fa fa-times"/></button>
+                                    </div>
+                                    <span class="pdi-gresize" title="Resize" t-on-pointerdown="(ev) => this.startGridResize(block, ev)"/>
+                                </div>
+                            </t>
+                        </div>
+
+                        <!-- FLOW list -->
+                        <div t-else="" class="pdi-paper" t-attf-style="width:#{canvasPx}px;" t-ref="list">
+                            <t t-foreach="state.blocks" t-as="block" t-key="block.id">
+                                <div class="pdi-block"
+                                     t-att-data-id="block.id"
+                                     t-att-class="{ 'pdi-selected': block.id === state.selectedId, 'pdi-off': !block.visible }"
+                                     t-attf-style="width:#{widthPx(block)}px;"
+                                     t-on-click="() => this.select(block.id)">
+                                    <span class="pdi-handle" title="Drag to reorder">⠿</span>
+                                    <span class="pdi-name" t-esc="label(block)"/>
+                                    <span class="pdi-wmm" t-if="state.resizingId === block.id"><t t-esc="state.resizeMm"/> mm</span>
+                                    <button class="pdi-vis" t-on-click.stop="() => this.onToggleVisible(block)" t-att-title="block.visible ? 'Hide' : 'Show'">
+                                        <i t-att-class="block.visible ? 'fa fa-eye' : 'fa fa-eye-slash'"/>
+                                    </button>
+                                    <button class="pdi-del" t-on-click.stop="() => this.removeSection(block)" title="Remove"><i class="fa fa-times"/></button>
+                                    <span class="pdi-resize" title="Drag to resize width" t-on-pointerdown="(ev) => this.startResize(block, ev)"/>
+                                </div>
+                            </t>
+                            <div class="pdi-empty" t-if="!state.blocks.length">No sections. Use “Add section” above.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- OPTIONS -->
+                <div class="pdi-col pdi-props">
+                    <div class="pdi-col-head">Options</div>
+                    <t t-if="selected">
+                        <div class="pdi-prop"><label>Section</label><div class="fw-bold" t-esc="label(selected)"/></div>
+                        <t t-if="isGrid">
+                            <div class="pdi-prop pdi-row-inline">
+                                <label>X (cm)<input type="number" min="0" step="0.25" t-att-value="selected.grid_x" t-on-change="(ev) => this.onPropInput('grid_x', ev)"/></label>
+                                <label>Y (cm)<input type="number" min="0" step="0.25" t-att-value="selected.grid_y" t-on-change="(ev) => this.onPropInput('grid_y', ev)"/></label>
+                            </div>
+                            <div class="pdi-prop pdi-row-inline">
+                                <label>W (cm)<input type="number" min="0.25" step="0.25" t-att-value="selected.grid_w" t-on-change="(ev) => this.onPropInput('grid_w', ev)"/></label>
+                                <label>H (cm)<input type="number" min="0.25" step="0.25" t-att-value="selected.grid_h" t-on-change="(ev) => this.onPropInput('grid_h', ev)"/></label>
+                            </div>
+                        </t>
+                        <t t-else="">
+                            <div class="pdi-prop">
+                                <label>Width (mm) — <t t-esc="widthMmOf(selected)"/> of <t t-esc="state.widthMm"/></label>
+                                <input type="range" min="10" max="100" t-att-value="selected.width_pct" t-on-change="(ev) => this.onPropInput('width_pct', ev)"/>
+                            </div>
+                        </t>
+                        <div class="pdi-prop"><label>Visible</label>
+                            <input type="checkbox" t-att-checked="selected.visible" t-on-change="() => this.onToggleVisible(selected)"/></div>
+                        <div class="pdi-prop"><label>Align</label>
+                            <select t-on-change="(ev) => this.onPropInput('align', ev)">
+                                <option value="auto" t-att-selected="selected.align === 'auto'">Auto</option>
+                                <option value="left" t-att-selected="selected.align === 'left'">Left</option>
+                                <option value="center" t-att-selected="selected.align === 'center'">Center</option>
+                                <option value="right" t-att-selected="selected.align === 'right'">Right</option>
+                            </select></div>
+                        <div class="pdi-prop"><label>Text direction</label>
+                            <select t-on-change="(ev) => this.onPropInput('direction', ev)">
+                                <option value="auto" t-att-selected="selected.direction === 'auto'">Auto</option>
+                                <option value="ltr" t-att-selected="selected.direction === 'ltr'">Left-to-right</option>
+                                <option value="rtl" t-att-selected="selected.direction === 'rtl'">Right-to-left</option>
+                            </select></div>
+                        <div class="pdi-prop"><label>Font size (px, 0 = default)</label>
+                            <input type="number" min="0" max="40" t-att-value="selected.font_size_px" t-on-change="(ev) => this.onPropInput('font_size_px', ev)"/></div>
+                        <div class="pdi-prop pdi-row-inline">
+                            <label><input type="checkbox" t-att-checked="selected.bold" t-on-change="() => this.onToggleBold(selected)"/> Bold</label>
+                            <button class="btn btn-sm btn-light" t-on-click="() => this.flipSide(selected)" title="Opposite side">⇄ Flip side</button>
+                        </div>
+                        <t t-if="selected.block_type === 'logo'">
+                            <div class="pdi-prop"><label>Logo width (%)</label>
+                                <input type="number" min="5" max="100" t-att-value="selected.logo_width_pct" t-on-change="(ev) => this.onPropInput('logo_width_pct', ev)"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'title'">
+                            <div class="pdi-section-lbl">Title Text</div>
+                            <div class="pdi-prop"><label>Title — English (blank = default)</label>
+                                <input type="text" t-att-value="selected.label_en" t-on-change="(ev) => this.onPropInput('label_en', ev)"/></div>
+                            <div class="pdi-prop"><label>Title — Arabic (optional)</label>
+                                <input type="text" dir="rtl" t-att-value="selected.label_ar" t-on-change="(ev) => this.onPropInput('label_ar', ev)"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'totals'">
+                            <div class="pdi-section-lbl">Grand Total Label</div>
+                            <div class="pdi-prop"><label>Label — English (blank = “Grand Total”)</label>
+                                <input type="text" t-att-value="selected.label_en" t-on-change="(ev) => this.onPropInput('label_en', ev)"/></div>
+                            <div class="pdi-prop"><label>Label — Arabic (blank = “الإجمالي”)</label>
+                                <input type="text" dir="rtl" t-att-value="selected.label_ar" t-on-change="(ev) => this.onPropInput('label_ar', ev)"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'custom_text'">
+                            <div class="pdi-prop"><label>Your text — English</label>
+                                <textarea rows="3" t-on-change="(ev) => this.onPropInput('content_en', ev)" t-esc="selected.content_en"/></div>
+                            <div class="pdi-prop"><label>Your text — Arabic</label>
+                                <textarea rows="3" dir="rtl" t-on-change="(ev) => this.onPropInput('content_ar', ev)" t-esc="selected.content_ar"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'company_name_en'">
+                            <div class="pdi-section-lbl">Company Name (English)</div>
+                            <div class="pdi-prop"><label>Text</label>
+                                <input type="text" t-att-value="state.header.company_name_en" t-on-change="(ev) => this.setHeaderField('company_name_en', ev)"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'company_name_ar'">
+                            <div class="pdi-section-lbl">Company Name (Arabic)</div>
+                            <div class="pdi-prop"><label>Text</label>
+                                <input type="text" dir="rtl" t-att-value="state.header.company_name_ar" t-on-change="(ev) => this.setHeaderField('company_name_ar', ev)"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'header_info'">
+                            <div class="pdi-section-lbl">Company Header Fields</div>
+                            <div class="pdi-hint" style="padding:0 12px 6px;">Reorder with ▲▼, edit the field name &amp; value, hide, or add your own.</div>
+                            <t t-foreach="state.headerFields" t-as="hf" t-key="hf.id">
+                                <div class="pdi-hfield">
+                                    <div class="pdi-hfield-bar">
+                                        <button class="pdi-hbtn" t-on-click="() => this.moveHeaderField(hf.id, 'up')" title="Move up">▲</button>
+                                        <button class="pdi-hbtn" t-on-click="() => this.moveHeaderField(hf.id, 'down')" title="Move down">▼</button>
+                                        <label class="pdi-hvis"><input type="checkbox" t-att-checked="hf.visible" t-on-change="(ev) => this.onHeaderFieldInput(hf.id, 'visible', ev)"/> show</label>
+                                        <button class="pdi-hdel" t-on-click="() => this.delHeaderField(hf.id)" title="Remove">✕</button>
+                                    </div>
+                                    <input class="pdi-hin" type="text" placeholder="Field name (e.g. C.R. No)" t-att-value="hf.label_en" t-on-change="(ev) => this.onHeaderFieldInput(hf.id, 'label_en', ev)"/>
+                                    <input class="pdi-hin" type="text" dir="rtl" placeholder="Arabic label (optional)" t-att-value="hf.label_ar" t-on-change="(ev) => this.onHeaderFieldInput(hf.id, 'label_ar', ev)"/>
+                                    <input class="pdi-hin" type="text" placeholder="Value (e.g. 14102...)" t-att-value="hf.value" t-on-change="(ev) => this.onHeaderFieldInput(hf.id, 'value', ev)"/>
+                                </div>
+                            </t>
+                            <div class="pdi-prop"><button class="btn btn-sm btn-light" t-on-click="addHeaderField">+ Add field</button></div>
+                        </t>
+                        <t t-if="selected.block_type === 'qrcode'">
+                            <div class="pdi-section-lbl">QR Code</div>
+                            <div class="pdi-prop"><label>QR Link / Text (the QR encodes this)</label>
+                                <input type="text" placeholder="https://…  or any text" t-att-value="selected.qr_data" t-on-change="(ev) => this.onPropInput('qr_data', ev)"/></div>
+                        </t>
+                        <t t-if="selected.block_type === 'barcode'">
+                            <div class="pdi-section-lbl">Barcode</div>
+                            <div class="pdi-prop"><label>Barcode Source</label>
+                                <select t-on-change="(ev) => this.onPropInput('barcode_field', ev)">
+                                    <option value="name" t-att-selected="selected.barcode_field === 'name'">Order Ref</option>
+                                    <option value="id" t-att-selected="selected.barcode_field === 'id'">Order ID</option>
+                                    <option value="pos_reference" t-att-selected="selected.barcode_field === 'pos_reference'">POS Reference</option>
+                                </select></div>
+                        </t>
+                    </t>
+                    <t t-else="">
+                        <p class="text-muted p-2">Click a section to edit it.</p>
+                    </t>
+                </div>
+
+                <!-- LIVE preview — scaled to FIT the panel width (no gap, no scroll). -->
+                <div class="pdi-col pdi-preview">
+                    <div class="pdi-col-head">Live Preview <span class="pdi-hint">fits to width</span></div>
+                    <div class="pdi-preview-wrap" t-ref="pwrap">
+                        <div class="pdi-scaler" t-attf-style="width:#{previewScaledW}px; height:#{previewScaledH}px;">
+                            <iframe t-ref="iframe" class="pdi-iframe"
+                                    t-attf-style="width:#{previewNaturalPx}px; height:#{state.previewContentH}px; transform:scale(#{previewScale}); transform-origin:top left;"
+                                    title="Receipt preview"/>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pdi-body" t-else="">
+                <div class="p-4 text-muted">Loading…</div>
+            </div>
+        </div>
+    </t>
+
+</templates>

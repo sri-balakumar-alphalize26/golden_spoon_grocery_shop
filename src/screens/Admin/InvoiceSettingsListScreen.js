@@ -56,11 +56,19 @@ const InvoiceSettingsListScreen = ({ navigation }) => {
   // Reload on focus so returning from the editor shows the latest on/off state.
   useFocusEffect(useCallback(() => { if (isAdmin) load(); }, [isAdmin, load]));
 
-  const openRecord = (id) => {
-    console.log('[InvoiceSettingsList] open editor id=', id ?? '(edit current)');
-    navigation.navigate('InvoiceSettings', { id });
+  const openRecord = (row) => {
+    // Open the 3-section hub (General Settings / Receipt Paper Sizes / Invoice
+    // Layouts) for this company's record.
+    console.log('[InvoiceSettingsList] open hub id=', row?.id ?? '(current)');
+    navigation.navigate('InvoiceSettingsHub', {
+      id: row?.id ?? null,
+      companyId: Array.isArray(row?.company_id) ? row.company_id[0] : null,
+      companyName: Array.isArray(row?.company_id) ? row.company_id[1] : '',
+    });
   };
   const openNew = () => {
+    // A brand-new record has no company/sizes/layouts yet, so create it in
+    // General Settings first; the hub is available once it exists.
     console.log('[InvoiceSettingsList] New tapped → create mode');
     navigation.navigate('InvoiceSettings', { isNew: true });
   };
@@ -85,7 +93,7 @@ const InvoiceSettingsListScreen = ({ navigation }) => {
   };
 
   const renderItem = ({ item }) => (
-    <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => openRecord(item.id)}>
+    <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => openRecord(item)}>
       <View style={styles.rowIcon}>
         <MaterialIcons name="receipt-long" size={22} color={NAVY} />
       </View>

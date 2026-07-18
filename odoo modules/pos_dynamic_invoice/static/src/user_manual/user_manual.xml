@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="pos_dynamic_invoice.UserManual">
+        <div class="pdi-manual-viewer d-flex flex-column" style="height:100%; background:#f4f5f7;">
+            <div class="d-flex align-items-center gap-2 p-2 border-bottom bg-white">
+                <button class="btn btn-secondary btn-sm" t-on-click="close">
+                    <i class="fa fa-arrow-left"/> Back
+                </button>
+                <span class="fw-bold ms-1">
+                    <i class="fa fa-book"/> POS Dynamic Invoice — User Manual
+                </span>
+                <a class="btn btn-primary btn-sm ms-auto" t-att-href="downloadUrl"
+                   download="POS_Dynamic_Invoice_User_Manual.pdf" title="Download the manual as PDF">
+                    <i class="fa fa-download"/> Download PDF
+                </a>
+            </div>
+            <iframe t-att-src="pdfUrl" class="flex-grow-1" style="border:0; width:100%;"
+                    title="POS Dynamic Invoice User Manual"/>
+        </div>
+    </t>
+
+</templates>

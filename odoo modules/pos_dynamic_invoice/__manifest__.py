@@ -1,6 +1,6 @@
 {
     'name': 'POS Dynamic Invoice',
-    'version': '19.0.2.26.0',
+    'version': '19.0.23.0.0',
     'category': 'Point of Sale',
     'summary': 'Editable, branded POS invoice (logo, company name, GST, footer, '
                'terms) rendered server-side at all 6 receipt sizes. When this '
@@ -36,10 +36,27 @@
     'data': [
         'security/ir.model.access.csv',
         'report/pos_dynamic_invoice_report.xml',
+        'report/pos_invoice_layout_report.xml',
+        'report/pos_invoice_user_manual.xml',
         'wizard/pos_dynamic_invoice_wizard_views.xml',
+        # Settings view defines the parent "Invoice Settings" menu, so it must
+        # load BEFORE the paper-size and layout views whose menus parent to it.
         'views/pos_invoice_settings_views.xml',
+        'views/pos_invoice_paper_size_views.xml',
+        'views/pos_invoice_layout_views.xml',
         'views/pos_order_views.xml',
     ],
+    'assets': {
+        'web.assets_backend': [
+            'pos_dynamic_invoice/static/src/layout_editor/layout_editor.scss',
+            'pos_dynamic_invoice/static/src/layout_editor/layout_editor.js',
+            'pos_dynamic_invoice/static/src/layout_editor/layout_editor.xml',
+            'pos_dynamic_invoice/static/src/help_banner/help_banner.js',
+            'pos_dynamic_invoice/static/src/help_banner/help_banner.xml',
+            'pos_dynamic_invoice/static/src/user_manual/user_manual.js',
+            'pos_dynamic_invoice/static/src/user_manual/user_manual.xml',
+        ],
+    },
     'installable': True,
     'application': False,
     'auto_install': False,

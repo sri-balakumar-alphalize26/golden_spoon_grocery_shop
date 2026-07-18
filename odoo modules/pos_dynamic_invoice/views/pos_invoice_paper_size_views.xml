@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Editable list: add your own sizes (e.g. "8 inch") right here. -->
+    <record id="pos_invoice_paper_size_list" model="ir.ui.view">
+        <field name="name">pos.invoice.paper.size.list</field>
+        <field name="model">pos.invoice.paper.size</field>
+        <field name="arch" type="xml">
+            <list string="Paper Sizes" editable="bottom" js_class="pdi_help_list">
+                <field name="sequence" widget="handle"/>
+                <field name="name" placeholder='e.g. 6 inch — type a number'/>
+                <field name="key" placeholder="auto"/>
+                <field name="width_mm"/>
+                <field name="height_mm"/>
+                <field name="min_mm" optional="hide"/>
+                <field name="max_mm" optional="hide"/>
+                <field name="is_custom" optional="hide"/>
+                <field name="active" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company" optional="show"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="pos_invoice_paper_size_form" model="ir.ui.view">
+        <field name="name">pos.invoice.paper.size.form</field>
+        <field name="model">pos.invoice.paper.size</field>
+        <field name="arch" type="xml">
+            <form string="Paper Size">
+                <sheet>
+                    <div class="alert alert-warning" role="alert" style="margin-bottom:12px;">
+                        <strong>How receipt paper sizes work</strong>
+                        <ul style="margin-bottom:0;">
+                            <li><b>Name</b> — shown in the size picker (e.g. <i>6 inch</i>). Type just a number and it becomes “N inch” automatically, and the width is filled for you.</li>
+                            <li><b>Key</b> — a stable code auto-filled from the name; don't change it once the size is in use.</li>
+                            <li><b>Width (mm)</b> — the paper width. 1 inch ≈ 25.4 mm (3 inch ≈ 76 mm, 4 inch ≈ 100 mm).</li>
+                            <li><b>Height (mm)</b> — <b>0 = continuous roll</b> (auto height); a positive number pins a fixed page height.</li>
+                        </ul>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="name" placeholder="e.g. 8 inch"/>
+                            <field name="key"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group>
+                            <field name="width_mm"/>
+                            <field name="height_mm" help="0 = continuous roll (auto height)."/>
+                            <field name="sequence"/>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                    <group string="Optional width band (typo guard)">
+                        <field name="min_mm"/>
+                        <field name="max_mm"/>
+                        <field name="is_custom" help="The single per-company Custom size; kept out of the app's preset picker."/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_pos_invoice_paper_size" model="ir.actions.act_window">
+        <field name="name">Paper Sizes</field>
+        <field name="res_model">pos.invoice.paper.size</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Add a receipt paper size</p>
+            <p>Create your own sizes (e.g. "8 inch") in addition to the built-in ones.
+               Width and optional fixed height are in millimetres.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_pos_invoice_paper_size"
+              name="Receipt Paper Sizes"
+              parent="menu_pos_invoice_settings"
+              action="action_pos_invoice_paper_size"
+              sequence="2"/>
+
+</odoo>

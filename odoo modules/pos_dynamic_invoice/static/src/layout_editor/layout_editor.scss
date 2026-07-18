@@ -1,0 +1,245 @@
+.pdi-editor {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #f4f5f7;
+    font-size: 13px;
+
+    .pdi-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 16px;
+        background: #fff;
+        border-bottom: 1px solid #dee2e6;
+
+        .pdi-title { font-weight: 600; font-size: 15px; }
+        .pdi-sub { color: #868e96; font-weight: 400; margin-left: 4px; }
+        .pdi-saved { color: #2b8a3e; font-size: 11px; font-weight: 600; white-space: nowrap; }
+        .pdi-gridwarn { color: #b8860b; font-size: 11px; font-weight: 600; white-space: nowrap; cursor: help; }
+        .pdi-add {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            label { margin: 0; color: #6c757d; }
+            select { border: 1px solid #ced4da; border-radius: 4px; padding: 4px 8px; }
+        }
+    }
+
+    .pdi-err {
+        background: #f8d7da;
+        color: #842029;
+        padding: 8px 16px;
+        border-bottom: 1px solid #f5c2c7;
+    }
+
+    .pdi-body { flex: 1; display: flex; gap: 12px; padding: 12px; min-height: 0; }
+
+    .pdi-col {
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+
+        .pdi-col-head {
+            padding: 8px 12px;
+            font-weight: 600;
+            border-bottom: 1px solid #dee2e6;
+            background: #f1f3f5;
+            border-radius: 8px 8px 0 0;
+            .pdi-hint { font-weight: 400; color: #868e96; font-size: 12px; margin-left: 8px; }
+        }
+    }
+
+    .pdi-canvas-col { flex: 1 1 40%; }
+    .pdi-props { flex: 0 0 260px; }
+    .pdi-preview { flex: 1 1 40%; }
+
+    .pdi-chips {
+        display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0;
+        .pdi-chip {
+            border: 1px solid #ced4da; background: #fff; border-radius: 12px;
+            padding: 2px 10px; font-size: 11px; cursor: pointer; white-space: nowrap;
+            &:hover { border-color: #714b67; }
+            &.pdi-chip-sel { background: #714b67; color: #fff; border-color: #714b67; }
+            &.pdi-chip-off { opacity: 0.5; }
+        }
+    }
+    .pdi-canvas-scroll { overflow: auto; padding: 12px 24px 20px; }
+
+    // top mm ruler
+    .pdi-ruler {
+        position: relative;
+        height: 22px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid #adb5bd;
+        .pdi-tick {
+            position: absolute;
+            bottom: 0;
+            width: 1px;
+            height: 5px;
+            background: #ced4da;
+            &.pdi-tick-major { height: 10px; background: #868e96; }
+            .pdi-tick-lbl {
+                position: absolute;
+                left: 2px;
+                top: -14px;
+                font-size: 10px;
+                color: #868e96;
+                white-space: nowrap;
+            }
+        }
+    }
+
+    // the paper canvas
+    .pdi-paper {
+        background: #fff;
+        border: 1px solid #ced4da;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+        min-height: 120px;
+    }
+
+    .pdi-block {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 22px 12px 10px;
+        border-bottom: 1px dashed #dee2e6;
+        cursor: pointer;
+        user-select: none;
+        background: #fff;
+
+        &:hover { background: #f8f9fa; }
+        &.pdi-selected { background: #efe7ee; box-shadow: inset 3px 0 0 #714b67; }
+        &.pdi-off { opacity: 0.5; }
+
+        .pdi-handle { cursor: grab; color: #adb5bd; font-size: 15px; }
+        .pdi-name { flex: 1; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pdi-wmm { font-size: 11px; color: #714b67; font-weight: 600; }
+        .pdi-vis, .pdi-del {
+            border: 0; background: transparent; color: #868e96; padding: 2px 4px; cursor: pointer;
+            &:hover { color: #212529; }
+        }
+        .pdi-del:hover { color: #dc3545; }
+        // right-edge resize grip
+        .pdi-resize {
+            position: absolute;
+            top: 0; right: 0; bottom: 0;
+            width: 10px;
+            cursor: ew-resize;
+            background: linear-gradient(90deg, transparent, rgba(113,75,103,0.25));
+        }
+        &:hover .pdi-resize { background: linear-gradient(90deg, transparent, rgba(113,75,103,0.5)); }
+    }
+
+    .o_dragged { opacity: 0.5; }
+
+    .pdi-empty { padding: 24px; text-align: center; color: #adb5bd; }
+
+    // ---- GRID canvas (1cm squares) ----
+    .pdi-gridcanvas {
+        position: relative;
+        background: #fff;
+        border: 1px solid #ced4da;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+        // 30px = 1cm at SCALE 3. Light square grid.
+        background-image:
+            linear-gradient(to right, #e9ecef 1px, transparent 1px),
+            linear-gradient(to bottom, #e9ecef 1px, transparent 1px);
+        background-size: 30px 30px;
+    }
+    .pdi-gbox {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1px solid #714b67;
+        background: rgba(113, 75, 103, 0.04);
+        cursor: default;
+        overflow: hidden;
+        user-select: none;
+
+        &.pdi-selected { background: rgba(113, 75, 103, 0.15); box-shadow: 0 0 0 2px rgba(113, 75, 103, 0.5); z-index: 5; }
+        &.pdi-off { opacity: 0.4; border-style: dashed; }
+
+        // The move handle bar (the "line") — grab it to move; name shown on it.
+        .pdi-ghbar {
+            display: flex; align-items: center; gap: 4px;
+            padding: 2px 6px;
+            background: #714b67; color: #fff;
+            cursor: grab;
+            &:active { cursor: grabbing; }
+            .pdi-ghgrip { font-size: 12px; opacity: 0.8; }
+            .pdi-gname { flex: 1; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .pdi-gvis, .pdi-gdel { border: 0; background: transparent; color: #fff; padding: 0 2px; font-size: 11px; cursor: pointer; opacity: 0.85; }
+            .pdi-gvis:hover, .pdi-gdel:hover { opacity: 1; }
+        }
+        .pdi-gresize {
+            position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+            cursor: nwse-resize;
+            background: linear-gradient(135deg, transparent 50%, #714b67 50%);
+        }
+    }
+
+    .pdi-props {
+        overflow-y: auto;
+        max-height: 100%;
+        .pdi-section-lbl { padding: 8px 12px 2px; font-weight: 700; color: #714b67; border-top: 1px solid #e9ecef; margin-top: 6px; }
+        .pdi-prop {
+            padding: 8px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            label { font-size: 12px; color: #6c757d; margin: 0; }
+            input[type="text"], input[type="number"], select {
+                border: 1px solid #ced4da; border-radius: 4px; padding: 4px 8px;
+            }
+            input[type="range"] { width: 100%; }
+        }
+    }
+
+    .pdi-row-inline { flex-direction: row !important; align-items: center; justify-content: space-between; gap: 8px;
+        label { display: flex; align-items: center; gap: 4px; margin: 0; }
+    }
+
+    // Company Header dynamic field rows (reorder / edit / add)
+    .pdi-hfield {
+        margin: 4px 12px; padding: 6px; border: 1px solid #e3dce6; border-radius: 6px; background: #faf8fb;
+        display: flex; flex-direction: column; gap: 4px;
+        .pdi-hfield-bar { display: flex; align-items: center; gap: 4px;
+            .pdi-hbtn, .pdi-hdel { border: 1px solid #d6cede; background: #fff; border-radius: 4px;
+                width: 22px; height: 22px; line-height: 1; cursor: pointer; color: #714b67; padding: 0; }
+            .pdi-hbtn:hover { background: #efe7ee; }
+            .pdi-hdel { margin-left: auto; color: #b02a37; border-color: #f0c8cd; }
+            .pdi-hvis { display: flex; align-items: center; gap: 3px; font-size: 11px; color: #6c757d; margin: 0 0 0 4px; }
+        }
+        .pdi-hin { border: 1px solid #ced4da; border-radius: 4px; padding: 3px 6px; font-size: 12px; width: 100%; }
+    }
+    textarea { border: 1px solid #ced4da; border-radius: 4px; padding: 4px 8px; font-family: inherit; resize: vertical; }
+
+    // Preview panel: iframe scaled to fit the panel width (no gap, no h-scroll).
+    .pdi-preview-wrap {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        background: #e9ecef;
+        padding: 8px;
+        min-height: 0;
+    }
+    .pdi-scaler {
+        position: relative;
+        margin: 0 auto;
+        background: #fff;
+        box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+        overflow: hidden;
+    }
+    .pdi-iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        border: 0;
+        background: #fff;
+    }
+}

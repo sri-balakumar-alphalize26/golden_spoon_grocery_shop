@@ -16,6 +16,14 @@
                             string="Preview"
                             class="btn-primary"
                             icon="fa-eye"/>
+                    <!-- Jump straight into the visual editor for the current
+                         size, only when the editable Custom Layout is chosen. -->
+                    <button name="action_edit_layout"
+                            type="object"
+                            string="Edit Layout (Drag &amp; Drop)"
+                            class="btn-secondary"
+                            icon="fa-object-group"
+                            invisible="invoice_template != 'layout'"/>
                 </header>
                 <sheet>
                     <div class="alert alert-info" role="alert" invisible="invoice_template != 'html'">
@@ -28,57 +36,27 @@
                         <field name="invoice_template" widget="radio" options="{'horizontal': True}"/>
                     </group>
                     <!-- Default receipt size: always visible (applies to every
-                         template). -->
+                         template). The list of sizes below is fully editable —
+                         add your own (e.g. "8 inch") and it appears here. -->
                     <group string="Receipt Size">
                         <field name="use_default_paper_size" widget="boolean_toggle"/>
-                        <field name="default_paper_size" invisible="not use_default_paper_size"/>
+                        <field name="default_paper_size_id" invisible="not use_default_paper_size"
+                               options="{'no_create_edit': True}"/>
                         <field name="default_size_hint" invisible="not use_default_paper_size" readonly="1"/>
-                        <field name="custom_paper_width" string="Custom Width (mm)" invisible="not use_default_paper_size or default_paper_size != 'custom'"
-                               help="Prints as one continuous page (auto height)."/>
                     </group>
-                    <!-- Editable mm for each preset (per company). Change once
-                         here and every "4 inch" etc. renders at your mm. Always
-                         visible: the preset mm feed both the default-size render
-                         AND the print-time "choose size" popup (default OFF). -->
-                    <group string="Preset Sizes (mm)">
-                        <div class="text-danger" colspan="2" style="margin-bottom:8px; font-weight:500;">
-                            Set each receipt size's width in mm. These apply to the default size
-                            <b>and</b> the print-time "choose size" popup (shown when Use Default is off).
-                            Keep each value within the allowed range shown beside it — out-of-range
-                            values snap back automatically.
+                    <!-- Paper sizes are records now: edit any width/height, or add
+                         your own (e.g. "8 inch"). Change "4 inch" once and every
+                         render uses your mm. Managed in a dedicated list so the
+                         set can grow beyond the built-in six. -->
+                    <group string="Paper Sizes">
+                        <div class="text-muted" colspan="2" style="margin-bottom:8px;">
+                            Add or edit receipt sizes (width, and optional fixed height, in mm).
+                            Height 0 = continuous roll. These feed both the default size and the
+                            print-time "choose size" popup.
                         </div>
-                        <label for="size_mm_2in"/>
-                        <div class="o_row">
-                            <field name="size_mm_2in" nolabel="1" class="oe_inline"/>
-                            <span class="text-danger ms-2">allowed 40–65 mm</span>
-                        </div>
-                        <label for="size_mm_3in"/>
-                        <div class="o_row">
-                            <field name="size_mm_3in" nolabel="1" class="oe_inline"/>
-                            <span class="text-danger ms-2">allowed 60–85 mm</span>
-                        </div>
-                        <label for="size_mm_35in"/>
-                        <div class="o_row">
-                            <field name="size_mm_35in" nolabel="1" class="oe_inline"/>
-                            <span class="text-danger ms-2">allowed 70–95 mm</span>
-                        </div>
-                        <label for="size_mm_4in"/>
-                        <div class="o_row">
-                            <field name="size_mm_4in" nolabel="1" class="oe_inline"/>
-                            <span class="text-danger ms-2">allowed 85–115 mm</span>
-                        </div>
-                        <label for="size_mm_a5"/>
-                        <div class="o_row">
-                            <field name="size_mm_a5" nolabel="1" class="oe_inline"/>
-                            <span class="text-danger ms-2">allowed 140–160 mm</span>
-                        </div>
-                        <label for="size_mm_a4"/>
-                        <div class="o_row">
-                            <field name="size_mm_a4" nolabel="1" class="oe_inline"/>
-                            <span class="text-danger ms-2">allowed 200–225 mm</span>
-                        </div>
-                        <button name="action_reset_preset_sizes" type="object"
-                                string="Reset to default" icon="fa-undo" class="btn-secondary"/>
+                        <button name="action_manage_paper_sizes" type="object"
+                                string="Manage Sizes" icon="fa-arrows-alt-h"
+                                class="btn-secondary" colspan="2"/>
                     </group>
                     <!-- Cash Memo header (bilingual Oman invoice). -->
                     <group string="Cash Memo Header" invisible="invoice_template != 'cash_memo'">
@@ -152,6 +130,17 @@
                             <field name="show_footer"/>
                         </group>
                     </group>
+                    <div class="alert alert-warning mt-3" role="alert">
+                        <strong>General Settings — quick guide</strong>
+                        <ol class="mb-1">
+                            <li><b>Invoice Template</b> — pick how receipts look: <b>Standard</b> (plain), <b>Dynamic</b> / <b>Cash Memo</b> (branded), or <b>Custom Layout (editable)</b> to design your own.</li>
+                            <li><b>Preview</b> (top) — see the selected template rendered against your latest order.</li>
+                            <li><b>Default Receipt Size</b> — the size receipts print at (e.g. 4 inch). Add more under <b>Receipt Paper Sizes</b>.</li>
+                            <li><b>Logo &amp; branding</b> — company name (EN/AR), C.R., GSM, VAT — shown on the receipt.</li>
+                            <li><b>Edit Layout (Drag &amp; Drop)</b> — appears with Custom Layout; opens the visual editor (see <b>Invoice Layouts</b>).</li>
+                        </ol>
+                        <span class="text-muted">Full guide: <b>Invoice Settings ▸ User Manual</b>.</span>
+                    </div>
                 </sheet>
             </form>
         </field>
@@ -185,13 +174,41 @@
         </field>
     </record>
 
-    <!-- Menu under the Point of Sale root. Parented to menu_point_root (a
-         stable xmlid across versions) rather than the Configuration submenu,
-         whose id has varied between releases, so the module always installs. -->
+    <!-- Server action so the menu opens the single company settings FORM
+         directly (with Preview / Edit Layout buttons), not the list. -->
+    <record id="action_open_invoice_settings_form" model="ir.actions.server">
+        <field name="name">Invoice Settings</field>
+        <field name="model_id" ref="model_pos_invoice_settings"/>
+        <field name="state">code</field>
+        <field name="code">action = model.action_open_company_settings()</field>
+    </record>
+
+    <!-- "Invoice Settings" is now a PARENT heading (no action of its own) under
+         the Point of Sale root, holding three children: General Settings, Receipt
+         Paper Sizes, Invoice Layouts. Parented to menu_point_root (a stable xmlid
+         across versions). This file loads BEFORE the paper-size and layout views
+         (see manifest order) so their child menuitems can reference this parent. -->
     <menuitem id="menu_pos_invoice_settings"
               name="Invoice Settings"
               parent="point_of_sale.menu_point_root"
-              action="action_pos_invoice_settings"
               sequence="90"/>
+
+    <menuitem id="menu_pos_invoice_settings_general"
+              name="General Settings"
+              parent="menu_pos_invoice_settings"
+              action="action_open_invoice_settings_form"
+              sequence="1"/>
+
+    <!-- In-app User Manual: opens the PDF viewer (iframe + Download). -->
+    <record id="action_open_user_manual" model="ir.actions.client">
+        <field name="name">User Manual</field>
+        <field name="tag">pos_invoice_user_manual</field>
+    </record>
+
+    <menuitem id="menu_pos_invoice_user_manual"
+              name="User Manual"
+              parent="menu_pos_invoice_settings"
+              action="action_open_user_manual"
+              sequence="4"/>
 
 </odoo>

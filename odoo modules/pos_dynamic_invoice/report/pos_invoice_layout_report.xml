@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- LAYOUT-DRIVEN receipt: renders from pos.invoice.layout blocks instead of
+         a hardcoded template. Added as a THIRD branch of the dispatcher; the
+         Dynamic and Cash Memo templates are untouched. Thermal-safe: pure #000,
+         inline styles + base64 only (the app print path cannot load assets).
+
+         Context: `layout` (pos.invoice.layout), plus the usual d, width,
+         receipt_width, page_size_css, sig_max_h. -->
+    <template id="report_pos_invoice_layout_doc">
+        <div class="pos_inv_layout_root">
+            <style>
+                @page { size: <t t-esc="page_size_css"/>; margin: 4mm; }
+                .pos_inv_layout_root .receipt { width:<t t-esc="receipt_width"/>mm; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; color:#000; padding:4mm 4mm; }
+                .pos_inv_layout_root .lrow { display:flex; justify-content:space-between; gap:6px; width:100%; }
+                .pos_inv_layout_root .lcol { box-sizing:border-box; }
+                .pos_inv_layout_root .company { font-weight:700; font-size:13px; }
+                .pos_inv_layout_root .meta { font-size:11px; }
+                .pos_inv_layout_root .hr { border-top:1px solid #000; margin:10px 0; }
+                .pos_inv_layout_root .titleBox { border-top:2px solid #000; border-bottom:2px solid #000; padding:6px 0; margin:8px 0; text-align:center; font-weight:700; }
+                .pos_inv_layout_root table { width:100%; border-collapse:collapse; font-size:11px; }
+                .pos_inv_layout_root th { font-weight:700; font-size:11px; padding:6px 4px; text-align:center; border-bottom:1px solid #000; }
+                .pos_inv_layout_root td { font-size:11px; padding:6px 4px; }
+                <!-- display:table (not flex): reliable label-left / value-right on
+                     ONE line in every engine, incl. wkhtmltopdf's old WebKit which
+                     stacks flex children that lack explicit flex sizing. -->
+                .pos_inv_layout_root .row2c { display:table; width:100%; }
+                .pos_inv_layout_root .row2c > div { display:table-cell; }
+                .pos_inv_layout_root .row2c > div:last-child { text-align:right; }
+                .pos_inv_layout_root .totals .line { display:table; width:100%; font-size:12px; padding:4px 0; }
+                .pos_inv_layout_root .totals .line > div { display:table-cell; }
+                .pos_inv_layout_root .totals .line > div:last-child { text-align:right; }
+                .pos_inv_layout_root .totals .value { font-weight:700; }
+                .pos_inv_layout_root .paymentTitle { font-weight:700; text-decoration:underline; margin-top:8px; padding-top:6px; }
+                .pos_inv_layout_root .paymentRow { display:table; width:100%; padding:4px 0; }
+                .pos_inv_layout_root .paymentRow > div { display:table-cell; }
+                .pos_inv_layout_root .paymentRow > div:last-child { text-align:right; }
+                .pos_inv_layout_root .rcptfoot { text-align:center; font-size:11px; margin-top:8px; white-space:pre-line; }
+            </style>
+            <!-- GRID positioning: absolute cm-placed blocks on a fixed canvas. -->
+            <t t-if="layout.positioning == 'grid'">
+                <div class="receipt" style="padding:0;">
+                    <!-- Height hugs the content (lowest block + margin), not a fixed
+                         40cm canvas, so the paper leaves no wasted white space and
+                         grows/shrinks as blocks move. -->
+                    <div t-attf-style="position:relative; width:100%; height:#{layout.render_grid_h_cm()}cm;">
+                        <t t-foreach="layout.block_ids" t-as="block">
+                            <t t-if="block.visible">
+                                <div t-attf-style="position:absolute; left:#{block.grid_x}cm; top:#{block.grid_y}cm; width:#{block.grid_w or 4}cm; height:#{block.grid_h or 2}cm; overflow:hidden; #{('text-align:%s;' % block.align) if block.align and block.align != 'auto' else ''} #{('direction:%s;' % block.direction) if block.direction and block.direction != 'auto' else ''} #{('font-size:%dpx;' % block.font_size_px) if block.font_size_px else ''} #{'font-weight:bold;' if block.bold else ''}">
+                                    <t t-call="pos_dynamic_invoice.report_pos_invoice_layout_block"/>
+                                </div>
+                            </t>
+                        </t>
+                    </div>
+                </div>
+            </t>
+            <!-- FLOW positioning (default): stacked rows/columns. -->
+            <t t-else="">
+                <div class="receipt">
+                    <t t-foreach="layout.rows()" t-as="lrow">
+                        <t t-set="vis" t-value="[b for b in lrow if b.visible]"/>
+                        <!-- Single-column row: render the block directly (no flex
+                             wrapper) so nested flex inside blocks (totals, meta) stays
+                             one line even in wkhtmltopdf's old WebKit. -->
+                        <t t-if="len(vis) == 1">
+                            <t t-set="block" t-value="vis[0]"/>
+                            <div t-attf-style="#{('text-align:%s;' % block.align) if block.align and block.align != 'auto' else ''} #{('direction:%s;' % block.direction) if block.direction and block.direction != 'auto' else ''} #{('font-size:%dpx;' % block.font_size_px) if block.font_size_px else ''} #{'font-weight:bold;' if block.bold else ''}">
+                                <t t-call="pos_dynamic_invoice.report_pos_invoice_layout_block"/>
+                            </div>
+                        </t>
+                        <!-- Multi-column row: flex columns side by side. -->
+                        <t t-elif="len(vis) &gt; 1">
+                            <div class="lrow">
+                                <t t-foreach="vis" t-as="block">
+                                    <div class="lcol"
+                                         t-attf-style="width:#{block.width_pct}%; #{('text-align:%s;' % block.align) if block.align and block.align != 'auto' else ''} #{('direction:%s;' % block.direction) if block.direction and block.direction != 'auto' else ''} #{('font-size:%dpx;' % block.font_size_px) if block.font_size_px else ''} #{'font-weight:bold;' if block.bold else ''}">
+                                        <t t-call="pos_dynamic_invoice.report_pos_invoice_layout_block"/>
+                                    </div>
+                                </t>
+                            </div>
+                        </t>
+                    </t>
+                </div>
+            </t>
+        </div>
+    </template>
+
+    <!-- One block's content, chosen by block.block_type. `block` and `d`,
+         `sig_max_h` are in context (t-call inherits the caller's scope). -->
+    <template id="report_pos_invoice_layout_block">
+        <!-- LOGO -->
+        <t t-if="block.block_type == 'logo'">
+            <t t-if="d['show_logo'] and d['logo']">
+                <img t-att-src="'data:image/png;base64,' + d['logo']"
+                     t-attf-style="width:#{block.logo_width_pct or 45}%; height:auto; display:block; margin:0 auto 6px;"/>
+            </t>
+        </t>
+
+        <!-- COMPANY NAME — English and Arabic are now their own movable sections. -->
+        <t t-if="block.block_type == 'company_name_ar'">
+            <t t-if="d['company_name_ar']">
+                <div style="text-align:center; font-weight:700; font-size:15px; direction:rtl;"><t t-esc="d['company_name_ar']"/></div>
+            </t>
+        </t>
+        <t t-if="block.block_type == 'company_name_en'">
+            <div style="text-align:center; font-weight:700; font-size:13px;"><t t-esc="d['company_name_en'] or d['company']['name']"/></div>
+        </t>
+
+        <!-- COMPANY HEADER — bilingual table built from the editable/reorderable
+             header fields (each: EN label | AR label, plus a value). -->
+        <t t-if="block.block_type == 'header_info'">
+            <table style="width:100%; border:1px solid #000; border-collapse:collapse; font-size:10px;">
+                <t t-foreach="layout.header_field_rows()" t-as="hf">
+                    <tr>
+                        <td style="border:1px solid #000; padding:2px 6px;"><t t-esc="hf.label_en or ''"/><t t-if="hf.value"> : <t t-esc="hf.value"/></t></td>
+                        <td style="border:1px solid #000; padding:2px 6px; direction:rtl; text-align:right;"><t t-esc="hf.label_ar or hf.label_en or ''"/><t t-if="hf.value"> : <t t-esc="hf.value"/></t></td>
+                    </tr>
+                </t>
+            </table>
+        </t>
+
+        <!-- TITLE — bordered bar; text is user-editable (EN + optional AR). -->
+        <t t-if="block.block_type == 'title'">
+            <div style="border:2px solid #000; padding:6px 0; margin:8px 0; text-align:center; font-weight:700; font-size:15px;">
+                <div><t t-esc="block.label_en or d['header_title']"/></div>
+                <t t-if="block.label_ar"><div style="direction:rtl; font-size:13px; margin-top:2px;"><t t-esc="block.label_ar"/></div></t>
+            </div>
+        </t>
+
+        <!-- ORDER FIELDS -->
+        <t t-if="block.block_type == 'meta_fields'">
+            <div class="row2c" style="font-size:11px; direction:ltr; margin-top:6px;">
+                <div><t t-if="d['customer']">Customer: <t t-esc="d['customer']"/></t></div>
+                <div>Cashier: <t t-esc="d['cashier']"/></div>
+            </div>
+            <div class="row2c" style="font-size:11px; direction:ltr; margin-bottom:6px;">
+                <div>Date: <t t-esc="d['date']"/></div>
+                <div>No: <t t-esc="d['order_ref']"/></div>
+            </div>
+        </t>
+
+        <!-- ITEMS TABLE — bordered, Sl No (#) first (HK style). -->
+        <t t-if="block.block_type == 'items_table'">
+            <table style="width:100%; border-collapse:collapse; font-size:11px; border:1px solid #000;">
+                <thead>
+                    <tr>
+                        <th style="border:1px solid #000; padding:5px 4px;">#<br/><span style="font-weight:400;font-size:10px;">م</span></th>
+                        <th style="border:1px solid #000; padding:5px 4px;">Product<br/><span style="font-weight:400;font-size:10px;">المنتج</span></th>
+                        <th style="border:1px solid #000; padding:5px 4px;">Qty<br/><span style="font-weight:400;font-size:10px;">كمية</span></th>
+                        <th style="border:1px solid #000; padding:5px 4px;">Unit<br/><span style="font-weight:400;font-size:10px;">سعر</span></th>
+                        <th style="border:1px solid #000; padding:5px 4px;">Disc<br/><span style="font-weight:400;font-size:10px;">خصم</span></th>
+                        <th style="border:1px solid #000; padding:5px 4px;">Total<br/><span style="font-weight:400;font-size:10px;">المجموع</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <t t-foreach="d['items']" t-as="item">
+                        <tr>
+                            <td style="border:1px solid #000; padding:4px; text-align:center; vertical-align:top;"><t t-esc="item['num']"/></td>
+                            <td style="border:1px solid #000; padding:4px; vertical-align:top;"><t t-esc="item['name']"/><t t-if="item['note']"><div style="font-size:9px; margin-top:2px; font-style:italic;">📝 <t t-esc="item['note']"/></div></t></td>
+                            <td style="border:1px solid #000; padding:4px; text-align:center; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['qty']"/></span></td>
+                            <td style="border:1px solid #000; padding:4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['unit_f']"/></span></td>
+                            <td style="border:1px solid #000; padding:4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['disc_f']"/></span></td>
+                            <td style="border:1px solid #000; padding:4px; text-align:right; vertical-align:top;"><span style="direction:ltr; unicode-bidi:embed;"><t t-esc="item['total_f']"/></span></td>
+                        </tr>
+                    </t>
+                </tbody>
+            </table>
+        </t>
+
+        <!-- TOTALS -->
+        <t t-if="block.block_type == 'totals'">
+            <div class="totals">
+                <div class="line"><div>Subtotal / المجموع الفرعي</div><div class="value"><t t-esc="d['subtotal_f']"/></div></div>
+                <t t-if="d['show_discount']"><div class="line"><div>Discount / الخصم</div><div class="value">-<t t-esc="d['discount_f']"/></div></div></t>
+                <t t-if="d['show_tax']"><div class="line"><div>Tax / الضريبة</div><div class="value"><t t-esc="d['tax_f']"/></div></div></t>
+                <t t-if="d.get('show_refunded') and d.get('refunded_f')"><div class="line"><div>Refunded / المسترد</div><div class="value">-<t t-esc="d['refunded_f']"/></div></div></t>
+                <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
+                <div class="line" style="font-size:13px; font-weight:700;"><div><t t-esc="block.label_en or 'Grand Total'"/> / <t t-esc="block.label_ar or 'الإجمالي'"/></div><div class="value"><t t-esc="d['total_f']"/></div></div>
+            </div>
+        </t>
+
+        <!-- PAYMENTS -->
+        <t t-if="block.block_type == 'payments'">
+            <div style="border-top:1px solid #000; margin-top:8px; padding-top:6px;"></div>
+            <div class="paymentTitle"><t t-if="d['is_split']">Payment Details (Split) / تفاصيل الدفع</t><t t-else="">Payment Details / تفاصيل الدفع</t></div>
+            <t t-if="d['has_payments']">
+                <t t-foreach="d['payments']" t-as="pay">
+                    <div class="paymentRow"><div><t t-esc="pay['name']"/>:</div><div><t t-esc="pay['amount_f']"/></div></div>
+                </t>
+                <t t-if="d['show_change']">
+                    <div class="paymentRow"><div>Change / الباقي:</div><div><t t-esc="d['change_f']"/></div></div>
+                </t>
+            </t>
+            <t t-else="">
+                <div class="paymentRow"><div>Cash:</div><div><t t-esc="d['cash_f']"/></div></div>
+                <div class="paymentRow"><div>Change / الباقي:</div><div><t t-esc="d['cash_change_f']"/></div></div>
+            </t>
+        </t>
+
+        <!-- SIGNATURES -->
+        <t t-if="block.block_type == 'signatures'">
+            <t t-if="d['show_customer_sig'] or d['show_shop_owner_sig']">
+                <div style="border-top:1px solid #000; margin-top:10px; padding-top:8px; direction:ltr;">
+                    <div style="display:flex; justify-content:space-between; gap:10px;">
+                        <t t-if="d['show_customer_sig']">
+                            <div style="flex:1; text-align:center;">
+                                <img t-att-src="'data:image/png;base64,' + d['customer_signature']" t-attf-style="width:100%; height:auto; max-height:#{sig_max_h}px; object-fit:contain;"/>
+                                <div style="border-top:1px solid #000; margin-top:4px; padding-top:2px; font-size:10px;">Customer / العميل</div>
+                            </div>
+                        </t>
+                        <t t-if="d['show_shop_owner_sig']">
+                            <div style="flex:1; text-align:center;">
+                                <img t-att-src="'data:image/png;base64,' + d['shop_owner_signature']" t-attf-style="width:100%; height:auto; max-height:#{sig_max_h}px; object-fit:contain;"/>
+                                <div style="border-top:1px solid #000; margin-top:4px; padding-top:2px; font-size:10px;">Cashier / الكاشير</div>
+                            </div>
+                        </t>
+                    </div>
+                </div>
+            </t>
+        </t>
+
+        <!-- FOOTER -->
+        <t t-if="block.block_type == 'footer'">
+            <t t-if="d['show_footer']">
+                <div style="height:8px; border-bottom:1px dotted #000; margin-top:8px;"></div>
+                <div class="rcptfoot">
+                    <t t-foreach="d['footer_lines']" t-as="fline">
+                        <div><t t-esc="fline"/></div>
+                    </t>
+                </div>
+            </t>
+        </t>
+
+        <!-- BARCODE (base64 image computed in the payload; text fallback) -->
+        <t t-if="block.block_type == 'barcode'">
+            <div style="text-align:center; margin:6px 0;">
+                <t t-if="d.get('barcode_img')">
+                    <img t-att-src="'data:image/png;base64,' + d['barcode_img']" style="max-width:100%; height:auto;"/>
+                </t>
+                <t t-else=""><span style="font-family:monospace;"><t t-esc="d.get('barcode_value') or d['order_ref']"/></span></t>
+            </div>
+        </t>
+
+        <!-- QR CODE — generated from the block's QR Data (a link/text set in Options),
+             sized to fit the section so it always shows fully. -->
+        <t t-if="block.block_type == 'qrcode'">
+            <t t-set="qr" t-value="block.qr_b64()"/>
+            <div style="text-align:center; margin:6px 0;">
+                <t t-if="qr">
+                    <img t-att-src="'data:image/png;base64,' + qr" style="width:100%; max-width:150px; height:auto; display:inline-block;"/>
+                </t>
+                <t t-elif="d.get('qr_img')">
+                    <img t-att-src="'data:image/png;base64,' + d['qr_img']" style="width:100%; max-width:150px; height:auto; display:inline-block;"/>
+                </t>
+            </div>
+        </t>
+
+        <!-- CUSTOM TEXT — free text the user typed (EN + AR). -->
+        <t t-if="block.block_type == 'custom_text'">
+            <div style="margin:4px 0;">
+                <t t-if="block.content_en">
+                    <div style="white-space:pre-line;"><t t-esc="block.content_en"/></div>
+                </t>
+                <t t-if="block.content_ar">
+                    <div style="white-space:pre-line; direction:rtl;"><t t-esc="block.content_ar"/></div>
+                </t>
+            </div>
+        </t>
+    </template>
+</odoo>

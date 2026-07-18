@@ -3,3 +3,11 @@ access_pos_invoice_settings_user,pos.invoice.settings.user,model_pos_invoice_set
 access_pos_invoice_settings_manager,pos.invoice.settings.manager,model_pos_invoice_settings,point_of_sale.group_pos_manager,1,1,1,1
 access_pos_dynamic_invoice_wizard_user,pos.dynamic.invoice.wizard.user,model_pos_dynamic_invoice_wizard,point_of_sale.group_pos_user,1,1,1,1
 access_pos_dynamic_invoice_wizard_manager,pos.dynamic.invoice.wizard.manager,model_pos_dynamic_invoice_wizard,point_of_sale.group_pos_manager,1,1,1,1
+access_pos_invoice_paper_size_user,pos.invoice.paper.size.user,model_pos_invoice_paper_size,point_of_sale.group_pos_user,1,0,0,0
+access_pos_invoice_paper_size_manager,pos.invoice.paper.size.manager,model_pos_invoice_paper_size,point_of_sale.group_pos_manager,1,1,1,1
+access_pos_invoice_layout_user,pos.invoice.layout.user,model_pos_invoice_layout,point_of_sale.group_pos_user,1,0,0,0
+access_pos_invoice_layout_manager,pos.invoice.layout.manager,model_pos_invoice_layout,point_of_sale.group_pos_manager,1,1,1,1
+access_pos_invoice_layout_block_user,pos.invoice.layout.block.user,model_pos_invoice_layout_block,point_of_sale.group_pos_user,1,0,0,0
+access_pos_invoice_layout_block_manager,pos.invoice.layout.block.manager,model_pos_invoice_layout_block,point_of_sale.group_pos_manager,1,1,1,1
+access_pos_invoice_header_field_user,pos.invoice.header.field.user,model_pos_invoice_header_field,point_of_sale.group_pos_user,1,0,0,0
+access_pos_invoice_header_field_manager,pos.invoice.header.field.manager,model_pos_invoice_header_field,point_of_sale.group_pos_manager,1,1,1,1

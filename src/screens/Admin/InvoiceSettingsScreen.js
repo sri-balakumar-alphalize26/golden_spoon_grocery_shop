@@ -17,26 +17,15 @@ import { NavigationHeader } from '@components/Header';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
 import { showToastMessage } from '@components/Toast';
 import { useAuthStore } from '@stores/auth';
-import { fetchInvoiceSettings, saveInvoiceSettings, fetchInvoiceCompanies, fetchInvoiceLogo, fetchDynamicReceiptHtml, fetchOrdersOdoo } from '@api/services/generalApi';
+import { fetchInvoiceSettings, saveInvoiceSettings, fetchInvoiceCompanies, fetchInvoiceLogo, fetchDynamicReceiptHtml, fetchOrdersOdoo, fetchPaperSizes } from '@api/services/generalApi';
 import { WebView } from 'react-native-webview';
-import DragSlider from '@components/DragSlider';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
 
-// The six editable receipt-size presets. `key` matches the Odoo
-// `default_paper_size` selection value; `lo`/`hi` are the allowed mm band
-// (mirrors `_SIZE_LIMITS` in pos_invoice_settings.py); `def` is the factory mm.
-const PRESET_META = [
-  { key: '2in', label: '2 inch', lo: 40, hi: 65, def: 50 },
-  { key: '3in', label: '3 inch', lo: 60, hi: 85, def: 76 },
-  { key: '35in', label: '3.5 inch', lo: 70, hi: 95, def: 80 },
-  { key: '4in', label: '4 inch', lo: 85, hi: 115, def: 100 },
-  { key: 'a5', label: 'A5', lo: 140, hi: 160, def: 148 },
-  { key: 'a4', label: 'A4', lo: 200, hi: 225, def: 210 },
-];
-// Factory mm for every preset key — used to seed state and the Reset button.
-const PRESET_DEFAULTS = { '2in': 50, '3in': 76, '35in': 80, '4in': 100, a5: 148, a4: 210 };
+// Receipt sizes are no longer hardcoded here — they're per-company
+// `pos.invoice.paper.size` records, managed on the Receipt Paper Sizes screen.
+// This screen only PICKS which one is the default (default_paper_size_id).
 
 const InvoiceSettingsScreen = ({ navigation, route }) => {
   const recordId = route?.params?.id || null;
@@ -47,8 +36,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Reset-to-default confirm + unsaved-changes guard.
-  const [resetConfirmVisible, setResetConfirmVisible] = useState(false);
+  // Unsaved-changes guard.
   const [leaveConfirm, setLeaveConfirm] = useState(false);
   const savedSnapRef = useRef(null);   // snapshot at load / after save
   const curSnapRef = useRef('');       // latest snapshot (updated each render)
@@ -104,19 +92,17 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [showCashierSig, setShowCashierSig] = useState(true);
   const [showFooter, setShowFooter] = useState(true);
 
-  // Default receipt size (per-company). Applies to BOTH the dynamic and the
-  // normal receipt: when on, the app skips its size prompt and prints at
-  // defaultSizeStr (mm as a string, matching the Odoo selection).
+  // Default receipt size (per-company). Applies to every template: when on, the
+  // app skips its size prompt and prints at the linked paper size.
   const [useDefaultSize, setUseDefaultSize] = useState(false);
-  // defaultSizeStr now holds a KEY ('2in'/'3in'/'35in'/'4in'/'a5'/'a4'/'custom'),
-  // not an mm value. The resolved mm comes from presetMm[defaultSizeStr].
-  const [defaultSizeStr, setDefaultSizeStr] = useState('35in');
-  // Per-company editable preset widths (mm), keyed like PRESET_META.
-  const [presetMm, setPresetMm] = useState({ ...PRESET_DEFAULTS });
-  // Custom size (mm). Height '' / 0 = auto (continuous roll). Active when
-  // defaultSizeStr === 'custom'.
-  const [customWidth, setCustomWidth] = useState('80');
-  const [customHeight, setCustomHeight] = useState('');
+  // The default receipt size now LINKS to a pos.invoice.paper.size record.
+  // defaultSizeId = record id (saved as default_paper_size_id); paperSizes = the
+  // company's sizes, fetched for the picker. Sizes are edited on the separate
+  // Receipt Paper Sizes screen.
+  const [defaultSizeId, setDefaultSizeId] = useState(null);
+  const [defaultSizeLabel, setDefaultSizeLabel] = useState('');
+  const [paperSizes, setPaperSizes] = useState([]);
+  const [sizePickerVisible, setSizePickerVisible] = useState(false);
 
   // Logo edit state: pickedLogoUri (local preview) + logoBase64
   //   undefined = leave unchanged, false = clear, string = new base64.
@@ -196,17 +182,14 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setShowCashierSig(s.show_shop_owner_signature !== false);
         setShowFooter(s.show_footer !== false);
         setUseDefaultSize(!!s.use_default_paper_size);
-        setDefaultSizeStr(s.default_paper_size || '35in');
-        setPresetMm({
-          '2in': s.size_mm_2in || 50,
-          '3in': s.size_mm_3in || 76,
-          '35in': s.size_mm_35in || 80,
-          '4in': s.size_mm_4in || 100,
-          a5: s.size_mm_a5 || 148,
-          a4: s.size_mm_a4 || 210,
-        });
-        setCustomWidth(String(s.custom_paper_width || 80));
-        setCustomHeight(s.custom_paper_height ? String(s.custom_paper_height) : '');
+        setDefaultSizeId(s.default_paper_size_id || null);
+        setDefaultSizeLabel(s.default_paper_size_label || '');
+        // Paper sizes for this company feed the default-size picker (managed on
+        // the Receipt Paper Sizes screen). Exclude the internal `custom` record.
+        const companyIdForSizes = Array.isArray(s.company_id) ? s.company_id[0] : null;
+        fetchPaperSizes(companyIdForSizes)
+          .then((rows) => setPaperSizes((rows || []).filter((r) => !r.is_custom)))
+          .catch(() => {});
       } catch (e) {
         console.error('[InvoiceSettings] bootstrap', e);
         showToastMessage(e?.message || 'Failed to load settings');
@@ -277,16 +260,8 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     show_shop_owner_signature: !!showCashierSig,
     show_footer: !!showFooter,
     use_default_paper_size: !!useDefaultSize,
-    default_paper_size: defaultSizeStr || '35in',
-    size_mm_2in: parseInt(presetMm['2in'], 10) || 50,
-    size_mm_3in: parseInt(presetMm['3in'], 10) || 76,
-    size_mm_35in: parseInt(presetMm['35in'], 10) || 80,
-    size_mm_4in: parseInt(presetMm['4in'], 10) || 100,
-    size_mm_a5: parseInt(presetMm['a5'], 10) || 148,
-    size_mm_a4: parseInt(presetMm['a4'], 10) || 210,
-    custom_paper_width: parseInt(customWidth, 10) || 80,
-    // Custom is always one continuous page (auto height) — never split.
-    custom_paper_height: 0,
+    // Links to a pos.invoice.paper.size record; false clears it.
+    default_paper_size_id: defaultSizeId || false,
   });
 
   // Snapshot of all editable values (+ a logo-change marker) for the
@@ -351,9 +326,10 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setErrorMsg('No orders found to preview. Make a sale first, then preview.');
         return;
       }
-      const isCustom = defaultSizeStr === 'custom';
-      const widthMm = !useDefaultSize ? '210' : (isCustom ? (customWidth || '80') : String(presetMm[defaultSizeStr] || '210'));
-      const heightMm = 0; // Custom is one continuous page (auto height).
+      // Preview at the chosen default size (else A4 when no default set).
+      const sel = paperSizes.find((p) => p.id === defaultSizeId);
+      const widthMm = (!useDefaultSize || !sel) ? '210' : String(sel.width_mm || 210);
+      const heightMm = (useDefaultSize && sel && sel.height_mm) ? Number(sel.height_mm) : 0;
       const html = await fetchDynamicReceiptHtml({ orderId: sample.id, paperWidthMm: widthMm, paperHeightMm: heightMm });
       if (!html) { setErrorMsg('Could not render a preview for this template.'); return; }
       setPreviewHtml(html);
@@ -410,27 +386,11 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     ? { uri: pickedLogoUri }
     : (showExisting && existingLogoB64 ? { uri: `data:image/png;base64,${existingLogoB64}` } : null);
 
-  // Human label for a size KEY, e.g. "A5 (148 mm)". Reflects the (editable)
-  // per-company mm from presetMm.
-  const sizeLabel = (val) => {
-    if (String(val) === 'custom') {
-      return `Custom (${customWidth || 0} mm)`;
-    }
-    const meta = PRESET_META.find((m) => m.key === val);
-    return meta ? `${meta.label} (${presetMm[val]} mm)` : `${val} mm`;
-  };
-
-  // Clamp a preset's typed mm into its allowed band; toast when it snapped.
-  const commitPresetMm = (meta, raw) => {
-    let v = parseInt(raw, 10);
-    if (!Number.isFinite(v)) v = meta.def;
-    let out = v;
-    if (out < meta.lo) out = meta.lo;
-    else if (out > meta.hi) out = meta.hi;
-    const clamped = out !== v;
-    console.log(`[InvoiceSettings] preset ${meta.key} typed=${raw} parsed=${v} -> ${out}${clamped ? ' (CLAMPED)' : ''} [${meta.lo}-${meta.hi}]`);
-    if (clamped) showToastMessage(`${meta.label} must be between ${meta.lo} and ${meta.hi} mm`);
-    setPresetMm((prev) => ({ ...prev, [meta.key]: out }));
+  // Label for a paper-size record, e.g. "3.5 inch (80 mm)".
+  const paperSizeLabel = (p) => {
+    if (!p) return '';
+    const h = p.height_mm ? ` × ${p.height_mm}` : '';
+    return `${p.name} (${p.width_mm}${h} mm)`;
   };
 
   const Row = ({ label, help, value, onValueChange }) => (
@@ -446,7 +406,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView backgroundColor={NAVY}>
       <NavigationHeader
-        title={isNew ? 'New Invoice Settings' : 'Invoice Settings'}
+        title={isNew ? 'New Invoice Settings' : 'General Settings'}
         onBackPress={() => navigation.goBack()}
       />
       <ScrollView style={styles.container} contentContainerStyle={{ padding: 12, paddingBottom: 110 }}>
@@ -459,6 +419,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
             { key: 'html', title: 'Standard', desc: 'The app\'s built-in receipt.' },
             { key: 'dynamic', title: 'Dynamic', desc: 'Branded receipt — logo, GST, custom header/footer.' },
             { key: 'cash_memo', title: 'Cash Memo', desc: 'Bilingual (English/Arabic) Oman-style A4/A5 invoice.' },
+            { key: 'layout', title: 'Custom Layout (editable)', desc: 'Drag-&-drop block layout, designed per size in Odoo → Invoice Layouts.' },
           ].map((opt) => {
             const active = invoiceTemplate === opt.key;
             return (
@@ -522,121 +483,19 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           </View>
           {useDefaultSize ? (
             <>
-              <Row
-                label="Custom size (width)"
-                help="Drag or type your own width instead of a preset — prints as one continuous page."
-                value={defaultSizeStr === 'custom'}
-                onValueChange={(on) => setDefaultSizeStr(on ? 'custom' : '35in')}
-              />
-              {defaultSizeStr === 'custom' ? (
-                <>
-                  <Text style={[styles.label, { marginTop: 8 }]}>Start from a preset (then tweak below)</Text>
-                  <View style={styles.sizeChipsRow}>
-                    {PRESET_META.map((meta) => {
-                      const mm = presetMm[meta.key];
-                      const active = String(mm) === String(customWidth);
-                      return (
-                        <TouchableOpacity
-                          key={meta.key}
-                          style={[styles.sizeChip, active && styles.sizeChipActive]}
-                          activeOpacity={0.85}
-                          onPress={() => setCustomWidth(String(mm))}
-                        >
-                          <Text style={[styles.sizeChipText, active && styles.sizeChipTextActive]}>{meta.label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-
-                  <View style={styles.sliderHeaderRow}>
-                    <Text style={styles.label}>Width</Text>
-                    <Text style={styles.sliderVal}>{customWidth || 0} mm</Text>
-                  </View>
-                  <View style={styles.sliderInputRow}>
-                    <View style={{ flex: 1 }}>
-                      <DragSlider
-                        value={parseInt(customWidth, 10) || 0}
-                        min={20} max={210} step={1}
-                        onChange={(v) => setCustomWidth(String(v))}
-                      />
-                    </View>
-                    <TextInput
-                      style={styles.sizeInput}
-                      value={String(customWidth)}
-                      onChangeText={(t) => setCustomWidth(t.replace(/[^0-9]/g, ''))}
-                      keyboardType="number-pad"
-                      maxLength={4}
-                      selectTextOnFocus={true}
-                    />
-                  </View>
-
-                  <Text style={styles.toggleHelp}>Prints as one continuous page (auto height) — no splitting.</Text>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.label}>Default Size</Text>
-                  {PRESET_META.map((meta) => {
-                    const active = defaultSizeStr === meta.key;
-                    return (
-                      <TouchableOpacity
-                        key={meta.key}
-                        activeOpacity={0.8}
-                        style={[styles.templateOption, active && styles.templateOptionActive]}
-                        onPress={() => setDefaultSizeStr(meta.key)}
-                      >
-                        <MaterialIcons
-                          name={active ? 'radio-button-checked' : 'radio-button-unchecked'}
-                          size={22}
-                          color={active ? ORANGE : '#b6bcc8'}
-                        />
-                        <Text style={[styles.templateTitle, active && { color: NAVY }, { marginLeft: 10, flex: 1 }]}>
-                          {sizeLabel(meta.key)}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </>
-              )}
-              <Text style={styles.sizeHint}>
-                {defaultSizeStr === 'custom'
-                  ? `→ ${customWidth || 0} mm (continuous)`
-                  : `→ ${presetMm[defaultSizeStr]} mm`}
+              <Text style={[styles.label, { marginTop: 8 }]}>Default Size</Text>
+              <TouchableOpacity style={styles.picker} onPress={() => setSizePickerVisible(true)}>
+                <Text style={styles.pickerValue}>
+                  {(defaultSizeId && paperSizeLabel(paperSizes.find((p) => p.id === defaultSizeId)))
+                    || defaultSizeLabel || 'Select size'}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={22} color="#666" />
+              </TouchableOpacity>
+              <Text style={styles.toggleHelp}>
+                Add or edit the available sizes (widths) on the Receipt Paper Sizes screen.
               </Text>
             </>
           ) : null}
-
-          {/* Preset Sizes editor — always visible when the Receipt Size card is
-              expanded. Edits the per-company mm used by the default size and the
-              print-time size popup. Values snap back into their allowed band. */}
-          <Text style={[styles.sectionTitle, { marginTop: 14 }]}>Preset Sizes (mm)</Text>
-          <Text style={styles.presetHelp}>
-            Set each size's width in mm — used by the default size and the print-time size popup. Out-of-range values snap back.
-          </Text>
-          {PRESET_META.map((meta) => (
-            <View key={meta.key} style={styles.presetRow}>
-              <Text style={styles.presetRowLabel}>{meta.label}</Text>
-              <View style={{ alignItems: 'flex-end' }}>
-                <TextInput
-                  style={styles.presetInput}
-                  value={String(presetMm[meta.key])}
-                  keyboardType="number-pad"
-                  maxLength={4}
-                  selectTextOnFocus={true}
-                  onChangeText={(t) => setPresetMm((prev) => ({ ...prev, [meta.key]: t.replace(/[^0-9]/g, '') }))}
-                  onEndEditing={(e) => commitPresetMm(meta, e.nativeEvent.text)}
-                />
-                <Text style={styles.presetAllowed}>allowed {meta.lo}–{meta.hi} mm</Text>
-              </View>
-            </View>
-          ))}
-          <TouchableOpacity
-            style={styles.presetResetBtn}
-            activeOpacity={0.85}
-            onPress={() => setResetConfirmVisible(true)}
-          >
-            <MaterialIcons name="restore" size={16} color="#dc2626" />
-            <Text style={styles.presetResetText}>Reset to default</Text>
-          </TouchableOpacity>
         </View>
 
         {invoiceTemplate === 'html' ? (
@@ -704,6 +563,17 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         </>
         ) : (
         <>
+        {invoiceTemplate === 'layout' ? (
+          <View style={[styles.card, { backgroundColor: '#fff7ed', borderColor: '#fed7aa' }]}>
+            <Text style={styles.sectionTitle}>Custom Layout</Text>
+            <Text style={styles.toggleHelp}>
+              The receipt is built from the drag-&-drop block layout designed per paper size.
+              Design blocks (and grid placement) in Odoo → Point of Sale → Invoice Settings →
+              Invoice Layouts, or open the Invoice Layouts screen to preview each size. The
+              branding, logo and header details below feed the layout's blocks.
+            </Text>
+          </View>
+        ) : null}
         {/* Branding */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Branding</Text>
@@ -814,31 +684,39 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         </View>
       </Modal>
 
-      {/* Reset preset sizes — confirm */}
+      {/* Default receipt size picker — lists this company's paper-size records
+          (managed on the Receipt Paper Sizes screen). */}
       <Modal
-        isVisible={resetConfirmVisible}
+        isVisible={sizePickerVisible}
         animationIn="zoomIn"
         animationOut="zoomOut"
-        backdropOpacity={0.6}
-        onBackButtonPress={() => setResetConfirmVisible(false)}
-        onBackdropPress={() => setResetConfirmVisible(false)}
+        backdropOpacity={0.4}
+        onBackdropPress={() => setSizePickerVisible(false)}
+        onBackButtonPress={() => setSizePickerVisible(false)}
+        style={styles.modalCenter}
       >
-        <View style={styles.alertContainer}>
-          <Text style={styles.alertText}>Reset all preset sizes to their default mm (50 / 76 / 80 / 100 / 148 / 210)?</Text>
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <TouchableOpacity
-              style={[styles.alertButton, { backgroundColor: '#e5e7eb', minWidth: 110 }]}
-              onPress={() => setResetConfirmVisible(false)}
-            >
-              <Text style={[styles.alertButtonText, { color: '#111827' }]}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.alertButton, { backgroundColor: '#dc2626', minWidth: 110 }]}
-              onPress={() => { console.log('[InvoiceSettings] preset sizes reset to defaults'); setPresetMm({ ...PRESET_DEFAULTS }); setResetConfirmVisible(false); }}
-            >
-              <Text style={styles.alertButtonText}>Reset</Text>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select Default Size</Text>
+            <TouchableOpacity onPress={() => setSizePickerVisible(false)} style={styles.modalCloseBtn}>
+              <MaterialIcons name="close" size={20} color="#666" />
             </TouchableOpacity>
           </View>
+          <FlatList
+            data={paperSizes}
+            keyExtractor={(it) => `ps-${it.id}`}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.pickerRow}
+                onPress={() => { setDefaultSizeId(item.id); setDefaultSizeLabel(paperSizeLabel(item)); setSizePickerVisible(false); }}
+              >
+                <Text style={styles.pickerRowText}>{paperSizeLabel(item)}</Text>
+                {defaultSizeId === item.id ? <MaterialIcons name="check" size={20} color={ORANGE} /> : null}
+              </TouchableOpacity>
+            )}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={<Text style={styles.emptyPicker}>No sizes yet — add them on the Receipt Paper Sizes screen.</Text>}
+          />
         </View>
       </Modal>
 

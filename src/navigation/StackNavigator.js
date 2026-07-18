@@ -78,7 +78,7 @@ const POSReceiptScreen = CreateInvoicePreview;
 import VendingPaymentGateway from '@screens/Home/Sections/Customer/VendingPaymentGateway';
 import { UsersScreen, UserDetailsScreen } from '@screens/Users';
 import { BannersScreen, BannerDetailsScreen } from '@screens/AppBanners';
-import { AppFeaturesScreen, ModulePrivilegesScreen, InvoiceSettingsScreen, InvoiceSettingsListScreen } from '@screens/Admin';
+import { AppFeaturesScreen, ModulePrivilegesScreen, InvoiceSettingsScreen, InvoiceSettingsListScreen, InvoiceSettingsHubScreen, ReceiptPaperSizesScreen, InvoiceLayoutsScreen, InvoiceLayoutDetailScreen, InvoiceLayoutEditorScreen } from '@screens/Admin';
 import UserManualScreen from '@screens/UserManual/UserManualScreen';
 import { MyOrdersScreen, OrderDetailScreen } from '@screens/MyOrders';
 import { StockScreen, StockDetailScreen } from '@screens/Stock';
@@ -790,15 +790,42 @@ const StackNavigator = () => {
         component={ModulePrivilegesScreen}
         options={{ headerShown: false }}
       />
-      {/* Dynamic Invoice settings (admin) — list first, then the editor */}
+      {/* Dynamic Invoice settings (admin) — list → hub → 3 sub-screens
+          (General Settings / Receipt Paper Sizes / Invoice Layouts). */}
       <Stack.Screen
         name="InvoiceSettingsList"
         component={InvoiceSettingsListScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
+        name="InvoiceSettingsHub"
+        component={InvoiceSettingsHubScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
         name="InvoiceSettings"
         component={InvoiceSettingsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ReceiptPaperSizes"
+        component={ReceiptPaperSizesScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="InvoiceLayouts"
+        component={InvoiceLayoutsScreen}
+        options={{ headerShown: false }}
+      />
+      {/* Native Invoice Layout detail (blocks) + visual editor (all options). */}
+      <Stack.Screen
+        name="InvoiceLayoutDetail"
+        component={InvoiceLayoutDetailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="InvoiceLayoutEditor"
+        component={InvoiceLayoutEditorScreen}
         options={{ headerShown: false }}
       />
       {/* User Manual documents (view for all; manage for admins) */}

@@ -13,6 +13,7 @@ import { useAuthStore } from '@stores/auth';
 import installNetworkInterceptor from './src/api/utils/networkInterceptor';
 import installAuthInterceptor from './src/api/utils/authInterceptor';
 import NetworkErrorModal from './src/components/NetworkError/NetworkErrorModal';
+import { lockPortrait } from './src/utils/orientation';
 
 installNetworkInterceptor();
 installAuthInterceptor();
@@ -26,6 +27,10 @@ export default function App() {
     LogBox.ignoreLogs(["new NativeEventEmitter"]);
     LogBox.ignoreAllLogs();
     LogBox.ignoreLogs(["Non-serializable values were found in the navigation state"]);
+
+    // app.json orientation is "default" (both allowed natively) so the layout
+    // editor can go landscape; keep the rest of the app portrait by default.
+    lockPortrait();
 
     async function loadFonts() {
       try {
